@@ -1,0 +1,39 @@
+---
+- name: Create the PostgreSQL directory
+  ansible.builtin.file:
+    path: "{{ postgres_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Generated on the server and never sent to the machine running Ansible.
+# `creates` makes it a one-time step: an existing password is never replaced.
+- name: Generate the superuser password
+  ansible.builtin.shell:
+    cmd: umask 077 && openssl rand -hex 32 > {{ postgres_password_file | quote }}
+    creates: "{{ postgres_password_file }}"
+
+# Compose mounts the file as-is, so the container's postgres user must own it.
+- name: Restrict the password file to the container's postgres user
+  ansible.builtin.file:
+    path: "{{ postgres_password_file }}"
+    owner: "{{ postgres_container_uid }}"
+    group: "{{ postgres_container_uid }}"
+    mode: "0400"
+
+- name: Write the PostgreSQL compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ postgres_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Start PostgreSQL
+  community.docker.docker_compose_v2:
+    project_src: "{{ postgres_dir }}"
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 180

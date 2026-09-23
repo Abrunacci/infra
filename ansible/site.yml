@@ -11,3 +11,5 @@
       tags: [docker]
     - role: caddy
       tags: [caddy]
+    - role: postgres
+      tags: [postgres]
