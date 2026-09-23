@@ -31,11 +31,17 @@ jobs:
         with:
           terraform_version: 1.16.4
           terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+        with:
+          tflint_version: v0.64.0
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py3.13-${{ hashFiles('.pre-commit-config.yaml') }}
       - run: pip install pre-commit==4.6.2
+      - run: tflint --init --config "$GITHUB_WORKSPACE/terraform/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       # gitleaks only scans staged changes as a hook; the job below scans the full history.
       - run: SKIP=gitleaks pre-commit run --all-files --show-diff-on-failure
 
