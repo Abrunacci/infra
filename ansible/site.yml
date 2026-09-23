@@ -1,0 +1,7 @@
+---
+- name: Provision the server
+  hosts: all
+  become: true
+  roles:
+    - role: base
+      tags: [base]

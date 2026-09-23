@@ -1,0 +1,19 @@
+---
+domain: abrunacci.dev
+
+# Created by cloud-init (terraform/variables.tf, admin_user) and used by
+# Ansible to connect. It is the only user allowed to log in over SSH.
+admin_user: ops
+
+# Every key allowed to log in as admin_user. The list is exclusive: keys not
+# listed here are removed from the server. By default it is the same key
+# Terraform installed (TF_VAR_admin_ssh_public_key in terraform/.env).
+# To rotate, override the list in inventory.yml (see README).
+admin_ssh_public_keys:
+  - "{{ lookup('ansible.builtin.env', 'TF_VAR_admin_ssh_public_key') | trim }}"
+
+# Root-only directory for the secrets Ansible generates on the server.
+# They never leave the server except inside the encrypted backups.
+infra_secrets_dir: /etc/infra/secrets
+# Compose projects and their configuration.
+infra_opt_dir: /opt/infra
