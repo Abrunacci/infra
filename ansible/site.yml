@@ -7,3 +7,5 @@
       tags: [base]
     - role: hardening
       tags: [hardening]
+    - role: docker
+      tags: [docker]
