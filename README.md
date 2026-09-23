@@ -2,6 +2,12 @@
 
 Infrastructure for my portfolio projects: one DigitalOcean Droplet, Docker Compose, Caddy and a shared PostgreSQL.
 
+| Directory | What it holds |
+|---|---|
+| [`terraform/`](terraform/README.md) | The Droplet, cloud firewall and DNS records |
+| [`ansible/`](ansible/README.md) | Server configuration: hardening, Docker, Caddy and PostgreSQL |
+| `projects.yml` | Registry of deployed projects |
+
 Work in progress.
 
 ## Design decisions
@@ -30,16 +36,16 @@ ICMP and ICMPv6 are the one deliberate exception:
 
 DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) are turned off on purpose, because they would back up nothing that is not already covered elsewhere:
 
-- **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it (Ansible arrives in an upcoming PR), so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand.
+- **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it, so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand.
 - **The data is backed up on its own.** PostgreSQL dumps go to Cloudflare R2 every day, encrypted and with retention (7 daily, 4 weekly, 6 monthly). They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk.
 
 > **Status:** the backup job and its tested restore procedure arrive in an upcoming PR. Until that PR is merged, no project data goes on the server.
 
 ## Development
 
-Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, shellcheck and actionlint.
+Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, ansible-lint (production profile), shellcheck and actionlint.
 
-Requirements: Python 3, Terraform 1.16 and TFLint 0.64. The other tools are installed by pre-commit itself.
+Requirements: Python 3, Terraform 1.16, TFLint 0.64 and, to run the playbook, ansible-core 2.21. The other tools are installed by pre-commit itself.
 
 ```sh
 pip install pre-commit==4.6.2   # same version as CI
