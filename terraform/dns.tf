@@ -72,6 +72,8 @@ resource "cloudflare_dns_record" "caa" {
 # Nothing is proxied, so Cloudflare's edge certificates are never used. With
 # Universal SSL on, Cloudflare also publishes hidden CAA records for its own CAs
 # (including issuewild), which would defeat the records above.
+# Removing this block does NOT turn Universal SSL back on: the provider only
+# drops it from the state. To revert, set enabled = true.
 resource "cloudflare_universal_ssl_setting" "this" {
   zone_id = var.cloudflare_zone_id
   enabled = false

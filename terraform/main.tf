@@ -29,6 +29,9 @@ resource "digitalocean_droplet" "server" {
   size       = var.droplet_size
   ipv6       = true
   monitoring = true
+  # Off on purpose, and reverted if enabled from the panel: see "No DigitalOcean
+  # Droplet backups" in the README.
+  backups = false
 
   # Resizing powers the Droplet off: shut down cleanly (PostgreSQL runs on it) and
   # resize only CPU/RAM, so the change can be reverted to a smaller size later.
@@ -46,7 +49,8 @@ resource "digitalocean_droplet" "server" {
 
   lifecycle {
     # The Droplet holds the shared PostgreSQL data: never destroy it by accident.
-    # To rebuild on purpose, remove this flag in a reviewed PR and restore from backup.
+    # To rebuild on purpose, remove this flag in a reviewed PR and restore the
+    # PostgreSQL backups from R2.
     prevent_destroy = true
 
     # These attributes only matter at creation and changing them would force a
