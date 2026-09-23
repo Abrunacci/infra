@@ -16,12 +16,49 @@
     # Same formats Terraform accepts (terraform/variables.tf).
     base_ssh_key_regex: >-
       ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\n]*)?$
+  # Runs with any --tags: hardening relies on it for AllowUsers.
+  tags: [always]
+
+- name: Read the admin user's current SSH keys
+  ansible.builtin.slurp:
+    src: /home/{{ admin_user }}/.ssh/authorized_keys
+  register: base_authorized_keys
+  tags: [always]
+
+# The key list is exclusive. A list that shares no key with the server would
+# remove every key that works today and lock the admin out.
+- name: Check that at least one current key stays authorized
+  ansible.builtin.assert:
+    that:
+      - base_current_keys | intersect(base_new_keys) | length > 0
+    fail_msg: >-
+      None of the keys in admin_ssh_public_keys is authorized on the server today. Keep the current key
+      in the list while rotating (see README).
+    quiet: true
+  vars:
+    # Compares type and key material only; comments and options are ignored.
+    base_key_material: (ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+
+    base_current_keys: >-
+      {{ (base_authorized_keys.content | b64decode).splitlines()
+         | map('regex_search', base_key_material) | select | list }}
+    base_new_keys: "{{ admin_ssh_public_keys | map('regex_search', base_key_material) | select | list }}"
+  tags: [always]
 
 - name: Install the admin SSH keys and remove any other
   ansible.posix.authorized_key:
     user: "{{ admin_user }}"
     key: "{{ admin_ssh_public_keys | join('\n') }}"
     exclusive: true
+
+# DigitalOcean installs the same key for root at creation. Root cannot log in
+# over SSH, but the key would outlive any rotation.
+- name: Remove root's SSH keys
+  ansible.builtin.copy:
+    content: ""
+    dest: /root/.ssh/authorized_keys
+    owner: root
+    group: root
+    mode: "0600"
 
 - name: Install base packages
   ansible.builtin.apt:
