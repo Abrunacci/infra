@@ -39,9 +39,6 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py3.13-${{ hashFiles('.pre-commit-config.yaml') }}
       - run: pip install pre-commit==4.6.2
-      - run: tflint --init --config "$GITHUB_WORKSPACE/terraform/.tflint.hcl"
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
       # gitleaks only scans staged changes as a hook; the job below scans the full history.
       - run: SKIP=gitleaks pre-commit run --all-files --show-diff-on-failure
 
