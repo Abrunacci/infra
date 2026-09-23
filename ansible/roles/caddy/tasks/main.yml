@@ -55,10 +55,12 @@
     owner: root
     group: root
     mode: "0644"
-    # Checked in a throwaway container before it replaces the current file. An
-    # invalid Caddyfile left on disk would stop Caddy at its next restart.
+    # Checked in a throwaway container, with the same restrictions as Caddy,
+    # before it replaces the current file. An invalid Caddyfile left on disk
+    # would stop Caddy at its next restart.
     validate: >-
-      docker run --rm --network none
+      docker run --rm --network none --read-only --user {{ caddy_uid }}:{{ caddy_uid }}
+      --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges
       -v %s:/etc/caddy/Caddyfile:ro -v {{ caddy_dir }}/conf/sites:/etc/caddy/sites:ro
       {{ caddy_image }} caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
   notify: Reload Caddy
