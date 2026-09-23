@@ -9,12 +9,19 @@
 
 # Generated on the server and never sent to the machine running Ansible.
 # `creates` makes it a one-time step: an existing password is never replaced.
+# Written to a temporary file first, so a failure never leaves an empty one.
 - name: Generate the superuser password
   ansible.builtin.shell:
-    cmd: umask 077 && openssl rand -hex 32 > {{ postgres_password_file | quote }}
+    cmd: >-
+      umask 077 && openssl rand -hex 32 > "$f.tmp" && mv "$f.tmp" "$f"
+      || { rm -f "$f.tmp"; exit 1; }
     creates: "{{ postgres_password_file }}"
+  environment:
+    f: "{{ postgres_password_file }}"
 
 # Compose mounts the file as-is, so the container's postgres user must own it.
+# On the host, uid 999 may belong to another system user, but the directory is
+# root-only (0700), so no host user can reach the file.
 - name: Restrict the password file to the container's postgres user
   ansible.builtin.file:
     path: "{{ postgres_password_file }}"
