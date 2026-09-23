@@ -1,14 +1,20 @@
 ---
 # Caddy runs as this unprivileged user inside the container. It owns the
 # certificates and their private keys, and nothing else.
+- name: Create the caddy system group
+  ansible.builtin.group:
+    name: caddy
+    gid: "{{ caddy_uid }}"
+    system: true
+
 - name: Create the caddy system user
   ansible.builtin.user:
     name: caddy
     uid: "{{ caddy_uid }}"
+    group: caddy
     system: true
     shell: /usr/sbin/nologin
     create_home: false
-  register: caddy_user
 
 - name: Create the Caddy directories
   ansible.builtin.file:
@@ -49,6 +55,12 @@
     owner: root
     group: root
     mode: "0644"
+    # Checked in a throwaway container before it replaces the current file. An
+    # invalid Caddyfile left on disk would stop Caddy at its next restart.
+    validate: >-
+      docker run --rm --network none
+      -v %s:/etc/caddy/Caddyfile:ro -v {{ caddy_dir }}/conf/sites:/etc/caddy/sites:ro
+      {{ caddy_image }} caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
   notify: Reload Caddy
 
 - name: Write the Caddy compose file

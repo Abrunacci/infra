@@ -5,7 +5,7 @@ services:
   caddy:
     image: {{ caddy_image }}
     restart: unless-stopped
-    user: "{{ caddy_user.uid }}:{{ caddy_user.group }}"
+    user: "{{ caddy_uid }}:{{ caddy_uid }}"
     read_only: true
     tmpfs:
       - /tmp

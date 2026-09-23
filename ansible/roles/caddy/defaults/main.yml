@@ -4,7 +4,7 @@
 caddy_image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
 caddy_dir: "{{ infra_opt_dir }}/caddy"
 caddy_memory_limit: 256m
-# Fixed, so it never matches the uid of the postgres container (999) or of a
+# uid and gid of the caddy user. Fixed, so it never matches the uid of the postgres container (999) or of a
 # system user created later (system uids are handed out downwards from 999).
 caddy_uid: 10001
 

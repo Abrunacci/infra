@@ -1,6 +1,6 @@
 ---
-# A graceful reload with no downtime. If the new config is invalid, Caddy
-# rejects it, keeps serving the old one and the task fails.
+# A graceful reload with no downtime. The Caddyfile was validated before it
+# was written; if Caddy still rejects it, it keeps serving the old one and the task fails.
 - name: Reload Caddy
   community.docker.docker_compose_v2_exec:
     project_src: "{{ caddy_dir }}"
