@@ -59,7 +59,7 @@ ssh ops@server.abrunacci.dev                        # from your machine; accept 
 
 If the host key changes later without a rebuild, stop and find out why before removing the old entry.
 
-The Droplet Console logs in by adding a temporary key to `ops`'s `authorized_keys`. The playbook removes keys that are not listed, so a run made right after using the console reports that change; the next one is back to `changed=0`.
+The Droplet Console logs in by adding a temporary key to `ops`'s `authorized_keys`. The playbook removes keys that are not listed, so a run made right after using the console reports that change; the next one is back to `changed=0`. Logging in as root through the console adds the key to root's `authorized_keys` instead, which the playbook empties in the same way.
 
 ### fail2ban and your SSH agent
 

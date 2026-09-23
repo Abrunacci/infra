@@ -1,6 +1,10 @@
 ---
 extends: default
 
+# Collections that ansible-lint installs (git-ignored).
+ignore: |
+  .ansible/
+
 rules:
   # GitHub Actions uses the bare `on:` key.
   truthy:
