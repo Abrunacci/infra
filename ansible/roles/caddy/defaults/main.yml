@@ -1,0 +1,10 @@
+---
+# Pinned by digest: a tag can be moved, a digest cannot. Upgrading is a PR
+# that bumps both.
+caddy_image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+caddy_dir: "{{ infra_opt_dir }}/caddy"
+caddy_memory_limit: 256m
+
+# Optional. With an email, the CAs can warn about expiring certificates and
+# problems with the account. Caddy renews on its own either way.
+caddy_acme_email: ""

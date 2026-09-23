@@ -9,3 +9,5 @@
       tags: [hardening]
     - role: docker
       tags: [docker]
+    - role: caddy
+      tags: [caddy]

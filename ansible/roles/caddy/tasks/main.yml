@@ -1,0 +1,69 @@
+---
+# Caddy runs as this unprivileged user inside the container. It owns the
+# certificates and their private keys, and nothing else.
+- name: Create the caddy system user
+  ansible.builtin.user:
+    name: caddy
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+  register: caddy_user
+
+- name: Create the Caddy directories
+  ansible.builtin.file:
+    path: "{{ caddy_dir }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "", owner: root, mode: "0755" }
+    - { path: conf, owner: root, mode: "0755" }
+    # One file per project (<project>.caddy), added by the projects role.
+    - { path: conf/sites, owner: root, mode: "0755" }
+    # Certificates, private keys and ACME account.
+    - { path: data, owner: caddy, mode: "0700" }
+    - { path: config, owner: caddy, mode: "0700" }
+  loop_control:
+    label: "{{ item.path or '.' }}"
+
+# quic-go (HTTP/3) asks for 7.5 MB socket buffers and logs a warning if the
+# kernel limit is lower.
+- name: Raise the UDP buffer limits for HTTP/3
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "7500000"
+    sysctl_file: /etc/sysctl.d/60-infra.conf
+    state: present
+  loop:
+    - net.core.rmem_max
+    - net.core.wmem_max
+
+# The whole conf directory is mounted, not the file: templating replaces the
+# file, and a single-file bind mount would keep showing the old one.
+- name: Write the Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ caddy_dir }}/conf/Caddyfile"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Caddy
+
+- name: Write the Caddy compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ caddy_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Recreates the container when compose.yml or the image changes; otherwise
+# leaves it running.
+- name: Start Caddy
+  community.docker.docker_compose_v2:
+    project_src: "{{ caddy_dir }}"
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 120
