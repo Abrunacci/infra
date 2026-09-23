@@ -9,18 +9,23 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
-!*.tfvars.example
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
 .terraformrc
 terraform.rc
+# Partial backend configuration (R2 endpoint and credentials).
+*.tfbackend
+backend.hcl
+!*.tfbackend.example
 
 # --- Ansible ---------------------------------------------------------------
-# The real inventory is generated locally; only the example is versioned.
+# Real inventories are generated locally; only *.example.yml is versioned.
 ansible/inventory.yml
 ansible/inventory.ini
+ansible/**/hosts.yml
+ansible/**/hosts.ini
 *.retry
 .vault_pass*
 vault_pass*
@@ -38,13 +43,17 @@ id_ed25519*
 id_ecdsa*
 *.age
 age-key*.txt
+keys.txt
+rclone.conf
 secrets/
 known_hosts
 
 # --- Backups and dumps -----------------------------------------------------
+# Versioned *.sql files (e.g. init scripts) are allowed; dumps are not.
+backups/
 *.dump
-*.sql
 *.sql.gz
+*.sql.zst
 
 # --- Editors and OS --------------------------------------------------------
 .vscode/
