@@ -1,0 +1,7 @@
+---
+# Registry of deployed projects: the single source of truth for Terraform
+# (one DNS record per subdomain) and, later, Ansible (database, Caddy route,
+# stack and status check). Adding a project starts with a new entry here.
+projects:
+  - name: cuanto-cuesta
+    subdomain: cuanto-cuesta
