@@ -10,6 +10,7 @@ rules:
     max: 120
   comments:
     min-spaces-from-content: 1
+  comments-indentation: false
   # Compatible with ansible-lint's yaml rules.
   braces:
     max-spaces-inside: 1

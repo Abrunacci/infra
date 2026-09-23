@@ -27,6 +27,8 @@ ansible/inventory.ini
 ansible/**/hosts.yml
 ansible/**/hosts.ini
 *.retry
+# Collections and cache that ansible-lint installs.
+.ansible/
 .vault_pass*
 vault_pass*
 

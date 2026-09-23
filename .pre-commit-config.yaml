@@ -38,6 +38,14 @@ repos:
     hooks:
       - id: shellcheck
 
+  - repo: https://github.com/ansible/ansible-lint
+    rev: e7f397ad6dfa20d274afa17cd7bbedd84ed136f5  # frozen: v26.9.0
+    hooks:
+      - id: ansible-lint
+        # The hook asks for Python 3.14; CI runs 3.13.
+        language_version: python3
+        args: [--project-dir, ansible]
+
   # Validates workflow syntax and runs shellcheck on `run:` blocks.
   - repo: https://github.com/rhysd/actionlint
     rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
