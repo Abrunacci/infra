@@ -19,10 +19,13 @@
       - runc
     state: absent
 
-- name: Install the packages Ansible's Docker modules need
+- name: Install the packages the Docker tasks need
   ansible.builtin.apt:
     name:
       - ca-certificates
+      # deb822_repository
+      - python3-debian
+      # community.docker modules
       - python3-requests
     state: present
 
