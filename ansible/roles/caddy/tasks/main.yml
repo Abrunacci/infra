@@ -4,6 +4,7 @@
 - name: Create the caddy system user
   ansible.builtin.user:
     name: caddy
+    uid: "{{ caddy_uid }}"
     system: true
     shell: /usr/sbin/nologin
     create_home: false
@@ -67,3 +68,8 @@
     pull: missing
     wait: true
     wait_timeout: 120
+
+# Reload now: if a later role failed, the pending reload would be lost and the
+# next run would see no change to trigger it.
+- name: Apply Caddyfile changes now
+  ansible.builtin.meta: flush_handlers

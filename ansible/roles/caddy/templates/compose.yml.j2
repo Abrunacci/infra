@@ -9,9 +9,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    # The only capability kept. The caddy binary carries it as a file
-    # capability, so it binds ports 80 and 443 as a non-root user. With
-    # cap_drop ALL alone, the kernel refuses to run the binary at all.
+    # The only capability kept. Docker already lets any user bind ports below
+    # 1024 inside the container, but the caddy binary carries this file
+    # capability, and without it in the bounding set the kernel refuses to run it.
     cap_drop:
       - ALL
     cap_add:
