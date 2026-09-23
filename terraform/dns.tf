@@ -68,3 +68,11 @@ resource "cloudflare_dns_record" "caa" {
     value = each.value.value
   }
 }
+
+# Nothing is proxied, so Cloudflare's edge certificates are never used. With
+# Universal SSL on, Cloudflare also publishes hidden CAA records for its own CAs
+# (including issuewild), which would defeat the records above.
+resource "cloudflare_universal_ssl_setting" "this" {
+  zone_id = var.cloudflare_zone_id
+  enabled = false
+}

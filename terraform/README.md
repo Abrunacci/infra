@@ -6,9 +6,10 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 |---|---|
 | Droplet (`s-1vcpu-2gb`, `nyc3`, Ubuntu 24.04, IPv6, minimal cloud-init) | `main.tf` |
 | Admin SSH key, tags and a DigitalOcean project that groups the resources | `main.tf` |
-| Cloud firewall: inbound TCP 22, 80 and 443, plus UDP 443 for HTTP/3 | `firewall.tf` |
+| Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
 | A/AAAA records for `server`, `status` and each project in `../projects.yml` | `dns.tf` |
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
+| Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
 
 ## Credentials
 
@@ -17,13 +18,13 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 | Variable | What it is | Minimum scope |
 |---|---|---|
 | `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token for DNS | `Zone → DNS → Edit`, on the `abrunacci.dev` zone only |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | `Zone → DNS → Edit` and `Zone → SSL and Certificates → Edit`, both on the `abrunacci.dev` zone only |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – |
 
-The R2 credentials are a separate token from the DNS one: a leak of either one does not expose the other.
+The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off; it still cannot touch any other zone or account setting. The R2 credentials are a separate token: a leak of either one does not expose the other.
 
 ## State
 
