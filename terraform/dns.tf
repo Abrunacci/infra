@@ -12,6 +12,23 @@ resource "cloudflare_dns_record" "a" {
   ttl     = 300
   proxied = false
   comment = "Managed by Terraform (infra repo)"
+
+  lifecycle {
+    # projects.yml is hand-edited: fail the plan instead of silently merging or
+    # dropping records.
+    precondition {
+      condition     = alltrue([for s in local.subdomains : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", s))])
+      error_message = "projects.yml: every subdomain must be a lowercase DNS label (a-z, 0-9, hyphens)."
+    }
+    precondition {
+      condition     = length(distinct(local.subdomains)) == length(local.subdomains)
+      error_message = "projects.yml: two projects use the same subdomain."
+    }
+    precondition {
+      condition     = length(setintersection(toset(local.subdomains), toset(local.reserved))) == 0
+      error_message = "projects.yml: 'server' and 'status' are reserved subdomains."
+    }
+  }
 }
 
 resource "cloudflare_dns_record" "aaaa" {

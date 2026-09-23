@@ -1,11 +1,13 @@
 locals {
-  projects = yamldecode(file("${path.module}/../projects.yml")).projects
+  projects   = try(yamldecode(file("${path.module}/../projects.yml")).projects, [])
+  subdomains = [for p in local.projects : p.subdomain]
+  reserved   = ["server", "status"]
 
   # Every hostname that points at the Droplet:
   #   server -> SSH/Ansible target, so no IP address is ever written in the repo
   #   status -> Gatus status page
   #   one per project subdomain
-  hostnames = toset(concat(["server", "status"], [for p in local.projects : p.subdomain]))
+  hostnames = toset(concat(local.reserved, local.subdomains))
 
   tags = ["infra", "portfolio"]
 }
@@ -27,8 +29,13 @@ resource "digitalocean_droplet" "server" {
   size       = var.droplet_size
   ipv6       = true
   monitoring = true
-  ssh_keys   = [digitalocean_ssh_key.admin.id]
-  tags       = [for t in digitalocean_tag.this : t.id]
+
+  # Resizing powers the Droplet off: shut down cleanly (PostgreSQL runs on it) and
+  # resize only CPU/RAM, so the change can be reverted to a smaller size later.
+  graceful_shutdown = true
+  resize_disk       = false
+  ssh_keys          = [digitalocean_ssh_key.admin.id]
+  tags              = [for t in digitalocean_tag.this : t.id]
 
   # Minimal cloud-init: creates the admin user and locks down SSH.
   # Everything else is provisioned (and re-provisioned) by Ansible.
