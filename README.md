@@ -12,7 +12,7 @@ The domain is registered with Cloudflare Registrar, which requires Cloudflare's 
 
 - **Caddy manages TLS end to end.** Traffic goes straight to the Droplet, so Caddy gets and renews certificates from Let's Encrypt (falling back to ZeroSSL) through the HTTP-01 or TLS-ALPN-01 challenge. There is no second TLS layer to configure, and no Cloudflare SSL mode to get wrong.
 - **Fewer moving parts.** With the proxy on, the zone's SSL mode must be "Full (strict)" or requests loop, TLS-ALPN-01 stops working, and caching and WAF rules start affecting the apps. None of that applies here.
-- **Trade-off: the Droplet's IP is public.** Anyone can resolve it, and there is no Cloudflare DDoS protection or WAF in front. For a handful of small portfolio apps this is acceptable. The exposure is kept small instead: the cloud firewall and the host firewall allow only SSH and HTTP(S), SSH accepts keys only, and root cannot log in. If a project ever needs DDoS protection, its record can be proxied, together with Full (strict).
+- **Trade-off: the Droplet's IP is public.** Anyone can resolve it, and there is no Cloudflare DDoS protection or WAF in front. For a handful of small portfolio apps this is acceptable. The exposure is kept small instead: the cloud firewall and the host firewall allow only SSH, HTTP(S) and ICMP (see below), SSH accepts keys only, and root cannot log in. If a project ever needs DDoS protection, proxying its record also requires turning Universal SSL back on (or an advanced certificate), adding Cloudflare's CAs to the CAA records, and setting the zone to Full (strict). Without an edge certificate, proxying breaks HTTPS for that host.
 - **CAA records** allow Let's Encrypt and ZeroSSL (`sectigo.com`), the CAs Caddy uses, to issue certificates for the domain, and forbid wildcards. Terraform also turns Cloudflare's Universal SSL off: nothing is proxied, so it is unused, and while it is on, Cloudflare publishes hidden CAA records for its own CAs, wildcards included, which would defeat these.
 - **Least-privilege tokens.** The Cloudflare token can edit only DNS records and SSL settings, and only in this zone. The SSL permission exists solely to keep Universal SSL off. The zone ID is passed as a variable, so the token does not need `Zone:Read`. The R2 credentials for the Terraform state are a separate token, limited to the state bucket.
 
@@ -30,8 +30,10 @@ ICMP and ICMPv6 are the one deliberate exception:
 
 DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) are turned off on purpose, because they would back up nothing that is not already covered elsewhere:
 
-- **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it, so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand.
-- **The data is backed up on its own.** PostgreSQL dumps go to Cloudflare R2 every day, encrypted and with retention. They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk.
+- **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it (Ansible arrives in an upcoming PR), so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand.
+- **The data is backed up on its own.** PostgreSQL dumps go to Cloudflare R2 every day, encrypted and with retention (7 daily, 4 weekly, 6 monthly). They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk.
+
+> **Status:** the backup job and its tested restore procedure arrive in an upcoming PR. Until that PR is merged, no project data goes on the server.
 
 ## Development
 

@@ -2,7 +2,9 @@
 # Only SSH and HTTP(S) are open. UDP 443 is included because Caddy serves HTTP/3.
 # ICMP is the one deliberate exception: IPv6 needs ICMPv6 ("Packet Too Big")
 # for path MTU discovery, and ping and traceroute are needed to diagnose the
-# network. The "icmp" protocol with an IPv6 source covers ICMPv6.
+# network. DigitalOcean firewalls have no separate ICMPv6 protocol: an "icmp"
+# rule with an IPv6 source (::/0) is expected to cover ICMPv6. Verified after the
+# first apply with `ping -6` and `tracepath -6` (see terraform/README.md).
 # The host firewall (ufw, managed by Ansible) applies the same rules as a second layer.
 locals {
   anywhere = ["0.0.0.0/0", "::/0"]

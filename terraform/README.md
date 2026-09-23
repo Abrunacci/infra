@@ -42,6 +42,15 @@ terraform plan -out=tfplan  # review it
 terraform apply tfplan      # only after the plan has been reviewed
 ```
 
+## After the first apply
+
+Check that ICMPv6 passes the cloud firewall. DigitalOcean's docs do not state it explicitly, so it is verified once from a host with IPv6:
+
+```sh
+ping -6 -c3 server.abrunacci.dev
+tracepath -6 server.abrunacci.dev   # should report the path MTU without stalling
+```
+
 ## Safety rails
 
 - **`prevent_destroy`** on the Droplet: it holds the PostgreSQL data, so Terraform refuses to destroy it. Rebuilding on purpose means removing the flag in a reviewed PR and restoring from backup.
