@@ -69,7 +69,10 @@ variable "admin_ssh_public_key" {
   type        = string
 
   validation {
-    condition     = can(regex("^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+", var.admin_ssh_public_key))
-    error_message = "admin_ssh_public_key must be an OpenSSH public key (ssh-ed25519 recommended)."
+    condition = (
+      can(regex("^(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\\n]*)?$", trimspace(var.admin_ssh_public_key)))
+      && !strcontains(trimspace(var.admin_ssh_public_key), "\n")
+    )
+    error_message = "admin_ssh_public_key must be a single-line OpenSSH public key (ssh-ed25519 recommended)."
   }
 }
