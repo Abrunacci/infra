@@ -10,7 +10,7 @@ variable "domain" {
 }
 
 variable "cloudflare_zone_id" {
-  description = "Cloudflare zone ID of var.domain. Passed as a variable so the DNS token does not need Zone:Read."
+  description = "Cloudflare zone ID of var.domain. Passed as a variable so the Cloudflare token does not need Zone:Read."
   type        = string
 
   validation {
