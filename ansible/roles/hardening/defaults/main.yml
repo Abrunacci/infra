@@ -1,0 +1,19 @@
+---
+# Users allowed to log in over SSH. The deploy user for CI joins this list in
+# the deploy workflow PR.
+hardening_ssh_allow_users:
+  - "{{ admin_user }}"
+
+# Same inbound rules as the cloud firewall (terraform/firewall.tf), as a second
+# layer. ICMP and ICMPv6 are allowed by ufw's default before.rules and
+# before6.rules, which this role leaves untouched: IPv6 needs "Packet Too Big"
+# for path MTU discovery.
+hardening_ufw_rules:
+  - { port: "22", proto: tcp, comment: SSH }
+  - { port: "80", proto: tcp, comment: HTTP }
+  - { port: "443", proto: tcp, comment: HTTPS }
+  - { port: "443", proto: udp, comment: HTTP/3 }
+
+hardening_fail2ban_maxretry: 5
+hardening_fail2ban_findtime: 10m
+hardening_fail2ban_bantime: 1h

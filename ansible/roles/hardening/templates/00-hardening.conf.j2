@@ -1,0 +1,13 @@
+# Managed by Ansible (roles/hardening). Created by cloud-init on the first boot.
+# "00-" sorts first, and sshd keeps the first value it reads for each option.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+AllowUsers {{ hardening_ssh_allow_users | join(' ') }}
+MaxAuthTries 3
+LoginGraceTime 30
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitTunnel no

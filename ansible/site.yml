@@ -5,3 +5,5 @@
   roles:
     - role: base
       tags: [base]
+    - role: hardening
+      tags: [hardening]
