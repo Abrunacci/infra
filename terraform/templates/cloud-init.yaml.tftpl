@@ -1,0 +1,30 @@
+#cloud-config
+# Minimal bootstrap: just enough for Ansible to take over.
+# It runs only on the first boot; later changes are made by Ansible.
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    # Key-only SSH and no password: passwordless sudo lets Ansible become root.
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      # JSON-quoted, so a key comment with ":" or "#" cannot break the YAML.
+      - ${jsonencode(admin_ssh_public_key)}
+
+disable_root: true
+ssh_pwauth: false
+
+write_files:
+  # "00-" sorts first, and sshd keeps the first value it reads for each option.
+  - path: /etc/ssh/sshd_config.d/00-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+runcmd:
+  - [systemctl, try-reload-or-restart, ssh]

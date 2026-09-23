@@ -23,6 +23,10 @@ repos:
     rev: 253d99053f80e4a368175e93b36edb662e7e5135  # frozen: v1.109.1
     hooks:
       - id: terraform_fmt
+      # Runs `terraform init -backend=false`: never touches the remote state.
+      - id: terraform_validate
+      - id: terraform_tflint
+        args: [--args=--config=__GIT_WORKING_DIR__/terraform/.tflint.hcl]
 
   - repo: https://github.com/adrienverge/yamllint
     rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # frozen: v1.38.0
