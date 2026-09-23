@@ -1,0 +1,53 @@
+# --- Terraform -------------------------------------------------------------
+# State and plans can contain secrets and IPs: never commit them.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# --- Ansible ---------------------------------------------------------------
+# The real inventory is generated locally; only the example is versioned.
+ansible/inventory.yml
+ansible/inventory.ini
+*.retry
+.vault_pass*
+vault_pass*
+
+# --- Secrets and keys ------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.age
+age-key*.txt
+secrets/
+known_hosts
+
+# --- Backups and dumps -----------------------------------------------------
+*.dump
+*.sql
+*.sql.gz
+
+# --- Editors and OS --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
