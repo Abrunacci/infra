@@ -1,0 +1,62 @@
+# --- Terraform -------------------------------------------------------------
+# State and plans can contain secrets and IPs: never commit them.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# Partial backend configuration (R2 endpoint and credentials).
+*.tfbackend
+backend.hcl
+!*.tfbackend.example
+
+# --- Ansible ---------------------------------------------------------------
+# Real inventories are generated locally; only *.example.yml is versioned.
+ansible/inventory.yml
+ansible/inventory.ini
+ansible/**/hosts.yml
+ansible/**/hosts.ini
+*.retry
+.vault_pass*
+vault_pass*
+
+# --- Secrets and keys ------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.age
+age-key*.txt
+keys.txt
+rclone.conf
+secrets/
+known_hosts
+
+# --- Backups and dumps -----------------------------------------------------
+# Versioned *.sql files (e.g. init scripts) are allowed; dumps are not.
+backups/
+*.dump
+*.sql.gz
+*.sql.zst
+
+# --- Editors and OS --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
