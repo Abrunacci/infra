@@ -1,0 +1,141 @@
+---
+# sudo with a password for admin_user. SSH stays key-only: the password is
+# only for sudo. It is set by hand on the server (`sudo passwd <admin_user>`)
+# and never goes through the repo. Until it exists, cloud-init's NOPASSWD rule
+# stays: it is the only way to become root on a new Droplet.
+#
+# The steps run in this order and the play stops at the first failure, so
+# NOPASSWD is only removed once a password is set and proven to work.
+
+# a. A password is set, and the account is not locked (cloud-init creates it
+#    with lock_passwd: true).
+- name: Read the admin user's password status
+  ansible.builtin.command:
+    cmd: passwd --status {{ admin_user }}
+  register: base_passwd_status
+  changed_when: false
+  check_mode: false
+
+- name: Check that the admin user has a password
+  ansible.builtin.assert:
+    that:
+      - base_passwd_status.stdout.split()[1] == 'P'
+    fail_msg: >-
+      {{ admin_user }} has no usable password (passwd --status: {{ base_passwd_status.stdout }}).
+      Set it first with: ssh -t {{ admin_user }}@{{ inventory_hostname }} sudo passwd {{ admin_user }}.
+      Nothing was changed.
+    quiet: true
+
+# b. The password given to Ansible (-K) is that password, checked through
+#    sudo itself while NOPASSWD is still in place. sudo applies the last rule
+#    that matches, so this later rule makes running a command as "nobody" ask
+#    for the password. It grants nothing new: the admin user may already run
+#    anything as anyone. A wrong password stops the play here.
+#    (Becoming the admin user itself would prove nothing: Ansible skips the
+#    escalation when the target user is the connection user.)
+#    Becoming an unprivileged user needs pipelining (ansible.cfg): without it
+#    this check fails on temporary file permissions. It fails safe, before c.
+- name: Make sudo ask for the password when running as nobody
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/91-password-check
+    content: |
+      # Managed by Ansible (roles/base/tasks/sudo.yml). Lets the playbook check
+      # the admin user's sudo password while cloud-init's NOPASSWD rule exists.
+      {{ admin_user }} ALL=(nobody) PASSWD: ALL
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  register: base_password_check_rule
+
+- name: Forget any cached sudo credentials before the password check
+  ansible.builtin.command:
+    cmd: sudo --remove-timestamp
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Check the sudo password
+  ansible.builtin.command:
+    cmd: id -un
+  become: true
+  become_user: nobody
+  register: base_password_check
+  changed_when: false
+  failed_when: base_password_check.stdout != 'nobody'
+  check_mode: false
+  # In check mode the rule above is not written yet on the first run, so the
+  # check would prove nothing: it is skipped instead of reported as passed.
+  when: not (ansible_check_mode and base_password_check_rule is changed)
+
+# c. Replace the file where cloud-init wrote the NOPASSWD rule (same name, so
+#    the old rule cannot survive next to the new one). visudo checks the new
+#    file before it replaces the current one.
+- name: Require a password for the admin user's sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-cloud-init-users
+    content: |
+      # Managed by Ansible (roles/base). Replaces the NOPASSWD rule that
+      # cloud-init writes on the first boot.
+      {{ admin_user }} ALL=(ALL) ALL
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  # Never without a and b, even when started midway (--start-at-task, --step):
+  # their results must exist and have passed.
+  when:
+    - base_passwd_status is defined
+    - base_passwd_status is succeeded
+    - base_password_check is defined
+    - base_password_check is succeeded
+    - base_password_check is not skipped or ansible_check_mode
+
+# d. Prove it: no NOPASSWD left for the admin user anywhere in sudoers, and
+#    sudo with the password works on a fresh connection with no cached
+#    credentials.
+- name: List the admin user's sudo rules
+  ansible.builtin.command:
+    cmd: sudo --list --other-user={{ admin_user }}
+  register: base_sudo_rules
+  changed_when: false
+  check_mode: false
+
+- name: Check that no NOPASSWD rule is left
+  ansible.builtin.assert:
+    that:
+      - "'NOPASSWD' not in base_sudo_rules.stdout"
+      - "'!authenticate' not in base_sudo_rules.stdout"
+    fail_msg: "{{ admin_user }} can still sudo without a password: {{ base_sudo_rules.stdout }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Start a new connection
+  ansible.builtin.meta: reset_connection
+
+- name: Forget any cached sudo credentials
+  ansible.builtin.command:
+    cmd: sudo --remove-timestamp
+  become: false
+  changed_when: false
+  check_mode: false
+
+# Behavior, not just the listing: catches any other way to sudo without a
+# password (a Defaults !authenticate, a rule in another file).
+- name: Check that sudo without a password is refused
+  ansible.builtin.command:
+    cmd: sudo --non-interactive true
+  become: false
+  register: base_sudo_no_password
+  changed_when: false
+  failed_when: base_sudo_no_password.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Check that sudo works with the password
+  ansible.builtin.command:
+    cmd: id -u
+  register: base_sudo_check
+  changed_when: false
+  failed_when: base_sudo_check.stdout != '0'
+  check_mode: false
