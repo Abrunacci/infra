@@ -18,6 +18,20 @@ infra_secrets_dir: /etc/infra/secrets
 # Compose projects and their configuration.
 infra_opt_dir: /opt/infra
 
+# Fixed subnet of the internal db network and fixed address of PostgreSQL on
+# it (roles/docker, postgres and db_tunnel), so clients and the tunnel bridge
+# never depend on the address Docker happened to assign.
+# Docker hands out dynamic addresses only from db_network_dynamic_range, so a
+# container without a fixed address can never take PostgreSQL's:
+#   .2-.127   fixed addresses (PostgreSQL: .10)
+#   .128-.255 dynamic addresses (project containers)
+# 172.30.0.0/24 is inside Docker's default address pools but not in use on
+# the server; Docker skips pool ranges that overlap a network created with an
+# explicit subnet, so it will not hand it out to another network.
+db_network_subnet: 172.30.0.0/24
+db_network_dynamic_range: 172.30.0.128/25
+postgres_ipv4_address: 172.30.0.10
+
 # Loopback port of the temporary PostgreSQL bridge (roles/db_tunnel), and the
 # only destination admin_user may forward to over SSH (roles/hardening).
 db_tunnel_port: 15432

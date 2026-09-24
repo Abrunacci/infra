@@ -16,7 +16,15 @@ docker_apt_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11
 # Shared networks, created here so any stack can join them:
 #   edge -> Caddy and the project containers it proxies to
 #   db   -> PostgreSQL and the projects that use it. Internal: no route to
-#           the internet, and nothing on it can be published.
+#           the internet, and nothing on it can be published. Fixed subnet
+#           and dynamic range, so PostgreSQL keeps a fixed address (group_vars).
+# Changing a network's subnet or range recreates it and disconnects its
+# containers. The roles that run after this one reconnect them: docker compose
+# up reattaches a running container to a network it has lost, at its fixed
+# address, even when its compose file did not change.
 docker_networks:
   - { name: edge, internal: false }
-  - { name: db, internal: true }
+  - name: db
+    internal: true
+    subnet: "{{ db_network_subnet }}"
+    iprange: "{{ db_network_dynamic_range }}"

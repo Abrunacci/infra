@@ -34,9 +34,11 @@ services:
       - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # No published port: reachable only from containers on the internal db network.
+    # No published port: reachable only from containers on the internal db
+    # network, always at the same address.
     networks:
-      - db
+      db:
+        ipv4_address: {{ postgres_ipv4_address }}
     mem_limit: {{ postgres_memory_limit }}
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]

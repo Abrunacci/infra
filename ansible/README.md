@@ -25,7 +25,7 @@ The roles run in that order: each one depends on the previous ones. Projects (da
   - **Rebuilding:** `terraform apply` creates the Droplet with NOPASSWD, the admin sets the password on it, and the playbook, run with `-K`, removes NOPASSWD. The operating procedure (the backup root session and recovery) is kept in private operations documentation.
 - **Pinned versions.** Container images are pinned by digest and the Docker packages by exact version (and held with `dpkg`, so neither `apt upgrade` nor unattended-upgrades changes them). Upgrading is a PR that bumps the value in the role's `defaults/main.yml`.
 - **Docker bypasses ufw.** Ports published by a container skip ufw's rules. Only Caddy publishes ports, and only the ones both firewalls already allow. No other container may publish one; PostgreSQL is reached over the `db` network instead.
-- **`db` is an internal network.** Containers on it have no route to the internet through it. Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL).
+- **`db` is an internal network with a fixed subnet.** Containers on it have no route to the internet through it, and PostgreSQL always has the same address on it (`postgres_ipv4_address` in `group_vars`). Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL).
 - **Secrets are generated on the server.** The PostgreSQL superuser password is created once with `openssl rand` in `/etc/infra/secrets/postgres.password` (mode 0400, owned by the container's `postgres` user). It is never sent to the machine running Ansible, and running the playbook again does not replace it.
 - **ICMP stays allowed.** ufw's default `before.rules` and `before6.rules` accept ICMP and the ICMPv6 messages IPv6 needs, and the `hardening` role leaves them untouched.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
@@ -57,7 +57,7 @@ ansible-playbook site.yml -K --diff          # second run: expect changed=0
 
 Every run asks for the admin user's sudo password (`-K`; `ansible.cfg` also sets `become_ask_pass`, so it is asked even without the flag). The first run on a new Droplet needs that password to be set on the server first; the playbook stops before changing anything if it is not.
 
-`--check` only works fully once Docker is installed: on the first run, the Docker, Caddy and PostgreSQL tasks depend on packages that check mode does not install. `ansible-playbook site.yml -K --check --diff --tags base,hardening` previews the sudo, SSH and firewall changes, which are the ones that could lock you out. On a server that still has NOPASSWD, check mode cannot test the sudo password yet, and says so by skipping that check.
+`--check` only works fully once Docker is installed: on the first run, the Docker, Caddy and PostgreSQL tasks depend on packages that check mode does not install. `ansible-playbook site.yml -K --check --diff --tags base,hardening` previews the sudo, SSH and firewall changes, which are the ones that could lock you out. On a server that still has NOPASSWD, check mode cannot test the sudo password yet, and says so by skipping that check. Check mode also cannot show that a container will be recreated because a template it depends on changes: the template is not written, so Compose sees no difference.
 
 ### The server's host key
 
