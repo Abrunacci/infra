@@ -11,7 +11,8 @@
 # db network. It runs as a transient systemd unit, so it shows up in systemctl
 # and the journal, and systemd stops it when the time is up; every stop is
 # logged with its reason. The container also carries its own timeout, in case
-# systemd or the Docker CLI die first.
+# systemd or the Docker CLI die first (a minute later, so systemd's own
+# timeout is the one that normally fires and gets logged).
 set -euo pipefail
 
 readonly CONFIG=/etc/infra/db-tunnel.conf
@@ -37,7 +38,7 @@ usage() {
 # shellcheck source=/dev/null
 . "$CONFIG"
 : "${DB_TUNNEL_IMAGE:?}" "${DB_TUNNEL_PORT:?}" "${DB_TUNNEL_DEFAULT_HOURS:?}" "${DB_TUNNEL_MAX_HOURS:?}"
-: "${DB_NETWORK:?}" "${DB_COMPOSE_PROJECT:?}" "${DB_COMPOSE_SERVICE:?}" "${DB_PORT:?}"
+: "${DB_NETWORK:?}" "${DB_COMPOSE_PROJECT:?}" "${DB_COMPOSE_SERVICE:?}" "${DB_PORT:?}" "${DB_TUNNEL_UID:?}"
 
 require_root() {
   [[ "$EUID" -eq 0 ]] || die "run it with sudo"
@@ -63,6 +64,18 @@ port_listening() {
   [[ -n "$(ss -Hltn "sport = :$DB_TUNNEL_PORT")" ]]
 }
 
+# The port is unprivileged, so any local process could take it. The bridge
+# runs as a uid used by nothing else; only a listener with that uid is ours.
+listener_is_bridge() {
+  [[ "$(ss -Hltne "sport = :$DB_TUNNEL_PORT" | grep -o 'uid:[0-9]*' | sort -u)" == "uid:$DB_TUNNEL_UID" ]]
+}
+
+# One open or close at a time: a second one would stop the first one's bridge.
+lock() {
+  exec 9>/run/db-tunnel.lock
+  flock -n 9 || die "another db-tunnel command is running"
+}
+
 postgres_ip() {
   local id
   id="$(docker ps -q \
@@ -74,6 +87,7 @@ postgres_ip() {
 
 cmd_open() {
   require_root
+  lock
   local hours="${1:-$DB_TUNNEL_DEFAULT_HOURS}"
   # No leading zeros: bash would read "08" as octal.
   if [[ ! "$hours" =~ ^[1-9][0-9]{0,2}$ ]] || ((hours > DB_TUNNEL_MAX_HOURS)); then
@@ -98,6 +112,9 @@ cmd_open() {
 
   local seconds=$((hours * 3600))
   local expires=$(($(date +%s) + seconds))
+  # From here on, an interrupted command (Ctrl-C, dropped SSH session) must
+  # not leave a half-started bridge behind.
+  trap 'cleanup; exit 130' INT TERM HUP
   systemd-run --quiet --collect --unit="$UNIT" \
     --description="Temporary PostgreSQL bridge for an SSH tunnel (sudo db-tunnel close)" \
     --property=RuntimeMaxSec="$seconds" \
@@ -105,21 +122,25 @@ cmd_open() {
     --property="ExecStopPost=-/usr/bin/docker rm -f $CONTAINER" \
     --property="ExecStopPost=/usr/bin/logger -t db-tunnel \"bridge stopped (reason: $STOP_REASON)\"" \
     docker run --rm --name "$CONTAINER" --pull never \
-    --network host --read-only --user 65534:65534 \
+    --network host --read-only --user "$DB_TUNNEL_UID:$DB_TUNNEL_UID" \
     --cap-drop ALL --security-opt no-new-privileges \
     --memory 32m --pids-limit 64 \
-    --entrypoint timeout "$DB_TUNNEL_IMAGE" "$seconds" \
+    --entrypoint timeout "$DB_TUNNEL_IMAGE" "$((seconds + 60))" \
     socat "TCP-LISTEN:$DB_TUNNEL_PORT,bind=127.0.0.1,fork,reuseaddr" "TCP:$ip:$DB_PORT"
 
   for _ in $(seq 1 20); do
     port_listening && break
     sleep 0.5
   done
-  if ! port_listening; then
+  # A moment more, so a bridge that failed to bind (port taken in between)
+  # has exited and is not mistaken for the listener.
+  sleep 1
+  if ! is_open || ! listener_is_bridge; then
     journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
     cleanup
-    die "the bridge did not start listening on 127.0.0.1:$DB_TUNNEL_PORT; it was stopped and removed"
+    die "the bridge is not the one listening on 127.0.0.1:$DB_TUNNEL_PORT; it was stopped and removed"
   fi
+  trap - INT TERM HUP
 
   echo "$expires" >"$EXPIRES_FILE"
   log "opened by ${SUDO_USER:-root} for ${hours}h, until $(date -u -d "@$expires" '+%F %H:%M UTC'), to $ip:$DB_PORT"
@@ -136,6 +157,7 @@ expiry_text() {
 
 cmd_close() {
   require_root
+  lock
   if is_open; then
     cleanup
     log "closed by ${SUDO_USER:-root}"
