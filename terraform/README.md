@@ -58,6 +58,10 @@ tracepath -6 server.abrunacci.dev   # should report the path MTU without stallin
   - **So every `-` in a plan is reviewed**, and so is every `-/+` (replace). The summary line (`N to destroy`) must be 0 unless the PR says why.
 - **`ignore_changes = [user_data, ssh_keys, image]`**: these only matter at creation, and changing them would force a new Droplet. After the first boot, Ansible owns the server's configuration.
 - **Resizing** (`droplet_size`) keeps the Droplet but powers it off: `graceful_shutdown = true` stops PostgreSQL cleanly, and `resize_disk = false` changes only CPU and RAM, so the Droplet can go back to a smaller size.
-- **`projects.yml` is validated**: a missing file, invalid YAML or a missing top-level `projects` key fails `terraform validate`, instead of being read as zero projects (which would plan the deletion of every project's DNS records). Invalid, duplicated or reserved (`server`, `status`) subdomains fail the plan. An explicit `projects: []` is accepted.
+- **`projects.yml` is validated**, so a mistake fails instead of being read as zero projects, which would plan the deletion of every project's DNS records:
+  - A missing file, invalid YAML, a missing or empty top-level `projects` key, or an entry without `subdomain` fails `terraform validate`.
+  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated or reserved (`server`, `status`) fail the plan.
+  - An explicit `projects: []` is accepted.
+  - A key repeated in the file (for example, a second `projects:` left by a bad merge) is not caught by Terraform: YAML keeps the last one. yamllint rejects it (`key-duplicates`) in pre-commit and CI, so run `pre-commit run --all-files` before a local plan.
 - **`proxied = false`** is set explicitly on every record, so the Cloudflare proxy cannot be turned on by accident (see the DNS decision in the main README).
 - **No IP addresses are committed.** Ansible and SSH use `server.abrunacci.dev`.
