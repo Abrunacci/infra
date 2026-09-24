@@ -29,6 +29,10 @@ ansible/**/hosts.ini
 *.retry
 # Collections and cache that ansible-lint installs.
 .ansible/
+# Run logs are written outside the repo (ansible/ansible.cfg, ansible/play);
+# ignored in case one is ever pointed here.
+*.log
+corridas/
 .vault_pass*
 vault_pass*
 

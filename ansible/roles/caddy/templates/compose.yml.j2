@@ -26,6 +26,8 @@ services:
       - "443:443/udp"
     volumes:
       - ./conf:/etc/caddy:ro
+      # Static sites (roles/projects), read-only: Caddy only serves them.
+      - /srv/sites:/srv/sites:ro
       - ./data:/data
       - ./config:/config
     networks:

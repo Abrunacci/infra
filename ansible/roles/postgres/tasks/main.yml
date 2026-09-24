@@ -18,6 +18,9 @@
     creates: "{{ postgres_password_file }}"
   environment:
     f: "{{ postgres_password_file }}"
+  # The password never appears in the arguments or the output (openssl writes
+  # straight to the file); no_log keeps it that way if the command changes.
+  no_log: true
 
 # Compose mounts the file as-is, so the container's postgres user must own it.
 # On the host, uid 999 may belong to another system user, but the directory is

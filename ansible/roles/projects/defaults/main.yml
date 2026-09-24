@@ -5,3 +5,17 @@ projects_file: "{{ playbook_dir }}/../projects.yml"
 # to check the project it is asked to deploy, and by this role to refuse
 # changes that would lose data.
 projects_server_registry: /etc/infra/projects.json
+
+# Static sites. Each project with site: true gets
+#   /srv/sites/<name>/placeholder/     root's; shown until the first deploy
+#   /srv/sites/<name>/releases/<id>/   one directory per deployed version,
+#                                      owned by the sites user (deploys)
+#   /srv/sites/<name>/current          symlink to what Caddy serves
+# Root never writes inside releases/: the sites user could otherwise replace a
+# directory there with a symlink and make root write elsewhere.
+projects_sites_dir: /srv/sites
+# Fixed, like caddy_uid (10001) and db_tunnel_uid (10002): never a dynamic
+# system uid that could match PostgreSQL's (999).
+projects_sites_uid: 10003
+# Caddy's per-project site files (imported by its Caddyfile).
+projects_caddy_sites_dir: "{{ caddy_dir }}/conf/sites"

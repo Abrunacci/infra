@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ansible-playbook with this run's output saved in a file of its own:
+#   ./play site.yml -K --diff
+# Logs go to $ANSIBLE_RUNS_DIR (default ~/notas/infra/corridas), outside the
+# repo, one file per run named after its UTC start time. Tasks with no_log are
+# not written.
+set -euo pipefail
+
+runs_dir="${ANSIBLE_RUNS_DIR:-$HOME/notas/infra/corridas}"
+mkdir -p "$runs_dir"
+chmod 700 "$runs_dir"
+# Absolute, since this script changes directory below.
+runs_dir="$(cd "$runs_dir" && pwd)"
+# Logs readable only by their owner.
+umask 077
+
+log="$runs_dir/$(date -u +%Y%m%dT%H%M%SZ)-ansible-playbook.log"
+export ANSIBLE_LOG_PATH="$log"
+echo "Logging this run to $log" >&2
+
+# ansible.cfg is only read from the current directory. Relative paths in the
+# arguments (the playbook, -e @file) are therefore relative to ansible/.
+cd "$(dirname "$0")"
+exec ansible-playbook "$@"

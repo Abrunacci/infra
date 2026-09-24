@@ -34,6 +34,25 @@
   loop_control:
     label: "{{ item.path or '.' }}"
 
+# Static sites live here (roles/projects). Caddy mounts it read-only; it
+# exists before Caddy starts, so Docker never creates it itself.
+- name: Create the static sites directory
+  ansible.builtin.file:
+    path: /srv/sites
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Used by roles/projects to validate each site file before writing it.
+- name: Install the site validation command
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/caddy-validate-site"
+    dest: /usr/local/sbin/caddy-validate-site
+    owner: root
+    group: root
+    mode: "0755"
+
 # quic-go (HTTP/3) asks for 7.5 MB socket buffers and logs a warning if the
 # kernel limit is lower.
 - name: Raise the UDP buffer limits for HTTP/3

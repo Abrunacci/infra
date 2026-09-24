@@ -1,8 +1,8 @@
 ---
 # The registry was loaded and checked in validate.yml (site.yml, pre_tasks).
 
-# Sites are built in the next PR, backends and databases later. Until then, a
-# project that needs a backend fails here instead of half existing.
+# Backends and databases are built in a later PR. Until then, a project that
+# needs a backend fails here instead of half existing.
 - name: Refuse components that are not supported yet
   ansible.builtin.assert:
     that:
@@ -51,3 +51,8 @@
     owner: root
     group: root
     mode: "0644"
+
+- name: Serve the static sites
+  ansible.builtin.import_tasks: sites.yml
+  vars:
+    projects_sites: "{{ projects_registry.projects | selectattr('site') | list }}"

@@ -1,0 +1,122 @@
+---
+# Static sites for the projects with site: true.
+
+# Owns what deploys write into releases/. deploy.sh (deploy PR) runs as root,
+# extracts each release as this user and then, as root, points current at it.
+# No login, no home.
+- name: Create the sites system group
+  ansible.builtin.group:
+    name: sites
+    gid: "{{ projects_sites_uid }}"
+    system: true
+
+- name: Create the sites system user
+  ansible.builtin.user:
+    name: sites
+    uid: "{{ projects_sites_uid }}"
+    group: sites
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create each site's directories
+  ansible.builtin.file:
+    path: "{{ projects_sites_dir }}/{{ item.0.name }}/{{ item.1.path }}"
+    state: directory
+    owner: "{{ item.1.owner }}"
+    group: "{{ item.1.owner }}"
+    mode: "0755"
+  loop: "{{ projects_sites | product(projects_site_dirs) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.path }}"
+  vars:
+    projects_site_dirs:
+      - { path: "", owner: root }
+      - { path: placeholder, owner: root }
+      - { path: releases, owner: sites }
+
+# Shown until the first deploy, for anyone who arrives early (a link from a CV).
+- name: Write each site's placeholder page
+  ansible.builtin.template:
+    src: placeholder.html.j2
+    dest: "{{ projects_sites_dir }}/{{ item.name }}/placeholder/index.html"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ projects_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Look for each site's current version
+  ansible.builtin.stat:
+    path: "{{ projects_sites_dir }}/{{ item.name }}/current"
+  register: projects_current
+  loop: "{{ projects_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# current belongs to deploys once they exist: it is only created when missing,
+# and anything other than a symlink there stops the play.
+- name: Check that current is a symlink where it exists
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or item.stat.islnk
+    fail_msg: >-
+      {{ projects_sites_dir }}/{{ item.item.name }}/current exists and is not a symlink;
+      fix it by hand before running the playbook again.
+    quiet: true
+  loop: "{{ projects_current.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Point new sites at their placeholder
+  ansible.builtin.file:
+    src: placeholder
+    dest: "{{ projects_sites_dir }}/{{ item.item.name }}/current"
+    state: link
+    # Only for check mode, where the placeholder directory is not created yet.
+    # current is missing here (see loop), so there is nothing to overwrite.
+    force: true
+    owner: root
+    group: root
+  loop: "{{ projects_current.results | rejectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# Checked with the rest of Caddy's config before it replaces the current file,
+# so an invalid site can never stop Caddy at its next restart.
+- name: Write each Caddy site
+  ansible.builtin.template:
+    src: site.caddy.j2
+    dest: "{{ projects_caddy_sites_dir }}/{{ item.name }}.caddy"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: >-
+      /usr/local/sbin/caddy-validate-site {{ caddy_image }} {{ caddy_uid }}
+      {{ caddy_dir }}/conf %s {{ item.name }}
+  loop: "{{ projects_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload Caddy
+
+# A project that no longer has a site stops being served. Only the Caddy site
+# goes: its files in /srv/sites stay until removed by hand.
+- name: Find the Caddy sites
+  ansible.builtin.find:
+    paths: "{{ projects_caddy_sites_dir }}"
+    patterns: "*.caddy"
+  register: projects_caddy_sites
+
+- name: Remove Caddy sites of projects without a site
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ projects_caddy_sites.files | rejectattr('path', 'in', projects_expected_sites) | list }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    projects_expected_sites: >-
+      {{ projects_sites | map(attribute='name')
+         | map('regex_replace', '^(.*)$', projects_caddy_sites_dir ~ '/\1.caddy') | list }}
+  notify: Reload Caddy
