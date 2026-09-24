@@ -22,6 +22,7 @@ Installed by Ansible (roles/deploy) as /usr/local/lib/infra/extract-release.
 
 import io
 import os
+import resource
 import shutil
 import sys
 import tarfile
@@ -117,12 +118,19 @@ def extract(data, staging, dirs, files):
 
 def main():
     if len(sys.argv) != 7:
-        print("usage: extract-release RELEASES_DIR RELEASE_ID MAX_COMPRESSED MAX_EXTRACTED MAX_FILES MAX_DEPTH",
-              file=sys.stderr)
+        print(
+            "usage: extract-release RELEASES_DIR RELEASE_ID MAX_COMPRESSED MAX_EXTRACTED MAX_FILES MAX_DEPTH",
+            file=sys.stderr,
+        )
         return 2
     releases, release_id = sys.argv[1], sys.argv[2]
     max_compressed, max_extracted, max_files, max_depth = (int(v) for v in sys.argv[3:7])
     os.umask(0o022)
+    # tarfile reads some headers (long names, PAX) whole into memory before
+    # any member is seen, so a gzip bomb could ask for gigabytes. Hard caps on
+    # memory and CPU make it fail here instead of pushing the server into swap.
+    resource.setrlimit(resource.RLIMIT_AS, (512 << 20, 512 << 20))
+    resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
 
     data = sys.stdin.buffer.read(max_compressed + 1)
     if len(data) > max_compressed:
@@ -144,10 +152,13 @@ def main():
         shutil.rmtree(staging, ignore_errors=True)
         print(f"rejected: {e}", file=sys.stderr)
         return 1
+    except MemoryError:
+        shutil.rmtree(staging, ignore_errors=True)
+        print("rejected: the archive needs too much memory to read", file=sys.stderr)
+        return 1
     except (tarfile.TarError, EOFError, OSError, ValueError) as e:
         shutil.rmtree(staging, ignore_errors=True)
-        print(f"rejected: not a valid gzipped tar or could not be written ({type(e).__name__}: {e})",
-              file=sys.stderr)
+        print(f"rejected: not a valid gzipped tar or could not be written ({type(e).__name__}: {e})", file=sys.stderr)
         return 1
     print(f"files={len(files)} bytes={sum(files.values())}")
     return 0

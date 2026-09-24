@@ -22,6 +22,8 @@
 # Installed by Ansible (roles/deploy) as /usr/local/sbin/deploy.sh.
 set -euo pipefail
 umask 022
+# The client may send LANG/LC_* (AcceptEnv): regexes and sort run in C.
+export LC_ALL=C
 
 readonly REGISTRY=/etc/infra/projects.json
 readonly SITES=/srv/sites
@@ -32,6 +34,7 @@ readonly MAX_COMPRESSED=$((25 * 1024 * 1024))
 readonly MAX_EXTRACTED=$((100 * 1024 * 1024))
 readonly MAX_FILES=5000
 readonly MAX_DEPTH=20
+readonly UPLOAD_TIMEOUT=120
 readonly RELEASE_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$'
 
 # What the journal line says; filled in as the deploy goes.
@@ -40,7 +43,9 @@ result="failed" reason="unexpected error"
 
 log_result() {
   local extra=""
-  [[ -n "$reason" ]] && extra=" reason=\"$reason\""
+  # No quotes from the client (a file name) can reach the line: they could
+  # fake fields.
+  [[ -n "$reason" ]] && extra=" reason=\"${reason//\"/\'}\""
   logger -t deploy -- "result=$result project=$project release=$release sha=$sha run_id=$run_id key=$key client=$client $size$extra"
 }
 trap 'log_result' EXIT
@@ -93,8 +98,9 @@ releases="$site/releases"
 [[ -d "$site" && ! -L "$site" && -d "$releases" && ! -L "$releases" ]] \
   || fail "the site's directories are missing (run the playbook)"
 
-# One deploy or rollback per project at a time (site-rollback takes the same lock).
-exec 9>"/run/lock/site-$project.lock"
+# One deploy or rollback per project at a time (site-rollback takes the same
+# lock). The lock is the site's own directory, which only root owns.
+exec 9<"$site"
 flock -n 9 || fail "another deploy or rollback of $project is running"
 
 release="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}"
@@ -102,11 +108,16 @@ release="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}"
 # Leftovers of an interrupted deploy, removed as the sites user.
 runuser -u "$SITES_USER" -- find "$releases" -mindepth 1 -maxdepth 1 -name '.incoming-*' -exec rm -rf -- {} + </dev/null
 
-# Checked and extracted as the sites user. head stops reading one byte past
-# the limit, so an oversized upload is cut off instead of read in full.
-if ! out="$(head -c $((MAX_COMPRESSED + 1)) \
-  | timeout 120 runuser -u "$SITES_USER" -- python3 -I "$EXTRACT" \
-      "$releases" "$release" "$MAX_COMPRESSED" "$MAX_EXTRACTED" "$MAX_FILES" "$MAX_DEPTH" 2>&1)"; then
+# Checked and extracted as the sites user, which reads stdin itself and stops
+# one byte past the limit. The timeout covers the whole upload: a client that
+# stalls is cut off, and the lock is released.
+rc=0
+out="$(timeout --kill-after=5 "$UPLOAD_TIMEOUT" runuser -u "$SITES_USER" -- python3 -I "$EXTRACT" \
+  "$releases" "$release" "$MAX_COMPRESSED" "$MAX_EXTRACTED" "$MAX_FILES" "$MAX_DEPTH" 2>&1)" || rc=$?
+if [[ $rc -ne 0 ]]; then
+  # Leftovers of a killed extractor go with the next deploy's cleanup.
+  [[ $rc -eq 124 || $rc -eq 137 ]] && fail "rejected: the upload took longer than ${UPLOAD_TIMEOUT}s"
+  [[ -n "$out" ]] || out="rejected: the extractor stopped (exit $rc)"
   fail "$(tail -n 1 <<<"$out" | tr -cd '[:print:]' | cut -c1-200)"
 fi
 size="$(tr -cd '[:print:]' <<<"$out" | cut -c1-80)"
@@ -117,7 +128,7 @@ target="$releases/$release"
 
 # Publish: a new symlink renamed over current, so there is never a moment
 # without one.
-ln -s "releases/$release" "$site/.current-$$"
+ln -sfn "releases/$release" "$site/.current-$$"
 mv -T "$site/.current-$$" "$site/current"
 result="ok" reason=""
 

@@ -14,6 +14,7 @@
 # as usual.
 # Installed by Ansible (roles/deploy) as /usr/local/sbin/site-rollback.
 set -euo pipefail
+export LC_ALL=C
 
 readonly REGISTRY=/etc/infra/projects.json
 readonly SITES=/srv/sites
@@ -58,14 +59,14 @@ if [[ "${2:-}" == --list ]]; then
   exit 0
 fi
 
-# Same lock as deploy.sh: a rollback never races a deploy.
-exec 9>"/run/lock/site-$project.lock"
+# Same lock as deploy.sh (the site's directory): a rollback never races a deploy.
+exec 9<"$site"
 flock -n 9 || die "a deploy or rollback of $project is running; try again"
 
 if [[ "${2:-}" == placeholder ]]; then
   [[ -f "$site/placeholder/index.html" && ! -L "$site/placeholder" ]] || die "$site/placeholder is missing (run the playbook)"
   [[ "$current" != placeholder ]] || die "the placeholder is already published"
-  ln -s placeholder "$site/.current-$$"
+  ln -sfn placeholder "$site/.current-$$"
   mv -T "$site/.current-$$" "$site/current"
   logger -t site-rollback -- "project=$project from=${current#releases/} to=placeholder by=${SUDO_USER:-root}"
   echo "Published the $project placeholder (was ${current#releases/})"
@@ -90,7 +91,7 @@ fi
 [[ "releases/$target" != "$current" ]] || die "$target is already published"
 [[ -f "$releases/$target/index.html" && ! -L "$releases/$target/index.html" ]] || die "$target has no index.html"
 
-ln -s "releases/$target" "$site/.current-$$"
+ln -sfn "releases/$target" "$site/.current-$$"
 mv -T "$site/.current-$$" "$site/current"
 logger -t site-rollback -- "project=$project from=${current#releases/} to=$target by=${SUDO_USER:-root}"
 echo "Published $project release $target (was ${current#releases/})"
