@@ -34,7 +34,7 @@ The roles run in that order: each one depends on the previous ones, and `project
 - **Deploys.** CI deploys a static site by piping a gzipped tar of it to `ssh deploy@server.abrunacci.dev deploy <sha> <run id>`.
   - **The key fixes the project.** Each project's key (its `deploy_key` in `projects.yml`) is written to `~deploy/.ssh/authorized_keys` with `restrict` and a forced command that runs `deploy.sh` for that project only. The client never chooses the project.
   - **Access is narrow.** The deploy user has no interactive session and no forwarding, and its one sudo rule is `deploy.sh`. It cannot change its own keys: root owns its home.
-  - **Checks before publishing.** `deploy.sh` checks the project against `/etc/infra/projects.json` and accepts only `deploy <40-character sha> [<run id>]`. The archive is limited to 25 MB compressed, and 100 MB, 5,000 entries and 20 levels once extracted. It may hold only regular files and directories, with no hidden ones except `.well-known/` at the root, and `index.html` at the root.
+  - **Checks before publishing.** `deploy.sh` checks the project against `/etc/infra/projects.json` and accepts only `deploy <40-character sha> [<run id>]`. The archive is limited to 25 MB compressed, and 100 MB, 5,000 entries and 20 levels once extracted; the upload to 2 minutes, and the extractor to 512 MB of memory and 60 s of CPU, so neither a stalled client nor a gzip bomb can hold the lock or strain the server. It may hold only regular files and directories, with no hidden ones except `.well-known/` at the root, and `index.html` at the root.
   - **Unprivileged extraction.** The release is extracted as the `sites` user into `releases/<UTC time>-<short sha>/` (files 0644, directories 0755). Only then does `current` switch to it, atomically. If anything fails, what was published stays published.
   - **Retention.** The last 5 releases are kept, plus the published one.
   - **Journal.** Every attempt is logged (`journalctl -t deploy`): project, release, sha, run id, key fingerprint, client address, size and result.
@@ -120,7 +120,7 @@ ssh-keygen -t ed25519 -N "" -C "cuanto-cuesta-deploy" -f ~/cuanto-cuesta-deploy
 cat ~/cuanto-cuesta-deploy.pub
 ```
 
-The key has no passphrase because CI uses it unattended. It is restricted instead: it can only run `deploy.sh` for its project. Put the public key (the whole `.pub` line) in the project's `deploy_key` in `projects.yml`. Merge that, then apply it: `./play site.yml -K --diff --tags projects,deploy`.
+The key has no passphrase because CI uses it unattended. It is restricted instead: it can only run `deploy.sh` for its project. Put the public key (the whole `.pub` line) in the project's `deploy_key` in `projects.yml`. Merge that, then apply it: `./play site.yml -K --diff --tags projects,deploy`. The first time after this deploy setup reaches the server, run the whole playbook instead (or add `hardening`), so the deploy user is also allowed to log in over SSH.
 
 ### 2. The server's host key, for known_hosts
 
@@ -162,7 +162,7 @@ Then delete the private key from your machine; GitHub holds the only copy, and a
 shred -u ~/cuanto-cuesta-deploy
 ```
 
-Required reviewers on environments are available on public repositories on any plan. On private ones they need a paid plan (GitHub Pro, Team or Enterprise).
+Plans: on public repositories all of this is available on any plan. On private repositories, deployment branch rules and rulesets need GitHub Pro or Team, and required reviewers need GitHub Enterprise.
 
 ### 4. Protecting main
 
@@ -179,13 +179,14 @@ With this, nothing reaches `main` without a pull request and green CI, and only 
 
 ### 5. The workflow step
 
-The workflow lives in the project's repository. Its deploy job runs only for pushes to `main`, in the `production` environment, after the checks and the build:
+The workflow lives in the project's repository, with `permissions: {}` at the top so each job asks only for what it needs. Its deploy job runs only for pushes to `main`, in the `production` environment, after the checks and the build:
 
 ```yaml
   deploy:
     needs: [build]                 # the job that builds and checks the site
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment: production
     permissions:
       contents: read
@@ -193,8 +194,10 @@ The workflow lives in the project's repository. Its deploy job runs only for pus
       group: deploy-production
       cancel-in-progress: false
     steps:
-      # ... checkout and build, or download the build's artifact, into frontend/dist
+      # ... checkout and build, or download the build's artifact, into
+      # frontend/dist, with actions pinned by commit SHA
       - name: Deploy
+        shell: bash                # -eo pipefail: a failed tar fails the step
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -205,10 +208,11 @@ The workflow lives in the project's repository. Its deploy job runs only for pus
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           tar -C frontend/dist -cz . \
             | ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o BatchMode=yes -o ConnectTimeout=15 \
                 deploy@server.abrunacci.dev deploy "$GITHUB_SHA" "$GITHUB_RUN_ID"
 ```
 
-The command is always `deploy <commit sha> <run id>`, and the archive's root is the site's root. The deploy prints `Deployed <project> release <id>`, or the reason it was rejected, and fails the job if it was.
+The command is always `deploy <commit sha> <run id>`, and the archive's root is the site's root. The run id is optional for `deploy.sh`, so a manual test can leave it out; the workflow always sends it. The deploy prints `Deployed <project> release <id>`, or the reason it was rejected, and fails the job if it was.
 
 ## Rotating the admin SSH key
 
