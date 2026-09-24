@@ -44,6 +44,10 @@
     base_new_keys: "{{ admin_ssh_public_keys | map('regex_search', base_key_material) | select | list }}"
   tags: [always]
 
+# Before any other change: stops the run if the sudo password is missing or wrong.
+- name: Require a password for sudo
+  ansible.builtin.import_tasks: sudo.yml
+
 - name: Install the admin SSH keys and remove any other
   ansible.posix.authorized_key:
     user: "{{ admin_user }}"
