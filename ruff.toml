@@ -1,0 +1,2 @@
+# Python scripts installed on the server (scripts/). Same line length as yamllint.
+line-length = 120
