@@ -6,6 +6,7 @@ hardening_ssh_allow_users:
 
 # The one exception to "no forwarding": admin_user may open local forwards
 # (ssh -L), and only to these destinations. Everyone else keeps none.
+# db_tunnel_port is in group_vars because roles/db_tunnel uses it too.
 hardening_ssh_forward_user: "{{ admin_user }}"
 hardening_ssh_permit_open:
   - "127.0.0.1:{{ db_tunnel_port }}"
