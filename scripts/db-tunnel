@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Opens and closes a temporary bridge to PostgreSQL for an SSH tunnel.
+# Installed by Ansible (roles/db_tunnel) as /usr/local/sbin/db-tunnel.
+#
+#   sudo db-tunnel open [HOURS]   start the bridge; it closes itself after HOURS
+#   sudo db-tunnel close          stop it now
+#   db-tunnel status              show whether it is open and until when
+#
+# The bridge is a socat container in the host's network namespace, listening
+# on 127.0.0.1 only and forwarding to the PostgreSQL container on the internal
+# db network. It runs as a transient systemd unit, so it shows up in systemctl
+# and the journal, and systemd stops it when the time is up; every stop is
+# logged with its reason. The container also carries its own timeout, in case
+# systemd or the Docker CLI die first.
+set -euo pipefail
+
+readonly CONFIG=/etc/infra/db-tunnel.conf
+readonly UNIT=db-tunnel.service
+readonly CONTAINER=db-tunnel
+readonly EXPIRES_FILE=/run/db-tunnel.expires
+# Expanded by systemd when the unit stops, not by this script: "timeout" means
+# the time ran out, "success" that it was closed.
+# shellcheck disable=SC2016
+readonly STOP_REASON='${SERVICE_RESULT}'
+
+die() {
+  echo "db-tunnel: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: sudo db-tunnel open [HOURS] | sudo db-tunnel close | db-tunnel status" >&2
+  exit 2
+}
+
+[[ -r "$CONFIG" ]] || die "missing $CONFIG (is the db_tunnel role applied?)"
+# shellcheck source=/dev/null
+. "$CONFIG"
+: "${DB_TUNNEL_IMAGE:?}" "${DB_TUNNEL_PORT:?}" "${DB_TUNNEL_DEFAULT_HOURS:?}" "${DB_TUNNEL_MAX_HOURS:?}"
+: "${DB_NETWORK:?}" "${DB_COMPOSE_PROJECT:?}" "${DB_COMPOSE_SERVICE:?}" "${DB_PORT:?}"
+
+require_root() {
+  [[ "$EUID" -eq 0 ]] || die "run it with sudo"
+}
+
+log() {
+  logger -t db-tunnel -- "$*"
+}
+
+is_open() {
+  systemctl is-active --quiet "$UNIT"
+}
+
+# Removes anything a previous bridge may have left behind. Safe to run twice.
+cleanup() {
+  systemctl stop "$UNIT" 2>/dev/null || true
+  systemctl reset-failed "$UNIT" 2>/dev/null || true
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  rm -f "$EXPIRES_FILE"
+}
+
+port_listening() {
+  [[ -n "$(ss -Hltn "sport = :$DB_TUNNEL_PORT")" ]]
+}
+
+postgres_ip() {
+  local id
+  id="$(docker ps -q \
+    --filter "label=com.docker.compose.project=$DB_COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.service=$DB_COMPOSE_SERVICE")"
+  [[ -n "$id" ]] || return 1
+  docker inspect -f "{{with index .NetworkSettings.Networks \"$DB_NETWORK\"}}{{.IPAddress}}{{end}}" "$id"
+}
+
+cmd_open() {
+  require_root
+  local hours="${1:-$DB_TUNNEL_DEFAULT_HOURS}"
+  # No leading zeros: bash would read "08" as octal.
+  if [[ ! "$hours" =~ ^[1-9][0-9]{0,2}$ ]] || ((hours > DB_TUNNEL_MAX_HOURS)); then
+    die "HOURS must be a whole number from 1 to $DB_TUNNEL_MAX_HOURS"
+  fi
+
+  is_open && die "the bridge is already open, $(expiry_text). Close it first: sudo db-tunnel close"
+  # A bridge that died on its own may have left a container or a failed unit.
+  cleanup
+  port_listening && die "127.0.0.1:$DB_TUNNEL_PORT is already in use by something else; nothing was started"
+
+  docker info >/dev/null 2>&1 || die "cannot talk to the Docker daemon; nothing was started"
+  local ip
+  ip="$(postgres_ip)" || die "the PostgreSQL container is not running; nothing was started"
+  [[ -n "$ip" ]] || die "the PostgreSQL container is not on the $DB_NETWORK network; nothing was started"
+
+  # The bridge only works if the host can reach the internal db network.
+  # Checked before anything is started, so a failure leaves nothing behind.
+  if ! timeout 3 bash -c "exec 3<>/dev/tcp/$ip/$DB_PORT" 2>/dev/null; then
+    die "the host cannot reach PostgreSQL at $ip:$DB_PORT on the $DB_NETWORK network; nothing was started"
+  fi
+
+  local seconds=$((hours * 3600))
+  local expires=$(($(date +%s) + seconds))
+  systemd-run --quiet --collect --unit="$UNIT" \
+    --description="Temporary PostgreSQL bridge for an SSH tunnel (sudo db-tunnel close)" \
+    --property=RuntimeMaxSec="$seconds" \
+    --property=SuccessExitStatus=143 \
+    --property="ExecStopPost=-/usr/bin/docker rm -f $CONTAINER" \
+    --property="ExecStopPost=/usr/bin/logger -t db-tunnel \"bridge stopped (reason: $STOP_REASON)\"" \
+    docker run --rm --name "$CONTAINER" --pull never \
+    --network host --read-only --user 65534:65534 \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --memory 32m --pids-limit 64 \
+    --entrypoint timeout "$DB_TUNNEL_IMAGE" "$seconds" \
+    socat "TCP-LISTEN:$DB_TUNNEL_PORT,bind=127.0.0.1,fork,reuseaddr" "TCP:$ip:$DB_PORT"
+
+  for _ in $(seq 1 20); do
+    port_listening && break
+    sleep 0.5
+  done
+  if ! port_listening; then
+    journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
+    cleanup
+    die "the bridge did not start listening on 127.0.0.1:$DB_TUNNEL_PORT; it was stopped and removed"
+  fi
+
+  echo "$expires" >"$EXPIRES_FILE"
+  log "opened by ${SUDO_USER:-root} for ${hours}h, until $(date -u -d "@$expires" '+%F %H:%M UTC'), to $ip:$DB_PORT"
+  echo "Bridge open on 127.0.0.1:$DB_TUNNEL_PORT until $(date -u -d "@$expires" '+%F %H:%M UTC')."
+  echo "Close it when you are done: sudo db-tunnel close"
+}
+
+expiry_text() {
+  local expires now
+  expires="$(cat "$EXPIRES_FILE" 2>/dev/null)" || { echo "expiry unknown"; return; }
+  now="$(date +%s)"
+  echo "closes at $(date -u -d "@$expires" '+%F %H:%M UTC') (in $(((expires - now + 59) / 60)) min)"
+}
+
+cmd_close() {
+  require_root
+  if is_open; then
+    cleanup
+    log "closed by ${SUDO_USER:-root}"
+    echo "Bridge closed."
+  else
+    cleanup
+    echo "The bridge was not open."
+  fi
+}
+
+cmd_status() {
+  if is_open; then
+    echo "open on 127.0.0.1:$DB_TUNNEL_PORT, $(expiry_text)"
+  else
+    echo "closed"
+  fi
+}
+
+case "${1:-}" in
+  open) shift; [[ $# -le 1 ]] || usage; cmd_open "$@" ;;
+  close) [[ $# -eq 1 ]] || usage; cmd_close ;;
+  status) [[ $# -eq 1 ]] || usage; cmd_status ;;
+  *) usage ;;
+esac
