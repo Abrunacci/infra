@@ -106,7 +106,7 @@
     that:
       - "'NOPASSWD' not in base_sudo_rules.stdout"
       - "'!authenticate' not in base_sudo_rules.stdout"
-    fail_msg: "{{ admin_user }} still has a NOPASSWD rule: {{ base_sudo_rules.stdout }}"
+    fail_msg: "{{ admin_user }} can still sudo without a password: {{ base_sudo_rules.stdout }}"
     quiet: true
   when: not ansible_check_mode
 
