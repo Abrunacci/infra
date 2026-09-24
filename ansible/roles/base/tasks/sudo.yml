@@ -33,6 +33,8 @@
 #    anything as anyone. A wrong password stops the play here.
 #    (Becoming the admin user itself would prove nothing: Ansible skips the
 #    escalation when the target user is the connection user.)
+#    Becoming an unprivileged user needs pipelining (ansible.cfg): without it
+#    this check fails on temporary file permissions. It fails safe, before c.
 - name: Make sudo ask for the password when running as nobody
   ansible.builtin.copy:
     dest: /etc/sudoers.d/91-password-check
@@ -80,6 +82,14 @@
     group: root
     mode: "0440"
     validate: /usr/sbin/visudo -cf %s
+  # Never without a and b, even when started midway (--start-at-task, --step):
+  # their results must exist and have passed.
+  when:
+    - base_passwd_status is defined
+    - base_passwd_status is succeeded
+    - base_password_check is defined
+    - base_password_check is succeeded
+    - base_password_check is not skipped or ansible_check_mode
 
 # d. Prove it: no NOPASSWD left for the admin user anywhere in sudoers, and
 #    sudo with the password works on a fresh connection with no cached
@@ -95,6 +105,7 @@
   ansible.builtin.assert:
     that:
       - "'NOPASSWD' not in base_sudo_rules.stdout"
+      - "'!authenticate' not in base_sudo_rules.stdout"
     fail_msg: "{{ admin_user }} still has a NOPASSWD rule: {{ base_sudo_rules.stdout }}"
     quiet: true
   when: not ansible_check_mode
@@ -108,6 +119,18 @@
   become: false
   changed_when: false
   check_mode: false
+
+# Behavior, not just the listing: catches any other way to sudo without a
+# password (a Defaults !authenticate, a rule in another file).
+- name: Check that sudo without a password is refused
+  ansible.builtin.command:
+    cmd: sudo --non-interactive true
+  become: false
+  register: base_sudo_no_password
+  changed_when: false
+  failed_when: base_sudo_no_password.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
 
 - name: Check that sudo works with the password
   ansible.builtin.command:
