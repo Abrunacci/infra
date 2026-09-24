@@ -1,10 +1,20 @@
 ---
 # Static sites for the projects with site: true.
 
-# Owns what deploys write into releases/ (deploy PR). No login, no home.
+# Owns what deploys write into releases/. deploy.sh (deploy PR) runs as root,
+# extracts each release as this user and then, as root, points current at it.
+# No login, no home.
+- name: Create the sites system group
+  ansible.builtin.group:
+    name: sites
+    gid: "{{ projects_sites_uid }}"
+    system: true
+
 - name: Create the sites system user
   ansible.builtin.user:
     name: sites
+    uid: "{{ projects_sites_uid }}"
+    group: sites
     system: true
     shell: /usr/sbin/nologin
     create_home: false
@@ -22,14 +32,14 @@
   vars:
     projects_site_dirs:
       - { path: "", owner: root }
+      - { path: placeholder, owner: root }
       - { path: releases, owner: sites }
-      - { path: releases/placeholder, owner: root }
 
 # Shown until the first deploy, for anyone who arrives early (a link from a CV).
 - name: Write each site's placeholder page
   ansible.builtin.template:
     src: placeholder.html.j2
-    dest: "{{ projects_sites_dir }}/{{ item.name }}/releases/placeholder/index.html"
+    dest: "{{ projects_sites_dir }}/{{ item.name }}/placeholder/index.html"
     owner: root
     group: root
     mode: "0644"
@@ -61,7 +71,7 @@
 
 - name: Point new sites at their placeholder
   ansible.builtin.file:
-    src: releases/placeholder
+    src: placeholder
     dest: "{{ projects_sites_dir }}/{{ item.item.name }}/current"
     state: link
     # Only for check mode, where the placeholder directory is not created yet.
