@@ -76,3 +76,10 @@ variable "admin_ssh_public_key" {
     error_message = "admin_ssh_public_key must be a single-line OpenSSH public key (ssh-ed25519 recommended)."
   }
 }
+
+variable "allow_zero_projects" {
+  description = "Set to true only to remove every project on purpose, with -var for that run (never in .env). With the default (false), a projects.yml with no projects fails the plan instead of deleting every project's DNS records."
+  type        = bool
+  default     = false
+  nullable    = false
+}
