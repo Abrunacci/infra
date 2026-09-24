@@ -9,9 +9,10 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation and `no-new-privileges` for every container; the shared `edge` and `db` networks |
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 16 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server |
+| `projects` | Checks `projects.yml` before any other change, and writes the server's registry of projects (`/etc/infra/projects.json`). Refuses what is not built yet (backends) and never turns a database off. Sites, then backends and databases, are added in later PRs |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 
-The roles run in that order: each one depends on the previous ones. Projects (databases, Caddy routes, stacks) are added in a later PR.
+The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one.
 
 ## Design notes
 

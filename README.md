@@ -6,7 +6,7 @@ Infrastructure for my portfolio projects: one DigitalOcean Droplet, Docker Compo
 |---|---|
 | [`terraform/`](terraform/README.md) | The Droplet, cloud firewall and DNS records |
 | [`ansible/`](ansible/README.md) | Server configuration: hardening, Docker, Caddy and PostgreSQL |
-| `projects.yml` | Registry of deployed projects |
+| `projects.yml` | Registry of deployed projects: what each one has (a static site, a backend, a database). Checked against `projects.schema.json` |
 
 Work in progress.
 
