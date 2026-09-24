@@ -1,7 +1,25 @@
 ---
 # Registry of deployed projects: the single source of truth for Terraform
-# (one DNS record per subdomain) and, later, Ansible (database, Caddy route,
-# stack and status check). Adding a project starts with a new entry here.
+# (one DNS record per subdomain) and Ansible (roles/projects). Adding a
+# project starts with a new entry here. Schema: projects.schema.json.
+#
+#   name       directories, registry entry and, with a database, the database
+#              and user (with - turned into _)
+#   subdomain  DNS record and Caddy site
+#   title      shown on the placeholder page (optional, defaults to name)
+#   repo       linked from the placeholder page (optional: leave it out for
+#              private repositories)
+#   site       true: Caddy serves /srv/sites/<name>/current
+#   database   true: a PostgreSQL database and user; needs a backend
+#   backend    optional container, not supported by the playbook yet:
+#                image   repository without tag (the digest lives on the server)
+#                port    port it listens on
+#                health  health check path, with its prefix
+#                paths   paths Caddy sends to it; required with a site
 projects:
   - name: cuanto-cuesta
     subdomain: cuanto-cuesta
+    title: "¿Cuánto cuesta?"
+    repo: https://github.com/Abrunacci/cuanto-cuesta
+    site: true
+    database: false

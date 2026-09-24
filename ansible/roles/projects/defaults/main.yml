@@ -1,0 +1,7 @@
+---
+# The registry at the repo root, shared with Terraform.
+projects_file: "{{ playbook_dir }}/../projects.yml"
+# What the server knows about each project: read by deploy.sh (deploy PR)
+# to check the project it is asked to deploy, and by this role to refuse
+# changes that would lose data.
+projects_server_registry: /etc/infra/projects.json

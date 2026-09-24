@@ -38,6 +38,17 @@ repos:
     hooks:
       - id: shellcheck
 
+  # projects.yml against projects.schema.json, and the schema against its metaschema.
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0494aa7fa1314e98913a41227d8f0a515b2c1049  # frozen: 0.38.2
+    hooks:
+      - id: check-jsonschema
+        name: Validate projects.yml
+        files: ^projects\.yml$
+        args: [--schemafile, projects.schema.json]
+      - id: check-metaschema
+        files: ^projects\.schema\.json$
+
   - repo: https://github.com/ansible/ansible-lint
     rev: e7f397ad6dfa20d274afa17cd7bbedd84ed136f5  # frozen: v26.9.0
     hooks:

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project registry (projects.yml)",
+  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names and subdomains) or several fields (health inside paths) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
+  "type": "object",
+  "required": ["projects"],
+  "additionalProperties": false,
+  "properties": {
+    "projects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/project" }
+    }
+  },
+  "$defs": {
+    "label": {
+      "description": "A lowercase DNS label.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "project": {
+      "type": "object",
+      "required": ["name", "subdomain", "site", "database"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Directories, registry entry and, with a database, the database and user (with - turned into _).",
+          "allOf": [
+            { "$ref": "#/$defs/label" },
+            { "not": { "enum": ["postgres", "template0", "template1"] } }
+          ]
+        },
+        "subdomain": {
+          "description": "DNS record (Terraform) and Caddy site.",
+          "allOf": [
+            { "$ref": "#/$defs/label" },
+            { "not": { "enum": ["server", "status"] } }
+          ]
+        },
+        "title": {
+          "description": "Shown on the placeholder page. Defaults to name.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "repo": {
+          "description": "Linked from the placeholder page. Optional: leave it out for private repositories.",
+          "type": "string",
+          "pattern": "^https://[^\\s\"<>]+$"
+        },
+        "site": {
+          "description": "Caddy serves /srv/sites/<name>/current.",
+          "type": "boolean"
+        },
+        "database": {
+          "description": "A PostgreSQL database and user for the backend. Never turned back off automatically.",
+          "type": "boolean"
+        },
+        "backend": { "$ref": "#/$defs/backend" }
+      },
+      "allOf": [
+        {
+          "description": "At least one component: a site or a backend.",
+          "if": { "properties": { "site": { "const": false } } },
+          "then": { "required": ["backend"] }
+        },
+        {
+          "description": "Only a backend can use a database.",
+          "if": { "properties": { "database": { "const": true } } },
+          "then": { "required": ["backend"] }
+        },
+        {
+          "description": "With a site, the backend only gets the paths listed.",
+          "if": {
+            "properties": { "site": { "const": true } },
+            "required": ["backend"]
+          },
+          "then": { "properties": { "backend": { "required": ["paths"] } } }
+        },
+        {
+          "description": "Without a site, the backend gets every path.",
+          "if": { "properties": { "site": { "const": false } } },
+          "then": { "properties": { "backend": { "not": { "required": ["paths"] } } } }
+        }
+      ]
+    },
+    "backend": {
+      "type": "object",
+      "required": ["image", "port", "health"],
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "Image repository without a tag or digest: deploy.sh records the digest on the server.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$"
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "health": {
+          "description": "Health check path, with the prefix: Caddy does not strip it.",
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~/-]*$"
+        },
+        "paths": {
+          "description": "Caddy path matchers sent to the backend, such as /api/*.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^/[A-Za-z0-9._~/-]*\\*?$" }
+        }
+      }
+    }
+  }
+}

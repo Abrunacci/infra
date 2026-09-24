@@ -1,0 +1,53 @@
+---
+# The registry was loaded and checked in validate.yml (site.yml, pre_tasks).
+
+# Sites are built in the next PR, backends and databases later. Until then, a
+# project that needs a backend fails here instead of half existing.
+- name: Refuse components that are not supported yet
+  ansible.builtin.assert:
+    that:
+      - item.backend is not defined
+    fail_msg: "projects.yml: {{ item.name }} has a backend; backend projects are not supported yet."
+    quiet: true
+  loop: "{{ projects_registry.projects }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Only a missing registry (a new server) is expected. Any other read error
+# stops the play: skipping the database check silently would be worse.
+- name: Look for the registry the server already has
+  ansible.builtin.stat:
+    path: "{{ projects_server_registry }}"
+  register: projects_previous_stat
+
+- name: Read the registry the server already has
+  ansible.builtin.slurp:
+    src: "{{ projects_server_registry }}"
+  register: projects_previous_raw
+  when: projects_previous_stat.stat.exists
+
+# The playbook never drops a database: a project that has one keeps it.
+- name: Refuse turning a database off
+  ansible.builtin.assert:
+    that:
+      - projects_current_databases[item.name]
+    fail_msg: >-
+      {{ item.name }} has a database on the server and projects.yml now says database: false.
+      The playbook never drops a database; removing one is a manual step.
+    quiet: true
+  loop: "{{ projects_previous | selectattr('database') | selectattr('name', 'in', projects_current_databases) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_previous: >-
+      {{ (projects_previous_raw.content | b64decode | from_json).projects
+         if projects_previous_stat.stat.exists else [] }}
+    projects_current_databases: "{{ projects_registry.projects | items2dict(key_name='name', value_name='database') }}"
+
+- name: Write the registry for the server
+  ansible.builtin.template:
+    src: projects.json.j2
+    dest: "{{ projects_server_registry }}"
+    owner: root
+    group: root
+    mode: "0644"

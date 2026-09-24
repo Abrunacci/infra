@@ -2,6 +2,13 @@
 - name: Provision the server
   hosts: all
   become: true
+  pre_tasks:
+    # Before any change: a broken projects.yml stops the play here.
+    - name: Check the project registry
+      ansible.builtin.import_role:
+        name: projects
+        tasks_from: validate
+      tags: [always]
   roles:
     - role: base
       tags: [base]
@@ -15,3 +22,5 @@
       tags: [postgres]
     - role: db_tunnel
       tags: [db_tunnel]
+    - role: projects
+      tags: [projects]

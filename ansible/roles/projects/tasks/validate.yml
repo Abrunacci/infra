@@ -1,0 +1,85 @@
+---
+# Runs before any other role (site.yml, pre_tasks), so a broken registry
+# stops the play before anything changes. projects.schema.json checks the
+# same file in pre-commit and CI; this repeats its rules, so a run without
+# pre-commit is still protected, and adds the ones a schema cannot express
+# (unique names and subdomains, health inside paths). One gap is inherent:
+# Ansible reads YAML 1.1, so an unquoted `yes` becomes true here, while the
+# schema (YAML 1.2) rejects it. Regexes end with \Z: in Python, $ also
+# matches before a trailing newline.
+
+- name: Load the project registry
+  ansible.builtin.include_vars:
+    file: "{{ projects_file }}"
+    name: projects_registry
+
+- name: Check the registry as a whole
+  ansible.builtin.assert:
+    that:
+      - projects_registry.keys() | list == ['projects']
+      - projects_registry.projects is sequence
+      - projects_registry.projects is not string
+      - projects_registry.projects is not mapping
+      - projects_names | unique | length == projects_names | length
+      - projects_subdomains | unique | length == projects_subdomains | length
+    fail_msg: "projects.yml: it must hold only a projects list, with unique names and subdomains."
+    quiet: true
+  vars:
+    projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
+    projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
+
+- name: Check each project
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(projects_allowed_keys) | length == 0
+      - item.name is string and item.name is match(projects_label)
+      - item.name not in ['postgres', 'template0', 'template1']
+      - item.subdomain is string and item.subdomain is match(projects_label)
+      - item.subdomain not in ['server', 'status']
+      - item.site is boolean
+      - item.database is boolean
+      - item.title is not defined or (item.title is string and item.title | length > 0 and item.title | length <= 80)
+      - item.repo is not defined or (item.repo is string and item.repo is match('^https://[^\s"<>]+\Z'))
+      - >-
+        item.backend is not defined
+        or (item.backend is mapping
+            and item.backend.keys() | difference(['image', 'port', 'health', 'paths']) | length == 0
+            and item.backend.image is string
+            and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
+            and item.backend.port is integer and item.backend.port is not boolean
+            and item.backend.port >= 1 and item.backend.port <= 65535
+            and item.backend.health is defined and item.backend.health is string
+            and item.backend.health is match('^/[A-Za-z0-9._~/-]*\Z')
+            and (item.backend.paths is not defined
+                 or (item.backend.paths is sequence and item.backend.paths is not string
+                     and item.backend.paths is not mapping
+                     and item.backend.paths | length > 0
+                     and item.backend.paths | unique | length == item.backend.paths | length
+                     and item.backend.paths | reject('string') | list | length == 0
+                     and item.backend.paths | reject('match', '^/[A-Za-z0-9._~/-]*[*]?\Z') | list | length == 0)))
+      # At least one component; only a backend can use a database.
+      - item.site or item.backend is defined
+      - not item.database or item.backend is defined
+      # With a site the backend gets only its paths, which must include its
+      # health check; without a site it gets every path.
+      - >-
+        item.backend is not defined
+        or (item.site and item.backend.paths is defined and item.backend.health is defined
+            and item.backend.health is match(projects_paths_pattern))
+        or (not item.site and item.backend.paths is not defined)
+    fail_msg: "projects.yml: invalid entry for {{ item.name | default('(no name)') }}. See projects.schema.json."
+    quiet: true
+  loop: "{{ projects_registry.projects }}"
+  loop_control:
+    label: "{{ item.name | default('(no name)') }}"
+  vars:
+    projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+    projects_allowed_keys: [name, subdomain, title, repo, site, database, backend]
+    # Caddy path matchers as one regex: "/api/*" covers anything under /api/,
+    # "/health" only itself.
+    projects_backend_paths: "{{ item.backend.paths | default([]) }}"
+    projects_paths_pattern: >-
+      ^(?:{{ ((projects_backend_paths | select('match', '.*[*]$') | map('regex_replace', '[*]$', '')
+             | map('regex_escape') | map('regex_replace', '$', '.*') | list)
+           + (projects_backend_paths | reject('match', '.*[*]$') | map('regex_escape') | list))
+           | join('|') }})\Z
