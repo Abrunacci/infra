@@ -6,6 +6,7 @@ DB_TUNNEL_UID={{ db_tunnel_uid | quote }}
 DB_TUNNEL_DEFAULT_HOURS={{ db_tunnel_default_hours | quote }}
 DB_TUNNEL_MAX_HOURS={{ db_tunnel_max_hours | quote }}
 DB_NETWORK=db
+DB_ADDRESS={{ postgres_ipv4_address | quote }}
 DB_COMPOSE_PROJECT=postgres
 DB_COMPOSE_SERVICE=postgres
 DB_PORT=5432

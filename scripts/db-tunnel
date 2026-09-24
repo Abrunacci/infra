@@ -38,7 +38,7 @@ usage() {
 # shellcheck source=/dev/null
 . "$CONFIG"
 : "${DB_TUNNEL_IMAGE:?}" "${DB_TUNNEL_PORT:?}" "${DB_TUNNEL_DEFAULT_HOURS:?}" "${DB_TUNNEL_MAX_HOURS:?}"
-: "${DB_NETWORK:?}" "${DB_COMPOSE_PROJECT:?}" "${DB_COMPOSE_SERVICE:?}" "${DB_PORT:?}" "${DB_TUNNEL_UID:?}"
+: "${DB_NETWORK:?}" "${DB_ADDRESS:?}" "${DB_COMPOSE_PROJECT:?}" "${DB_COMPOSE_SERVICE:?}" "${DB_PORT:?}" "${DB_TUNNEL_UID:?}"
 
 require_root() {
   [[ "$EUID" -eq 0 ]] || die "run it with sudo"
@@ -105,6 +105,10 @@ cmd_open() {
   local ip
   ip="$(postgres_ip)" || die "the PostgreSQL container is not running; nothing was started"
   [[ -n "$ip" ]] || die "the PostgreSQL container is not on the $DB_NETWORK network; nothing was started"
+  # PostgreSQL has a fixed address; anything else means its stack is not the
+  # one Ansible deployed, so the bridge would point somewhere unexpected.
+  [[ "$ip" == "$DB_ADDRESS" ]] \
+    || die "PostgreSQL is at $ip, not at its fixed address $DB_ADDRESS (run the playbook); nothing was started"
 
   # The bridge only works if the host can reach the internal db network.
   # Checked before anything is started, so a failure leaves nothing behind.
