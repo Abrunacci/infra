@@ -1,5 +1,8 @@
 locals {
-  projects   = try(yamldecode(file("${path.module}/../projects.yml")).projects, [])
+  # No try() here on purpose: a missing or broken projects.yml, or one without a
+  # top-level "projects" key, must stop the plan. Falling back to an empty list
+  # would plan the deletion of every project's DNS records.
+  projects   = yamldecode(file("${path.module}/../projects.yml")).projects
   subdomains = [for p in local.projects : p.subdomain]
   reserved   = ["server", "status"]
 
