@@ -5,10 +5,11 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | Role | What it does |
 |---|---|
 | `base` | Manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
-| `hardening` | sshd drop-in (keys only, no root, only `admin_user`, no forwarding), ufw with the same rules as the cloud firewall, fail2ban for SSH |
+| `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH |
 | `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation and `no-new-privileges` for every container; the shared `edge` and `db` networks |
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 16 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server |
+| `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 
 The roles run in that order: each one depends on the previous ones. Projects (databases, Caddy routes, stacks) are added in a later PR.
 
@@ -19,7 +20,7 @@ The roles run in that order: each one depends on the previous ones. Projects (da
 - **`db` is an internal network.** Containers on it have no route to the internet through it. Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL).
 - **Secrets are generated on the server.** The PostgreSQL superuser password is created once with `openssl rand` in `/etc/infra/secrets/postgres.password` (mode 0400, owned by the container's `postgres` user). It is never sent to the machine running Ansible, and running the playbook again does not replace it.
 - **ICMP stays allowed.** ufw's default `before.rules` and `before6.rules` accept ICMP and the ICMPv6 messages IPv6 needs, and the `hardening` role leaves them untouched.
-- **No SSH forwarding.** `AllowTcpForwarding no` rules out `ssh -L` to PostgreSQL. Administration goes through `docker exec` on the server (`sudo docker exec -it postgres-postgres-1 psql -U postgres`), and so will the restore procedure.
+- **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
 - **Automatic reboots.** When a security update needs a reboot (kernel, libc), unattended-upgrades reboots at 07:30 UTC. Docker stops PostgreSQL cleanly first (60 s grace period) and every container comes back through its restart policy. Set `base_auto_reboot: false` to turn it off.
 
