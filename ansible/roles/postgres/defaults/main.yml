@@ -1,0 +1,16 @@
+---
+# Pinned by digest, like Caddy. A minor bump (16.x) is a pull and a restart;
+# a major one (17) needs a dump and restore, never just a new tag.
+postgres_image: postgres:16.15-trixie@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
+postgres_dir: "{{ infra_opt_dir }}/postgres"
+# Superuser password, generated on the server on the first run. PostgreSQL
+# reads it only when it initializes the data directory.
+postgres_password_file: "{{ infra_secrets_dir }}/postgres.password"
+# UID of the postgres user inside the Debian-based image.
+postgres_container_uid: 999
+
+# Sized for the 2 GB Droplet, shared with the project containers.
+postgres_memory_limit: 768m
+postgres_shared_buffers: 256MB
+postgres_effective_cache_size: 768MB
+postgres_max_connections: 50

@@ -1,0 +1,100 @@
+---
+- name: Check that the server runs Ubuntu 24.04
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release == 'noble'
+    fail_msg: The pinned Docker versions are built for Ubuntu 24.04 (noble).
+    quiet: true
+
+- name: Remove Ubuntu's Docker packages, which conflict with Docker's
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose
+      - docker-compose-v2
+      - docker-doc
+      - podman-docker
+      - containerd
+      - runc
+    state: absent
+
+- name: Install the packages the Docker tasks need
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      # deb822_repository
+      - python3-debian
+      # community.docker modules
+      - python3-requests
+    state: present
+
+- name: Download Docker's apt signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: /etc/apt/keyrings/docker.asc
+    checksum: "{{ docker_apt_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add Docker's apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: [https://download.docker.com/linux/ubuntu]
+    suites: ["{{ ansible_facts.distribution_release }}"]
+    components: [stable]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+
+- name: Install Docker Engine and the Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce={{ docker_ce_version }}
+      - docker-ce-cli={{ docker_ce_version }}
+      - containerd.io={{ docker_containerd_version }}
+      - docker-compose-plugin={{ docker_compose_version }}
+    state: present
+    update_cache: true
+    install_recommends: false
+    # The packages are held (next task): a version bump has to lift the hold.
+    allow_change_held_packages: true
+
+- name: Hold the Docker packages at the pinned versions
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-compose-plugin
+
+- name: Configure the Docker daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart docker
+
+- name: Start Docker at boot
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+# daemon.json must be in effect before any container is created.
+- name: Apply Docker daemon changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Create the shared Docker networks
+  community.docker.docker_network:
+    name: "{{ item.name }}"
+    internal: "{{ item.internal }}"
+    state: present
+  loop: "{{ docker_networks }}"
+  loop_control:
+    label: "{{ item.name }}"

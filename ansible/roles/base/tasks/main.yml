@@ -1,0 +1,132 @@
+---
+- name: Check the connection user and the admin SSH keys
+  ansible.builtin.assert:
+    that:
+      # hardening allows only admin_user to log in over SSH.
+      - ansible_user | default(admin_user) == admin_user
+      - admin_ssh_public_keys | length > 0
+      - >-
+        admin_ssh_public_keys | select('match', base_ssh_key_regex) | list | length
+        == admin_ssh_public_keys | length
+    fail_msg: >-
+      ansible_user must be admin_user ({{ admin_user }}), and admin_ssh_public_keys must hold one or more
+      single-line OpenSSH public keys. Is TF_VAR_admin_ssh_public_key exported?
+    quiet: true
+  vars:
+    # Same formats Terraform accepts (terraform/variables.tf).
+    base_ssh_key_regex: >-
+      ^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\n]*)?$
+  # Runs with any --tags: hardening relies on it for AllowUsers.
+  tags: [always]
+
+- name: Read the admin user's current SSH keys
+  ansible.builtin.slurp:
+    src: /home/{{ admin_user }}/.ssh/authorized_keys
+  register: base_authorized_keys
+  tags: [always]
+
+# The key list is exclusive. A list that shares no key with the server would
+# remove every key that works today and lock the admin out.
+- name: Check that at least one current key stays authorized
+  ansible.builtin.assert:
+    that:
+      - base_current_keys | intersect(base_new_keys) | length > 0
+    fail_msg: >-
+      None of the keys in admin_ssh_public_keys is authorized on the server today. Keep the current key
+      in the list while rotating (see README).
+    quiet: true
+  vars:
+    # Compares type and key material only; comments and options are ignored.
+    base_key_material: (ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+
+    base_current_keys: >-
+      {{ (base_authorized_keys.content | b64decode).splitlines()
+         | map('regex_search', base_key_material) | select | list }}
+    base_new_keys: "{{ admin_ssh_public_keys | map('regex_search', base_key_material) | select | list }}"
+  tags: [always]
+
+- name: Install the admin SSH keys and remove any other
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_public_keys | join('\n') }}"
+    exclusive: true
+
+# DigitalOcean installs the same key for root at creation. Root cannot log in
+# over SSH, but the key would outlive any rotation.
+- name: Remove root's SSH keys
+  ansible.builtin.copy:
+    content: ""
+    dest: /root/.ssh/authorized_keys
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable daily security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (roles/base).
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+- name: Configure unattended-upgrades
+  ansible.builtin.template:
+    src: 52unattended-upgrades-local.j2
+    # Read after the package's 50unattended-upgrades, so these values win.
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+    owner: root
+    group: root
+    mode: "0644"
+
+# One step, so a half-created file is never left behind: if mkswap fails, the
+# file is removed and the next run tries again.
+- name: Create the swap file
+  ansible.builtin.shell:
+    cmd: >-
+      umask 077 && fallocate -l {{ base_swap_size_mb }}M /swapfile && mkswap /swapfile
+      || { rm -f /swapfile; exit 1; }
+    creates: /swapfile
+
+- name: Mount the swap file at boot
+  ansible.posix.mount:
+    path: none
+    src: /swapfile
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: Turn swap on
+  ansible.builtin.command:
+    cmd: swapon /swapfile
+  when: ansible_facts.swaptotal_mb == 0
+  changed_when: true
+
+- name: Prefer RAM over swap
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "{{ base_swappiness }}"
+    sysctl_file: /etc/sysctl.d/60-infra.conf
+    state: present
+
+- name: Create the infra directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/infra, mode: "0755" }
+    - { path: "{{ infra_secrets_dir }}", mode: "0700" }
+    - { path: "{{ infra_opt_dir }}", mode: "0755" }

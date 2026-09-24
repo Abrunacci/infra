@@ -1,0 +1,15 @@
+# Managed by Ansible (roles/caddy).
+{% if caddy_acme_email %}
+{
+	email {{ caddy_acme_email }}
+}
+
+{% endif %}
+# Serves no application. It gives Caddy a certificate to obtain right after
+# provisioning, which proves DNS, the CAA records and ports 80/443 work.
+server.{{ domain }} {
+	respond 404
+}
+
+# One file per project, written by Ansible. An empty directory is not an error.
+import sites/*.caddy

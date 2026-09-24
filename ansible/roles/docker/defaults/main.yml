@@ -1,0 +1,22 @@
+---
+# Exact versions from Docker's apt repository, held with dpkg so neither
+# `apt upgrade` nor unattended-upgrades changes them. Upgrading is a PR that
+# bumps these values. List the available versions with:
+#   apt-cache madison docker-ce containerd.io docker-compose-plugin
+docker_ce_version: "5:29.8.1-1~ubuntu.24.04~noble"
+docker_containerd_version: "2.3.5-1~ubuntu.24.04~noble"
+docker_compose_version: "5.5.1-1~ubuntu.24.04~noble"
+
+# Docker's apt signing key, fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
+# (https://docs.docker.com/engine/install/ubuntu/). If Docker ever replaces the
+# key, the checksum no longer matches and the run stops.
+docker_apt_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+
+# Shared networks, created here so any stack can join them:
+#   edge -> Caddy and the project containers it proxies to
+#   db   -> PostgreSQL and the projects that use it. Internal: no route to
+#           the internet, and nothing on it can be published.
+docker_networks:
+  - { name: edge, internal: false }
+  - { name: db, internal: true }

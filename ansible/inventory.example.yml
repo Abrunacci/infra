@@ -1,0 +1,7 @@
+---
+# Copy to inventory.yml (git-ignored). The host is a hostname, never an IP:
+# Terraform creates its A/AAAA records (see terraform/outputs.tf, server_fqdn).
+all:
+  hosts:
+    server.abrunacci.dev:
+      ansible_user: ops

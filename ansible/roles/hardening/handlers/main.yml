@@ -1,0 +1,12 @@
+---
+# Ubuntu's ssh.service runs `sshd -t` before reloading, so a broken config is
+# rejected and the running daemon keeps the old one.
+- name: Reload ssh
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+
+- name: Restart fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: restarted

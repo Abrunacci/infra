@@ -1,6 +1,10 @@
 ---
 extends: default
 
+# Collections that ansible-lint installs (git-ignored).
+ignore: |
+  .ansible/
+
 rules:
   # GitHub Actions uses the bare `on:` key.
   truthy:
@@ -10,6 +14,7 @@ rules:
     max: 120
   comments:
     min-spaces-from-content: 1
+  comments-indentation: false
   # Compatible with ansible-lint's yaml rules.
   braces:
     max-spaces-inside: 1

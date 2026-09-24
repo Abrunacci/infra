@@ -1,0 +1,3 @@
+---
+# Strictest profile: what ansible-lint expects of content that runs in production.
+profile: production
