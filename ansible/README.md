@@ -103,8 +103,8 @@ Terraform ignores the key after the Droplet is created (`ignore_changes`), so up
 ## Checking the result
 
 ```sh
-ssh ops@server.abrunacci.dev 'sudo ufw status verbose; sudo fail2ban-client status sshd; swapon --show'
-ssh ops@server.abrunacci.dev 'sudo docker ps --format "{{.Names}}\t{{.Status}}"'   # both "healthy"
+ssh -t ops@server.abrunacci.dev 'sudo ufw status verbose; sudo fail2ban-client status sshd; swapon --show'
+ssh -t ops@server.abrunacci.dev 'sudo docker ps --format "{{.Names}}\t{{.Status}}"'   # both "healthy"
 curl -sI https://server.abrunacci.dev | head -1   # "HTTP/2 404" with a valid certificate
 ssh root@server.abrunacci.dev                      # must be refused
 ```
