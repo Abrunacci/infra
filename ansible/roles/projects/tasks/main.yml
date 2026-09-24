@@ -13,11 +13,18 @@
   loop_control:
     label: "{{ item.name }}"
 
+# Only a missing registry (a new server) is expected. Any other read error
+# stops the play: skipping the database check silently would be worse.
+- name: Look for the registry the server already has
+  ansible.builtin.stat:
+    path: "{{ projects_server_registry }}"
+  register: projects_previous_stat
+
 - name: Read the registry the server already has
   ansible.builtin.slurp:
     src: "{{ projects_server_registry }}"
   register: projects_previous_raw
-  failed_when: false
+  when: projects_previous_stat.stat.exists
 
 # The playbook never drops a database: a project that has one keeps it.
 - name: Refuse turning a database off
@@ -34,7 +41,7 @@
   vars:
     projects_previous: >-
       {{ (projects_previous_raw.content | b64decode | from_json).projects
-         if projects_previous_raw.content is defined else [] }}
+         if projects_previous_stat.stat.exists else [] }}
     projects_current_databases: "{{ projects_registry.projects | items2dict(key_name='name', value_name='database') }}"
 
 - name: Write the registry for the server
