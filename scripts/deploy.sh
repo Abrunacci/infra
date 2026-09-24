@@ -99,24 +99,30 @@ releases="$site/releases"
   || fail "the site's directories are missing (run the playbook)"
 
 # One deploy or rollback per project at a time (site-rollback takes the same
-# lock). The lock is the site's own directory, which only root owns.
-exec 9<"$site"
+# lock). The lock file lives in a directory only root can enter, so no other
+# user can take it and block deploys; children do not inherit it (9>&-).
+install -d -m 0700 -o root -g root /run/site-deploy
+exec 9>"/run/site-deploy/$project.lock"
 flock -n 9 || fail "another deploy or rollback of $project is running"
 
 release="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}"
 
 # Leftovers of an interrupted deploy, removed as the sites user.
-runuser -u "$SITES_USER" -- find "$releases" -mindepth 1 -maxdepth 1 -name '.incoming-*' -exec rm -rf -- {} + </dev/null
+runuser -u "$SITES_USER" -- find "$releases" -mindepth 1 -maxdepth 1 -name '.incoming-*' -exec rm -rf -- {} + </dev/null 9>&-
 
 # Checked and extracted as the sites user, which reads stdin itself and stops
 # one byte past the limit. The timeout covers the whole upload: a client that
 # stalls is cut off, and the lock is released.
 rc=0
 out="$(timeout --kill-after=5 "$UPLOAD_TIMEOUT" runuser -u "$SITES_USER" -- python3 -I "$EXTRACT" \
-  "$releases" "$release" "$MAX_COMPRESSED" "$MAX_EXTRACTED" "$MAX_FILES" "$MAX_DEPTH" 2>&1)" || rc=$?
+  "$releases" "$release" "$MAX_COMPRESSED" "$MAX_EXTRACTED" "$MAX_FILES" "$MAX_DEPTH" 2>&1 9>&-)" || rc=$?
 if [[ $rc -ne 0 ]]; then
   # Leftovers of a killed extractor go with the next deploy's cleanup.
-  [[ $rc -eq 124 || $rc -eq 137 ]] && fail "rejected: the upload took longer than ${UPLOAD_TIMEOUT}s"
+  case $rc in
+    124) fail "rejected: the upload took longer than ${UPLOAD_TIMEOUT}s" ;;
+    137) fail "rejected: the upload took longer than ${UPLOAD_TIMEOUT}s, or the extractor was killed" ;;
+    152) fail "rejected: the archive needed more than 60 s of CPU to check" ;;
+  esac
   [[ -n "$out" ]] || out="rejected: the extractor stopped (exit $rc)"
   fail "$(tail -n 1 <<<"$out" | tr -cd '[:print:]' | cut -c1-200)"
 fi
@@ -139,7 +145,7 @@ mapfile -t all < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\
 removed=0
 for old in "${all[@]:$KEEP}"; do
   [[ "releases/$old" == "$current_target" ]] && continue
-  runuser -u "$SITES_USER" -- rm -rf -- "$releases/$old" </dev/null && removed=$((removed + 1))
+  runuser -u "$SITES_USER" -- rm -rf -- "$releases/$old" </dev/null 9>&- && removed=$((removed + 1))
 done
 size="$size removed=$removed"
 

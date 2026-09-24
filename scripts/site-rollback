@@ -59,8 +59,10 @@ if [[ "${2:-}" == --list ]]; then
   exit 0
 fi
 
-# Same lock as deploy.sh (the site's directory): a rollback never races a deploy.
-exec 9<"$site"
+# Same lock as deploy.sh, in a directory only root can enter: a rollback
+# never races a deploy.
+install -d -m 0700 -o root -g root /run/site-deploy
+exec 9>"/run/site-deploy/$project.lock"
 flock -n 9 || die "a deploy or rollback of $project is running; try again"
 
 if [[ "${2:-}" == placeholder ]]; then
