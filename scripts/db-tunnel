@@ -66,8 +66,10 @@ port_listening() {
 
 # The port is unprivileged, so any local process could take it. The bridge
 # runs as a uid used by nothing else; only a listener with that uid is ours.
+# Only 127.0.0.1 counts: it is the one address sshd forwards to (PermitOpen).
+# Before opening, port_listening stays strict and refuses any listener at all.
 listener_is_bridge() {
-  [[ "$(ss -Hltne "sport = :$DB_TUNNEL_PORT" | grep -o 'uid:[0-9]*' | sort -u)" == "uid:$DB_TUNNEL_UID" ]]
+  [[ "$(ss -Hltne "src 127.0.0.1 and sport = :$DB_TUNNEL_PORT" | grep -o 'uid:[0-9]*' | sort -u)" == "uid:$DB_TUNNEL_UID" ]]
 }
 
 # One open or close at a time: a second one would stop the first one's bridge.
