@@ -1,0 +1,14 @@
+{#- Managed by Ansible (roles/projects), from projects.yml. -#}
+{%- set entries = [] -%}
+{%- for p in projects_registry.projects -%}
+{%-   set _ = entries.append({
+        'name': p.name,
+        'subdomain': p.subdomain,
+        'title': p.title | default(p.name),
+        'repo': p.repo | default(none),
+        'site': p.site,
+        'database': p.database,
+        'database_name': (p.name | replace('-', '_')) if p.database else none,
+      }) -%}
+{%- endfor -%}
+{{ {'projects': entries} | to_nice_json(sort_keys=true, ensure_ascii=false) }}
