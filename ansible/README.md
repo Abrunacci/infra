@@ -12,7 +12,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `projects` | Checks `projects.yml` before any other change, and writes the server's registry of projects (`/etc/infra/projects.json`). Refuses what is not built yet (backends) and never turns a database off. Sites, then backends and databases, are added in later PRs |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 
-The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one.
+The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose). `--tags projects` on its own needs a server that `base` has already set up.
 
 ## Design notes
 
