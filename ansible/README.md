@@ -11,6 +11,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `postgres` | PostgreSQL 16 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`) and serves each static site (see below). Refuses what is not built yet (backends) and never turns a database off. Backends and databases are added in a later PR |
+| `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` and `site-rollback`. See "Deploying a project" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose). `--tags projects` on its own needs a server that `base` has already set up.
 
@@ -30,6 +31,14 @@ The roles run in that order: each one depends on the previous ones, and `project
 - **Secrets are generated on the server.** The PostgreSQL superuser password is created once with `openssl rand` in `/etc/infra/secrets/postgres.password` (mode 0400, owned by the container's `postgres` user). It is never sent to the machine running Ansible, and running the playbook again does not replace it.
 - **ICMP stays allowed.** ufw's default `before.rules` and `before6.rules` accept ICMP and the ICMPv6 messages IPv6 needs, and the `hardening` role leaves them untouched.
 - **Static sites.** A project with `site: true` is served by Caddy from `/srv/sites/<name>/current`, a symlink to one version in `releases/`. Until the first deploy it points at `placeholder/`, a page with the project's `title` and a link to its `repo` (both escaped). The placeholder lives outside `releases/`: root never writes inside the directory deploys own. Only a missing `current` is created: once a deploy has moved it, the playbook leaves it alone. Each site's Caddy file is validated with the rest of the config before it is written. A project that stops having a site stops being served, but its files stay until removed by hand. Paths that are not files get `index.html` (single-page apps), `/assets/*` is cached for a year (Vite names those files by content hash), and everything else is revalidated on each visit; no other site may frame these pages.
+- **Deploys.** CI deploys a static site by piping a gzipped tar of it to `ssh deploy@server.abrunacci.dev deploy <sha> <run id>`.
+  - **The key fixes the project.** Each project's key (its `deploy_key` in `projects.yml`) is written to `~deploy/.ssh/authorized_keys` with `restrict` and a forced command that runs `deploy.sh` for that project only. The client never chooses the project.
+  - **Access is narrow.** The deploy user has no interactive session and no forwarding, and its one sudo rule is `deploy.sh`. It cannot change its own keys: root owns its home.
+  - **Checks before publishing.** `deploy.sh` checks the project against `/etc/infra/projects.json` and accepts only `deploy <40-character sha> [<run id>]`. The archive is limited to 25 MB compressed, and 100 MB, 5,000 entries and 20 levels once extracted. It may hold only regular files and directories, with no hidden ones except `.well-known/` at the root, and `index.html` at the root.
+  - **Unprivileged extraction.** The release is extracted as the `sites` user into `releases/<UTC time>-<short sha>/` (files 0644, directories 0755). Only then does `current` switch to it, atomically. If anything fails, what was published stays published.
+  - **Retention.** The last 5 releases are kept, plus the published one.
+  - **Journal.** Every attempt is logged (`journalctl -t deploy`): project, release, sha, run id, key fingerprint, client address, size and result.
+  - **Rollbacks** are run on the server by the admin (`sudo site-rollback`), never by CI keys; the procedure is in private operations documentation.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
 - **Automatic reboots.** When a security update needs a reboot (kernel, libc), unattended-upgrades reboots at 07:30 UTC. Docker stops PostgreSQL cleanly first (60 s grace period) and every container comes back through its restart policy. Set `base_auto_reboot: false` to turn it off.
@@ -97,6 +106,109 @@ Host server.abrunacci.dev
     IdentityFile ~/.ssh/id_ed25519
     IdentitiesOnly yes
 ```
+
+## Deploying a project
+
+A project can be deployed once it has `site: true` and a `deploy_key` in `projects.yml`, and the playbook has run. Its repository needs an environment, two secrets and a workflow step. The steps below use cuanto-cuesta.
+
+### 1. The deploy key
+
+Generate it on your machine, one per project. It never goes anywhere except the project's GitHub environment:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C "cuanto-cuesta-deploy" -f ~/cuanto-cuesta-deploy
+cat ~/cuanto-cuesta-deploy.pub
+```
+
+The key has no passphrase because CI uses it unattended. It is restricted instead: it can only run `deploy.sh` for its project. Put the public key (the whole `.pub` line) in the project's `deploy_key` in `projects.yml`. Merge that, then apply it: `./play site.yml -K --diff --tags projects,deploy`.
+
+### 2. The server's host key, for known_hosts
+
+```sh
+ssh-keyscan -t ed25519 server.abrunacci.dev 2>/dev/null > ~/cuanto-cuesta-known_hosts
+ssh-keygen -lf ~/cuanto-cuesta-known_hosts
+```
+
+Compare the fingerprint with the one the server reports, from the DigitalOcean Droplet Console (log in as `ops`):
+
+```sh
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+Use the file only if they match. With it, the workflow checks the server's identity (`StrictHostKeyChecking=yes`) instead of trusting whatever answers.
+
+### 3. The GitHub environment
+
+In the project's repository, go to **Settings → Environments → New environment**, and name it `production`. Then:
+
+- **Deployment protection rules:** tick **Required reviewers** and add yourself. Leave **Prevent self-review** unticked, or you could never approve your own deploys. Every deploy then waits for your approval.
+- **Deployment branches and tags:** choose **Selected branches and tags**, then **Add deployment branch or tag rule**, and enter `main`. No other branch can use the environment or its secrets.
+- **Environment secrets:**
+  - `DEPLOY_SSH_KEY`: the whole private key file (`~/cuanto-cuesta-deploy`), including its `BEGIN` and `END` lines.
+  - `DEPLOY_KNOWN_HOSTS`: the line in `~/cuanto-cuesta-known_hosts`.
+
+  They are environment secrets, not repository secrets, so only jobs that run in `production` see them.
+
+The same secrets can be set from the command line:
+
+```sh
+gh secret set DEPLOY_SSH_KEY --env production --repo Abrunacci/cuanto-cuesta < ~/cuanto-cuesta-deploy
+gh secret set DEPLOY_KNOWN_HOSTS --env production --repo Abrunacci/cuanto-cuesta < ~/cuanto-cuesta-known_hosts
+```
+
+Then delete the private key from your machine; GitHub holds the only copy, and a lost key is replaced with a new one:
+
+```sh
+shred -u ~/cuanto-cuesta-deploy
+```
+
+Required reviewers on environments are available on public repositories on any plan. On private ones they need a paid plan (GitHub Pro, Team or Enterprise).
+
+### 4. Protecting main
+
+Go to **Settings → Rules → Rulesets → New ruleset → New branch ruleset**:
+
+- **Name:** `main`. **Enforcement status:** Active. **Bypass list:** empty, so the rules apply to you too.
+- **Target branches:** **Add target → Include default branch**.
+- **Rules:**
+  - Tick **Restrict deletions** and **Block force pushes**.
+  - Tick **Require a pull request before merging**, with **Required approvals** at 0 (with 1, you could not merge your own pull requests).
+  - Tick **Require status checks to pass**, and add the CI jobs that must pass (their names from the Actions tab). Also tick **Require branches to be up to date before merging**.
+
+With this, nothing reaches `main` without a pull request and green CI, and only `main` can deploy.
+
+### 5. The workflow step
+
+The workflow lives in the project's repository. Its deploy job runs only for pushes to `main`, in the `production` environment, after the checks and the build:
+
+```yaml
+  deploy:
+    needs: [build]                 # the job that builds and checks the site
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      # ... checkout and build, or download the build's artifact, into frontend/dist
+      - name: Deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          tar -C frontend/dist -cz . \
+            | ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                deploy@server.abrunacci.dev deploy "$GITHUB_SHA" "$GITHUB_RUN_ID"
+```
+
+The command is always `deploy <commit sha> <run id>`, and the archive's root is the site's root. The deploy prints `Deployed <project> release <id>`, or the reason it was rejected, and fails the job if it was.
 
 ## Rotating the admin SSH key
 
