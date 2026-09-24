@@ -5,3 +5,6 @@ db_tunnel_image: alpine/socat@sha256:24220ef2c80a2a421ea08e4624488e985330c421b6a
 # can be asked for. It always closes itself when the time is up.
 db_tunnel_default_hours: 1
 db_tunnel_max_hours: 8
+# The bridge runs as this uid, which nothing else uses: db-tunnel checks that
+# the listener on the port has it (the port is unprivileged).
+db_tunnel_uid: 10002
