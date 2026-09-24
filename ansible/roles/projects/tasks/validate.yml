@@ -16,12 +16,13 @@
 - name: Check the registry as a whole
   ansible.builtin.assert:
     that:
+      - projects_registry.keys() | list == ['projects']
       - projects_registry.projects is sequence
       - projects_registry.projects is not string
       - projects_registry.projects is not mapping
       - projects_names | unique | length == projects_names | length
       - projects_subdomains | unique | length == projects_subdomains | length
-    fail_msg: "projects.yml: projects must be a list, with unique names and subdomains."
+    fail_msg: "projects.yml: it must hold only a projects list, with unique names and subdomains."
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
