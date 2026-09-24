@@ -19,3 +19,7 @@ projects_sites_dir: /srv/sites
 projects_sites_uid: 10003
 # Caddy's per-project site files (imported by its Caddyfile).
 projects_caddy_sites_dir: "{{ caddy_dir }}/conf/sites"
+
+# A project's CI key: ed25519, one line, an optional simple comment. Same
+# pattern as projects.schema.json.
+projects_deploy_key: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48}( [A-Za-z0-9._@-]{1,64})?\Z'

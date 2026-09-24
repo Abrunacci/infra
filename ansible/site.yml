@@ -24,3 +24,5 @@
       tags: [db_tunnel]
     - role: projects
       tags: [projects]
+    - role: deploy
+      tags: [deploy]

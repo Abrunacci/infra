@@ -11,6 +11,9 @@
 #              private repositories)
 #   site       true: Caddy serves /srv/sites/<name>/current
 #   database   true: a PostgreSQL database and user; needs a backend
+#   deploy_key public ed25519 key of the project's CI (optional: without it the
+#              project cannot be deployed). It can only deploy this project.
+#              How to create it: ansible/README.md, "Deploying a project".
 #   backend    optional container, not supported by the playbook yet:
 #                image   repository without tag (the digest lives on the server)
 #                port    port it listens on
@@ -23,3 +26,4 @@ projects:
     repo: https://github.com/Abrunacci/cuanto-cuesta
     site: true
     database: false
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICpY4pPwbax2IDkkw0zvPWsFXQ6DAxkLUBbxWsEJ6939 cuanto-cuesta-deploy

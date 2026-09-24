@@ -49,6 +49,15 @@ repos:
       - id: check-metaschema
         files: ^projects\.schema\.json$
 
+  # Python scripts installed on the server (scripts/extract-release).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: a56c0b927e6465d37cae3e97d35d4d18ab2b96cd  # frozen: v0.16.9
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+        args: [--check]
+        types_or: [python]
+
   - repo: https://github.com/ansible/ansible-lint
     rev: e7f397ad6dfa20d274afa17cd7bbedd84ed136f5  # frozen: v26.9.0
     hooks:

@@ -1,8 +1,9 @@
 ---
-# Users allowed to log in over SSH. The deploy user for CI joins this list in
-# the deploy workflow PR.
+# Users allowed to log in over SSH: the admin, and the deploy user, whose keys
+# can only run deploy.sh (roles/deploy).
 hardening_ssh_allow_users:
   - "{{ admin_user }}"
+  - "{{ deploy_user }}"
 
 # The one exception to "no forwarding": admin_user may open local forwards
 # (ssh -L), and only to these destinations. Everyone else keeps none.

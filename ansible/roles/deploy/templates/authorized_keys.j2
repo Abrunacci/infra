@@ -1,0 +1,5 @@
+# Managed by Ansible (roles/deploy), from projects.yml. One line per project
+# with a deploy_key; each key can only deploy its own project.
+{% for p in projects_registry.projects if p.deploy_key is defined %}
+restrict,command="sudo -n /usr/local/sbin/deploy.sh {{ p.name }} \"$SSH_CLIENT\" \"$SSH_ORIGINAL_COMMAND\"" {{ p.deploy_key }}
+{% endfor %}

@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Validates and extracts one release of a static site.
+
+    extract-release RELEASES_DIR RELEASE_ID MAX_COMPRESSED MAX_EXTRACTED MAX_FILES MAX_DEPTH < release.tar.gz
+
+Run by deploy.sh as the unprivileged sites user, which owns RELEASES_DIR.
+The gzipped tar comes on stdin. Nothing is written until the whole archive
+has been checked:
+
+- only regular files and directories (no links, devices, FIFOs or sparse files)
+- relative paths without "..", empty parts or control characters
+- no hidden files or directories, except .well-known/ at the root
+- at most MAX_DEPTH path parts, MAX_FILES entries and MAX_EXTRACTED bytes
+- index.html at the root
+
+The release is then written to RELEASES_DIR/.incoming-RELEASE_ID, with every
+file created new (never following a link) and readable by everyone (files
+0644, directories 0755), and renamed to RELEASES_DIR/RELEASE_ID at the end.
+Any failure removes what was written and exits 1 with the reason on stderr.
+Installed by Ansible (roles/deploy) as /usr/local/lib/infra/extract-release.
+"""
+
+import io
+import os
+import resource
+import shutil
+import sys
+import tarfile
+
+
+class Rejected(Exception):
+    pass
+
+
+def normalize(name):
+    """Returns the member's path parts, or [] for the archive's root entry."""
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        raise Rejected(f"control character in a path: {name!r}")
+    if name.startswith("/"):
+        raise Rejected(f"absolute path: {name!r}")
+    parts = name.split("/")
+    while parts and parts[0] == ".":
+        parts = parts[1:]
+    while parts and parts[-1] == "":  # directories may end with "/"
+        parts = parts[:-1]
+    for part in parts:
+        if part in ("", ".", ".."):
+            raise Rejected(f"invalid path: {name!r}")
+    for i, part in enumerate(parts):
+        if part.startswith(".") and not (i == 0 and part == ".well-known"):
+            raise Rejected(f"hidden file or directory: {name!r}")
+    return parts
+
+
+def check(data, max_extracted, max_files, max_depth):
+    """First pass: validates every member. Returns (dirs, files) as path tuples."""
+    dirs, files = set(), {}
+    total = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for count, member in enumerate(tar, start=1):
+            if count > max_files:
+                raise Rejected(f"more than {max_files} entries")
+            parts = normalize(member.name)
+            if not parts:
+                if not member.isdir():
+                    raise Rejected("the archive root is not a directory")
+                continue
+            if len(parts) > max_depth:
+                raise Rejected(f"deeper than {max_depth} levels: {member.name!r}")
+            path = tuple(parts)
+            if path in dirs or path in files:
+                raise Rejected(f"duplicate path: {member.name!r}")
+            if member.isdir():
+                dirs.add(path)
+            elif member.isreg() and not member.issparse():
+                total += member.size
+                if total > max_extracted:
+                    raise Rejected(f"more than {max_extracted} bytes once extracted")
+                files[path] = member.size
+            else:
+                raise Rejected(f"not a regular file or directory: {member.name!r}")
+    # A file cannot also be a parent directory of another path.
+    for path in list(dirs) + list(files):
+        for i in range(1, len(path)):
+            if path[:i] in files:
+                raise Rejected(f"a file is used as a directory: {'/'.join(path[:i])!r}")
+    if ("index.html",) not in files:
+        raise Rejected("no index.html at the root")
+    return dirs, files
+
+
+def extract(data, staging, dirs, files):
+    """Second pass: writes the checked members into staging."""
+    os.mkdir(staging, 0o755)
+    for path in sorted(dirs, key=len):
+        os.makedirs(os.path.join(staging, *path), mode=0o755, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar:
+            parts = normalize(member.name)
+            if not parts or not member.isreg():
+                continue
+            target = os.path.join(staging, *parts)
+            os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            written = 0
+            with os.fdopen(fd, "wb") as out, tar.extractfile(member) as src:
+                while chunk := src.read(1 << 16):
+                    written += len(chunk)
+                    out.write(chunk)
+            if written != files[tuple(parts)]:
+                raise Rejected(f"size mismatch: {member.name!r}")
+    # Explicit modes, whatever the umask: readable by Caddy, nothing executable.
+    for root, subdirs, names in os.walk(staging):
+        os.chmod(root, 0o755)
+        for name in names:
+            os.chmod(os.path.join(root, name), 0o644)
+
+
+def main():
+    if len(sys.argv) != 7:
+        print(
+            "usage: extract-release RELEASES_DIR RELEASE_ID MAX_COMPRESSED MAX_EXTRACTED MAX_FILES MAX_DEPTH",
+            file=sys.stderr,
+        )
+        return 2
+    releases, release_id = sys.argv[1], sys.argv[2]
+    max_compressed, max_extracted, max_files, max_depth = (int(v) for v in sys.argv[3:7])
+    os.umask(0o022)
+    # tarfile reads some headers (long names, PAX) whole into memory before
+    # any member is seen, so a gzip bomb could ask for gigabytes. Hard caps on
+    # memory and CPU make it fail here instead of pushing the server into swap.
+    resource.setrlimit(resource.RLIMIT_AS, (512 << 20, 512 << 20))
+    resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+
+    data = sys.stdin.buffer.read(max_compressed + 1)
+    if len(data) > max_compressed:
+        print(f"rejected: the archive is larger than {max_compressed} bytes", file=sys.stderr)
+        return 1
+    if not data:
+        print("rejected: empty input", file=sys.stderr)
+        return 1
+
+    staging = os.path.join(releases, ".incoming-" + release_id)
+    final = os.path.join(releases, release_id)
+    try:
+        dirs, files = check(data, max_extracted, max_files, max_depth)
+        if os.path.lexists(final):
+            raise Rejected(f"release {release_id} already exists")
+        extract(data, staging, dirs, files)
+        os.rename(staging, final)
+    except Rejected as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"rejected: {e}", file=sys.stderr)
+        return 1
+    except MemoryError:
+        shutil.rmtree(staging, ignore_errors=True)
+        print("rejected: the archive needs too much memory to read", file=sys.stderr)
+        return 1
+    except (tarfile.TarError, EOFError, OSError, ValueError) as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"rejected: not a valid gzipped tar or could not be written ({type(e).__name__}: {e})", file=sys.stderr)
+        return 1
+    print(f"files={len(files)} bytes={sum(files.values())}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,76 @@
+---
+# A real shell (/bin/sh), because sshd runs a key's forced command through the
+# user's shell; every key has one, so there is never an interactive session.
+# No password: key-only.
+- name: Create the deploy group
+  ansible.builtin.group:
+    name: "{{ deploy_user }}"
+    gid: "{{ deploy_uid }}"
+    system: true
+
+- name: Create the deploy user
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    uid: "{{ deploy_uid }}"
+    group: "{{ deploy_user }}"
+    system: true
+    shell: /bin/sh
+    home: "{{ deploy_home }}"
+    create_home: false
+    password: "!"
+
+- name: Create the deploy user's home, owned by root
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ deploy_home }}"
+    - "{{ deploy_home }}/.ssh"
+
+# Exactly one line per project with a deploy key, each fixed to that project.
+# A key removed from projects.yml disappears from here on the next run.
+- name: Write the deploy keys
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "{{ deploy_home }}/.ssh/authorized_keys"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the directory for the release extractor
+  ansible.builtin.file:
+    path: /usr/local/lib/infra
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the deploy and rollback commands
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: deploy.sh, dest: /usr/local/sbin/deploy.sh, mode: "0755" }
+    - { src: site-rollback, dest: /usr/local/sbin/site-rollback, mode: "0755" }
+    # Run with python3 by deploy.sh, as the sites user; never executed directly.
+    - { src: extract-release, dest: /usr/local/lib/infra/extract-release, mode: "0644" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+# The deploy user's only sudo rule. deploy.sh checks everything it is given.
+- name: Let the deploy user run deploy.sh as root, and nothing else
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/60-deploy
+    content: |
+      # Managed by Ansible (roles/deploy).
+      {{ deploy_user }} ALL=(root) NOPASSWD: /usr/local/sbin/deploy.sh
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s

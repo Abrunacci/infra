@@ -43,7 +43,7 @@ DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) ar
 
 ## Development
 
-Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, ansible-lint (production profile), shellcheck and actionlint.
+Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, a JSON Schema check of `projects.yml`, ansible-lint (production profile), shellcheck, ruff (the Python scripts) and actionlint.
 
 Requirements: Python 3, Terraform 1.16, TFLint 0.64 and, to run the playbook, ansible-core 2.21. The other tools are installed by pre-commit itself.
 
