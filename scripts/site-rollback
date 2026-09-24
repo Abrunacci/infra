@@ -64,6 +64,9 @@ fi
 install -d -m 0700 -o root -g root /run/site-deploy
 exec 9>"/run/site-deploy/$project.lock"
 flock -n 9 || die "a deploy or rollback of $project is running; try again"
+# Read again under the lock: a deploy may have finished since --list's read.
+mapfile -t all < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -E "$RELEASE_RE" | sort -r)
+current="$(readlink "$site/current" || true)"
 
 if [[ "${2:-}" == placeholder ]]; then
   [[ -f "$site/placeholder/index.html" && ! -L "$site/placeholder" ]] || die "$site/placeholder is missing (run the playbook)"
