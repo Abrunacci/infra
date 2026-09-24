@@ -7,11 +7,19 @@
     fail_msg: db_tunnel_default_hours must be between 1 and db_tunnel_max_hours.
     quiet: true
 
-# Owns nothing and cannot log in: it only gives the bridge a uid of its own.
+# Owns nothing and cannot log in: it only gives the bridge a uid and gid of
+# its own (the container runs as uid:gid).
+- name: Create the db-tunnel system group
+  ansible.builtin.group:
+    name: db-tunnel
+    gid: "{{ db_tunnel_uid }}"
+    system: true
+
 - name: Create the db-tunnel system user
   ansible.builtin.user:
     name: db-tunnel
     uid: "{{ db_tunnel_uid }}"
+    group: db-tunnel
     system: true
     shell: /usr/sbin/nologin
     create_home: false
