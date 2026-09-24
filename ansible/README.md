@@ -10,7 +10,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 16 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
-| `projects` | Checks `projects.yml` before any other change, and writes the server's registry of projects (`/etc/infra/projects.json`). Refuses what is not built yet (backends) and never turns a database off. Sites, then backends and databases, are added in later PRs |
+| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`) and serves each static site (see below). Refuses what is not built yet (backends) and never turns a database off. Backends and databases are added in a later PR |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose). `--tags projects` on its own needs a server that `base` has already set up.
 
@@ -29,6 +29,7 @@ The roles run in that order: each one depends on the previous ones, and `project
 - **`db` is an internal network with a fixed subnet.** Containers on it have no route to the internet through it, and PostgreSQL always has the same address on it (`postgres_ipv4_address` in `group_vars`). Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL).
 - **Secrets are generated on the server.** The PostgreSQL superuser password is created once with `openssl rand` in `/etc/infra/secrets/postgres.password` (mode 0400, owned by the container's `postgres` user). It is never sent to the machine running Ansible, and running the playbook again does not replace it.
 - **ICMP stays allowed.** ufw's default `before.rules` and `before6.rules` accept ICMP and the ICMPv6 messages IPv6 needs, and the `hardening` role leaves them untouched.
+- **Static sites.** A project with `site: true` is served by Caddy from `/srv/sites/<name>/current`, a symlink to one version in `releases/`. Until the first deploy it points at a placeholder page, with the project's `title` and a link to its `repo` (both escaped). Only a missing `current` is created: once a deploy has moved it, the playbook leaves it alone. Each site's Caddy file is validated with the rest of the config before it is written. A project that stops having a site stops being served, but its files stay until removed by hand. Paths that are not files get `index.html` (single-page apps), `/assets/*` is cached for a year (Vite names those files by content hash), and everything else is revalidated on each visit.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
 - **Automatic reboots.** When a security update needs a reboot (kernel, libc), unattended-upgrades reboots at 07:30 UTC. Docker stops PostgreSQL cleanly first (60 s grace period) and every container comes back through its restart policy. Set `base_auto_reboot: false` to turn it off.
@@ -52,13 +53,25 @@ cp inventory.example.yml inventory.yml       # git-ignored
 set -a; . ../terraform/.env; set +a
 
 ansible all -b -K -m ansible.builtin.ping    # connection and sudo work
-ansible-playbook site.yml -K --diff
-ansible-playbook site.yml -K --diff          # second run: expect changed=0
+./play site.yml -K --diff
+./play site.yml -K --diff                    # second run: expect only the recap, changed=0
 ```
+
+`./play` is `ansible-playbook` with the run logged to a file of its own (see "Output and logs").
 
 Every run asks for the admin user's sudo password (`-K`; `ansible.cfg` also sets `become_ask_pass`, so it is asked even without the flag). The first run on a new Droplet needs that password to be set on the server first; the playbook stops before changing anything if it is not.
 
 `--check` only works fully once Docker is installed: on the first run, the Docker, Caddy and PostgreSQL tasks depend on packages that check mode does not install. `ansible-playbook site.yml -K --check --diff --tags base,hardening` previews the sudo, SSH and firewall changes, which are the ones that could lock you out. On a server that still has NOPASSWD, check mode cannot test the sudo password yet, and says so by skipping that check. Check mode also cannot show that a container will be recreated because a template it depends on changes: the template is not written, so Compose sees no difference.
+
+### Output and logs
+
+`ansible.cfg` keeps the output short: tasks that were `ok` or `skipped` are not shown. A run shows only what changed (with its diff under `--diff`), what failed, and the recap. An idempotence run prints nothing but the recap. Results are printed as YAML.
+
+Every run is also logged outside the repo, in `~/notas/infra/corridas/`:
+- `./play` writes each run to its own file, named after its UTC start time (`20260924T201500Z-ansible-playbook.log`). It creates the directory (mode 0700) if needed.
+- `ansible-playbook` run directly appends to `ansible.log` in the same directory. If the directory does not exist, Ansible only warns and logs nothing.
+- The log holds what the screen shows. Tasks with `no_log` are left out; the only one is the task that generates the PostgreSQL superuser password, whose value never appears in any argument or output anyway. The sudo password (`-K`) is never logged.
+- `*.log` and `corridas/` are git-ignored, in case a log is ever pointed at the repo.
 
 ### The server's host key
 
