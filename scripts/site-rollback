@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Points a static site back at an earlier release. Run on the server by the
+# admin; CI keys cannot run it.
+#
+#   sudo site-rollback PROJECT --list      releases, newest first; * marks the published one
+#   sudo site-rollback PROJECT             back to the release before the published one
+#   sudo site-rollback PROJECT RELEASE     to that release
+#   sudo site-rollback PROJECT placeholder back to the placeholder page (unpublish,
+#                                          keeping the releases)
+#
+# Only releases still on disk can be published (deploy.sh keeps the last 5,
+# plus the published one). Switching is atomic, like a deploy, and logged to
+# the journal (tag: site-rollback). The next deploy publishes its own release
+# as usual.
+# Installed by Ansible (roles/deploy) as /usr/local/sbin/site-rollback.
+set -euo pipefail
+
+readonly REGISTRY=/etc/infra/projects.json
+readonly SITES=/srv/sites
+readonly RELEASE_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$'
+
+die() {
+  echo "site-rollback: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: sudo site-rollback PROJECT [--list | RELEASE | placeholder]" >&2
+  exit 2
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || usage
+[[ "$EUID" -eq 0 ]] || die "run it with sudo"
+project="$1"
+[[ "$project" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "invalid project name"
+
+has_site="$(python3 -I - "$REGISTRY" "$project" <<'PY'
+import json, sys
+registry, name = sys.argv[1], sys.argv[2]
+print(next(("yes" if p.get("site") else "no" for p in json.load(open(registry))["projects"] if p["name"] == name), "unknown"))
+PY
+)" || die "cannot read the project registry"
+[[ "$has_site" == yes ]] || die "$project is not a project with a static site"
+
+site="$SITES/$project"
+releases="$site/releases"
+[[ -d "$releases" && ! -L "$releases" ]] || die "$releases is missing"
+
+mapfile -t all < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -E "$RELEASE_RE" | sort -r)
+current="$(readlink "$site/current" || true)"
+
+if [[ "${2:-}" == --list ]]; then
+  [[ "$current" == placeholder ]] && echo "* placeholder"
+  for r in "${all[@]}"; do
+    if [[ "releases/$r" == "$current" ]]; then echo "* $r"; else echo "  $r"; fi
+  done
+  [[ ${#all[@]} -gt 0 ]] || echo "(no releases)"
+  exit 0
+fi
+
+# Same lock as deploy.sh: a rollback never races a deploy.
+exec 9>"/run/lock/site-$project.lock"
+flock -n 9 || die "a deploy or rollback of $project is running; try again"
+
+if [[ "${2:-}" == placeholder ]]; then
+  [[ -f "$site/placeholder/index.html" && ! -L "$site/placeholder" ]] || die "$site/placeholder is missing (run the playbook)"
+  [[ "$current" != placeholder ]] || die "the placeholder is already published"
+  ln -s placeholder "$site/.current-$$"
+  mv -T "$site/.current-$$" "$site/current"
+  logger -t site-rollback -- "project=$project from=${current#releases/} to=placeholder by=${SUDO_USER:-root}"
+  echo "Published the $project placeholder (was ${current#releases/})"
+  exit 0
+fi
+
+if [[ $# -eq 2 ]]; then
+  target="$2"
+  [[ "$target" =~ $RELEASE_RE ]] || die "invalid release name: $target"
+  [[ -d "$releases/$target" && ! -L "$releases/$target" ]] || die "no release $target (see --list)"
+else
+  [[ "$current" == releases/* ]] || die "the placeholder is published: name the release to publish (see --list)"
+  target=""
+  for i in "${!all[@]}"; do
+    if [[ "releases/${all[$i]}" == "$current" ]]; then
+      target="${all[$((i + 1))]:-}"
+      break
+    fi
+  done
+  [[ -n "$target" ]] || die "there is no release older than ${current#releases/} (see --list)"
+fi
+[[ "releases/$target" != "$current" ]] || die "$target is already published"
+[[ -f "$releases/$target/index.html" && ! -L "$releases/$target/index.html" ]] || die "$target has no index.html"
+
+ln -s "releases/$target" "$site/.current-$$"
+mv -T "$site/.current-$$" "$site/current"
+logger -t site-rollback -- "project=$project from=${current#releases/} to=$target by=${SUDO_USER:-root}"
+echo "Published $project release $target (was ${current#releases/})"
