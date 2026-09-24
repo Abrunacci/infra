@@ -17,6 +17,12 @@ resource "cloudflare_dns_record" "a" {
     # projects.yml is hand-edited: fail the plan instead of silently merging or
     # dropping records.
     precondition {
+      # YAML turns unquoted true, yes or 0123 into a bool or a number, which
+      # Terraform would then silently convert into "true" or "123".
+      condition     = alltrue([for s in local.subdomains : startswith(jsonencode(s), "\"")])
+      error_message = "projects.yml: every subdomain must be a string (quote values such as \"yes\" or \"0123\")."
+    }
+    precondition {
       condition     = alltrue([for s in local.subdomains : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", s))])
       error_message = "projects.yml: every subdomain must be a lowercase DNS label (a-z, 0-9, hyphens)."
     }
