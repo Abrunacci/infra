@@ -18,6 +18,18 @@
     validate: /usr/sbin/sshd -t -f %s
   notify: Reload ssh
 
+# A Match block in a drop-in ends with its file, so it cannot spill onto the
+# options that follow in sshd_config.
+- name: Allow the admin user's local forwards to the PostgreSQL bridge only
+  ansible.builtin.template:
+    src: 10-forwarding.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-forwarding.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload ssh
+
 # The allow rules go in before ufw is enabled, so the SSH session running this
 # playbook is never cut off.
 - name: Allow inbound SSH and HTTP(S)
