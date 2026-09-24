@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/hardening). The deploy user only ever runs the
+# forced command of its key (roles/deploy): no forwarding of any kind, no
+# terminal, no ~/.ssh/rc.
+Match User {{ deploy_user }}
+    DisableForwarding yes
+    PermitTTY no
+    PermitUserRC no
