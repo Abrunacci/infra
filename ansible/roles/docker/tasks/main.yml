@@ -94,6 +94,7 @@
   community.docker.docker_network:
     name: "{{ item.name }}"
     internal: "{{ item.internal }}"
+    ipam_config: "{{ [{'subnet': item.subnet}] if item.subnet is defined else omit }}"
     state: present
   loop: "{{ docker_networks }}"
   loop_control:
