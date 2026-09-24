@@ -1,0 +1,58 @@
+---
+- name: Check the bridge durations
+  ansible.builtin.assert:
+    that:
+      - db_tunnel_default_hours | int >= 1
+      - db_tunnel_default_hours | int <= db_tunnel_max_hours | int
+    fail_msg: db_tunnel_default_hours must be between 1 and db_tunnel_max_hours.
+    quiet: true
+
+# Owns nothing and cannot log in: it only gives the bridge a uid and gid of
+# its own (the container runs as uid:gid).
+- name: Create the db-tunnel system group
+  ansible.builtin.group:
+    name: db-tunnel
+    gid: "{{ db_tunnel_uid }}"
+    system: true
+
+- name: Create the db-tunnel system user
+  ansible.builtin.user:
+    name: db-tunnel
+    uid: "{{ db_tunnel_uid }}"
+    group: db-tunnel
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+# Pulled here, so opening the bridge never downloads anything (--pull never).
+- name: Pull the bridge image
+  community.docker.docker_image_pull:
+    # The digest goes in name: the tag option does not accept one.
+    name: "{{ db_tunnel_image }}"
+    pull: not_present
+
+- name: Write the bridge configuration
+  ansible.builtin.template:
+    src: db-tunnel.conf.j2
+    dest: /etc/infra/db-tunnel.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# Server scripts live in scripts/ at the repo root, next to the ones later
+# PRs add (deploy, backup, restore), so they are linted and reviewed together.
+- name: Install the db-tunnel command
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/db-tunnel"
+    dest: /usr/local/sbin/db-tunnel
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Warn on every login while the bridge is open
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/db-tunnel-login.sh"
+    dest: /etc/profile.d/db-tunnel.sh
+    owner: root
+    group: root
+    mode: "0644"

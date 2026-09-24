@@ -9,5 +9,8 @@ MaxAuthTries 3
 LoginGraceTime 30
 X11Forwarding no
 AllowAgentForwarding no
+# Exception for admin_user: 10-forwarding.conf.
 AllowTcpForwarding no
+# Unix socket forwarding is separate from TCP forwarding and on by default.
+AllowStreamLocalForwarding no
 PermitTunnel no

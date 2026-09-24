@@ -4,6 +4,13 @@
 hardening_ssh_allow_users:
   - "{{ admin_user }}"
 
+# The one exception to "no forwarding": admin_user may open local forwards
+# (ssh -L), and only to these destinations. Everyone else keeps none.
+# db_tunnel_port is in group_vars because roles/db_tunnel uses it too.
+hardening_ssh_forward_user: "{{ admin_user }}"
+hardening_ssh_permit_open:
+  - "127.0.0.1:{{ db_tunnel_port }}"
+
 # Same inbound rules as the cloud firewall (terraform/firewall.tf), as a second
 # layer. ICMP and ICMPv6 are allowed by ufw's default before.rules and
 # before6.rules, which this role leaves untouched: IPv6 needs "Packet Too Big"

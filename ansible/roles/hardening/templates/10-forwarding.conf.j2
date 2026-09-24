@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/hardening).
+# Local forwards only (ssh -L), and only to the listed destinations: SOCKS
+# (ssh -D) is limited to them too. Remote forwards (ssh -R), and forwarding
+# for every other user, stay off.
+Match User {{ hardening_ssh_forward_user }}
+    AllowTcpForwarding local
+    PermitOpen {{ hardening_ssh_permit_open | join(' ') }}
