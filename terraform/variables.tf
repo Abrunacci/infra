@@ -78,7 +78,7 @@ variable "admin_ssh_public_key" {
 }
 
 variable "allow_zero_projects" {
-  description = "Set to true only to remove every project on purpose. With the default (false), a projects.yml with no projects fails the plan instead of deleting every project's DNS records."
+  description = "Set to true only to remove every project on purpose, with -var for that run (never in .env). With the default (false), a projects.yml with no projects fails the plan instead of deleting every project's DNS records."
   type        = bool
   default     = false
   nullable    = false

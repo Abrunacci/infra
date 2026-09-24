@@ -20,7 +20,7 @@ resource "cloudflare_dns_record" "a" {
       # An empty list is far more often a mistake (a bad merge, a stray
       # `projects: []`) than a decision, and it would delete every project's records.
       condition     = length(local.subdomains) > 0 || var.allow_zero_projects
-      error_message = "projects.yml has no projects. To remove every project on purpose, set allow_zero_projects = true."
+      error_message = "projects.yml has no projects. To remove every project on purpose, set it for that run only: terraform plan -var=allow_zero_projects=true (never in .env)."
     }
     precondition {
       # YAML turns unquoted true, yes or 0123 into a bool or a number, which
