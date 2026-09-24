@@ -30,9 +30,10 @@
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
     projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
     # The key itself (its base64 blob), whatever its comment says.
+    # Malformed keys are left to the per-project check below, which says why.
     projects_deploy_keys: >-
       {{ projects_registry.projects | selectattr('deploy_key', 'defined') | map(attribute='deploy_key')
-         | map('split') | map(attribute='1') | list }}
+         | select('string') | select('match', projects_deploy_key) | map('split') | map(attribute='1') | list }}
 
 - name: Check each project
   ansible.builtin.assert:
@@ -87,7 +88,6 @@
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
     projects_allowed_keys: [name, subdomain, title, repo, site, database, backend, deploy_key]
-    projects_deploy_key: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48}( [A-Za-z0-9._@-]{1,64})?\Z'
     # Caddy path matchers as one regex: "/api/*" covers anything under /api/,
     # "/health" only itself.
     projects_backend_paths: "{{ item.backend.paths | default([]) }}"
