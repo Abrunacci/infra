@@ -1,16 +1,4 @@
 ---
-# Static sites only for now: a deploy key on a project without a site would
-# have nothing to deploy until backends exist.
-- name: Check that every deploy key belongs to a project with a site
-  ansible.builtin.assert:
-    that:
-      - item.site
-    fail_msg: "projects.yml: {{ item.name }} has a deploy_key but no site; only static sites can be deployed yet."
-    quiet: true
-  loop: "{{ projects_registry.projects | selectattr('deploy_key', 'defined') | list }}"
-  loop_control:
-    label: "{{ item.name }}"
-
 # A real shell (/bin/sh), because sshd runs a key's forced command through the
 # user's shell; every key has one, so there is never an interactive session.
 # No password: key-only.

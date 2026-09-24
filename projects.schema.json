@@ -69,6 +69,11 @@
           "then": { "required": ["backend"] }
         },
         {
+          "description": "Only static sites can be deployed for now: a deploy key needs a site.",
+          "if": { "required": ["deploy_key"] },
+          "then": { "properties": { "site": { "const": true } } }
+        },
+        {
           "description": "Only a backend can use a database.",
           "if": { "properties": { "database": { "const": true } } },
           "then": { "required": ["backend"] }

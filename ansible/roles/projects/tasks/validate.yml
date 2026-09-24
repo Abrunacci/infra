@@ -29,9 +29,10 @@
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
     projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
+    # The key itself (its base64 blob), whatever its comment says.
     projects_deploy_keys: >-
       {{ projects_registry.projects | selectattr('deploy_key', 'defined') | map(attribute='deploy_key')
-         | map('split') | map('slice', 2) | map('first') | list }}
+         | map('split') | map(attribute='1') | list }}
 
 - name: Check each project
   ansible.builtin.assert:
@@ -66,6 +67,8 @@
       - >-
         item.deploy_key is not defined
         or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
+      # Only static sites can be deployed for now.
+      - item.deploy_key is not defined or item.site
       # At least one component; only a backend can use a database.
       - item.site or item.backend is defined
       - not item.database or item.backend is defined
