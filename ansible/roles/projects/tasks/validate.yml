@@ -22,11 +22,16 @@
       - projects_registry.projects is not mapping
       - projects_names | unique | length == projects_names | length
       - projects_subdomains | unique | length == projects_subdomains | length
-    fail_msg: "projects.yml: it must hold only a projects list, with unique names and subdomains."
+      # One key per project: a key must never deploy two projects.
+      - projects_deploy_keys | unique | length == projects_deploy_keys | length
+    fail_msg: "projects.yml: it must hold only a projects list, with unique names, subdomains and deploy keys."
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
     projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
+    projects_deploy_keys: >-
+      {{ projects_registry.projects | selectattr('deploy_key', 'defined') | map(attribute='deploy_key')
+         | map('split') | map('slice', 2) | map('first') | list }}
 
 - name: Check each project
   ansible.builtin.assert:
@@ -57,6 +62,10 @@
                      and item.backend.paths | unique | length == item.backend.paths | length
                      and item.backend.paths | reject('string') | list | length == 0
                      and item.backend.paths | reject('match', '^/[A-Za-z0-9._~/-]*[*]?\Z') | list | length == 0)))
+      # Same rule as the schema: a CI key, ed25519, on one line.
+      - >-
+        item.deploy_key is not defined
+        or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
       # At least one component; only a backend can use a database.
       - item.site or item.backend is defined
       - not item.database or item.backend is defined
@@ -74,7 +83,8 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, subdomain, title, repo, site, database, backend]
+    projects_allowed_keys: [name, subdomain, title, repo, site, database, backend, deploy_key]
+    projects_deploy_key: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48}( [A-Za-z0-9._@-]{1,64})?\Z'
     # Caddy path matchers as one regex: "/api/*" covers anything under /api/,
     # "/health" only itself.
     projects_backend_paths: "{{ item.backend.paths | default([]) }}"

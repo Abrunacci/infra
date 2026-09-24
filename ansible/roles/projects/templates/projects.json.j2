@@ -9,6 +9,7 @@
         'site': p.site,
         'database': p.database,
         'database_name': (p.name | replace('-', '_')) if p.database else none,
+        'deploy_key': p.deploy_key | default(none),
       }) -%}
 {%- endfor -%}
 {{ {'projects': entries} | to_nice_json(sort_keys=true, ensure_ascii=false) }}
