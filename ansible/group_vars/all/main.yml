@@ -12,6 +12,10 @@ admin_user: ops
 admin_ssh_public_keys:
   - "{{ lookup('ansible.builtin.env', 'TF_VAR_admin_ssh_public_key') | trim }}"
 
+# Runs deploy.sh for CI (roles/deploy). It can only log in with a project's
+# deploy key, and every such key runs deploy.sh for that project only.
+deploy_user: deploy
+
 # Root-only directory for the secrets Ansible generates on the server.
 # They never leave the server except inside the encrypted backups.
 infra_secrets_dir: /etc/infra/secrets

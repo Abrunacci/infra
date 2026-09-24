@@ -1,0 +1,8 @@
+---
+# Not a login home: root owns it and ~/.ssh, so the deploy user can never
+# change its own authorized_keys.
+deploy_home: /var/lib/deploy
+# Fixed, like caddy (10001), db-tunnel (10002) and sites (10003): a dynamic
+# system uid could be 999, the uid of PostgreSQL's container, which owns its
+# password file.
+deploy_uid: 10004
