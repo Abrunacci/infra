@@ -1,0 +1,29 @@
+# Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
+{{ item.subdomain }}.{{ domain }} {
+	root * {{ projects_sites_dir }}/{{ item.name }}/current
+	encode zstd gzip
+
+	# Files under /assets/ carry a content hash in their name (Vite), so they
+	# never change; everything else is revalidated on each visit.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@not_assets not path /assets/*
+	header @not_assets Cache-Control "no-cache"
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Single-page app: a path that is not a file gets index.html. A missing
+	# asset stays a 404 instead of returning HTML.
+	@spa {
+		not path /assets/*
+		not file
+	}
+	rewrite @spa /index.html
+
+	file_server
+}
