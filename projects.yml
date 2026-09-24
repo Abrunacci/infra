@@ -26,4 +26,4 @@ projects:
     repo: https://github.com/Abrunacci/cuanto-cuesta
     site: true
     database: false
-    # deploy_key: ssh-ed25519 AAAA… cuanto-cuesta-deploy
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICpY4pPwbax2IDkkw0zvPWsFXQ6DAxkLUBbxWsEJ6939 cuanto-cuesta-deploy
