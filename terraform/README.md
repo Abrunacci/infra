@@ -53,9 +53,11 @@ tracepath -6 server.abrunacci.dev   # should report the path MTU without stallin
 
 ## Safety rails
 
-- **`prevent_destroy`** on the Droplet: it holds the PostgreSQL data, so Terraform refuses to destroy it. Rebuilding on purpose means removing the flag in a reviewed PR and restoring from backup.
+- **`prevent_destroy`** on the Droplet: it holds the PostgreSQL data, so Terraform refuses any plan that would destroy it while the resource block is in the code: `terraform destroy`, or a change that forces a replacement. Rebuilding on purpose means removing the flag in a reviewed PR and restoring from backup.
+  - **Its limit:** the flag lives inside the resource block. If the whole block is deleted, the protection goes with it, and the next plan destroys the Droplet with no error. Renaming the resource (`digitalocean_droplet.server`) without a `moved` block has the same effect.
+  - **So every `-` in a plan is reviewed**, and so is every `-/+` (replace). The summary line (`N to destroy`) must be 0 unless the PR says why.
 - **`ignore_changes = [user_data, ssh_keys, image]`**: these only matter at creation, and changing them would force a new Droplet. After the first boot, Ansible owns the server's configuration.
 - **Resizing** (`droplet_size`) keeps the Droplet but powers it off: `graceful_shutdown = true` stops PostgreSQL cleanly, and `resize_disk = false` changes only CPU and RAM, so the Droplet can go back to a smaller size.
-- **`projects.yml` is validated**: invalid, duplicated or reserved (`server`, `status`) subdomains fail the plan.
+- **`projects.yml` is validated**: a missing file, invalid YAML or a missing top-level `projects` key fails `terraform validate`, instead of being read as zero projects (which would plan the deletion of every project's DNS records). Invalid, duplicated or reserved (`server`, `status`) subdomains fail the plan. An explicit `projects: []` is accepted.
 - **`proxied = false`** is set explicitly on every record, so the Cloudflare proxy cannot be turned on by accident (see the DNS decision in the main README).
 - **No IP addresses are committed.** Ansible and SSH use `server.abrunacci.dev`.
