@@ -4,7 +4,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 
 | Role | What it does |
 |---|---|
-| `base` | Manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
+| `base` | Requires a password for the admin user's sudo (see below), manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
 | `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH |
 | `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation and `no-new-privileges` for every container; the shared `edge` and `db` networks |
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
@@ -15,6 +15,14 @@ The roles run in that order: each one depends on the previous ones. Projects (da
 
 ## Design notes
 
+- **sudo asks for a password.** SSH stays key-only; the admin user's password is only for sudo. It is set by hand on the server, so it is never in the repo, not even as a hash, and Ansible only receives it from the `-K` prompt.
+  - **cloud-init keeps NOPASSWD.** A new Droplet has no password and root cannot log in over SSH, so without it nobody could become root to set one.
+  - **The playbook removes NOPASSWD only once it is safe,** in `roles/base/tasks/sudo.yml`, before any other change, stopping at the first failure:
+    1. The password is set and the account is not locked.
+    2. The `-K` password is that password. A sudo rule that grants nothing new (`ops ALL=(nobody) PASSWD: ALL`) makes sudo check it while NOPASSWD still applies.
+    3. cloud-init's `/etc/sudoers.d/90-cloud-init-users` is replaced by a rule that requires the password, validated with `visudo`.
+    4. The playbook checks that no NOPASSWD rule is left, and that sudo works with the password on a fresh connection.
+  - **Rebuilding:** `terraform apply` creates the Droplet with NOPASSWD, the admin sets the password on it, and the playbook, run with `-K`, removes NOPASSWD. The operating procedure (the backup root session and recovery) is kept in private operations documentation.
 - **Pinned versions.** Container images are pinned by digest and the Docker packages by exact version (and held with `dpkg`, so neither `apt upgrade` nor unattended-upgrades changes them). Upgrading is a PR that bumps the value in the role's `defaults/main.yml`.
 - **Docker bypasses ufw.** Ports published by a container skip ufw's rules. Only Caddy publishes ports, and only the ones both firewalls already allow. No other container may publish one; PostgreSQL is reached over the `db` network instead.
 - **`db` is an internal network.** Containers on it have no route to the internet through it. Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL).
@@ -42,12 +50,14 @@ cp inventory.example.yml inventory.yml       # git-ignored
 # The admin key list defaults to the key Terraform installed: load the same file.
 set -a; . ../terraform/.env; set +a
 
-ansible all -b -m ansible.builtin.ping       # connection and sudo work
-ansible-playbook site.yml --diff
-ansible-playbook site.yml --diff             # second run: expect changed=0
+ansible all -b -K -m ansible.builtin.ping    # connection and sudo work
+ansible-playbook site.yml -K --diff
+ansible-playbook site.yml -K --diff          # second run: expect changed=0
 ```
 
-`--check` only works fully once Docker is installed: on the first run, the Docker, Caddy and PostgreSQL tasks depend on packages that check mode does not install. `ansible-playbook site.yml --check --diff --tags base,hardening` previews the SSH and firewall changes, which are the ones that could lock you out.
+Every run asks for the admin user's sudo password (`-K`; `ansible.cfg` also sets `become_ask_pass`, so it is asked even without the flag). The first run on a new Droplet needs that password to be set on the server first; the playbook stops before changing anything if it is not.
+
+`--check` only works fully once Docker is installed: on the first run, the Docker, Caddy and PostgreSQL tasks depend on packages that check mode does not install. `ansible-playbook site.yml -K --check --diff --tags base,hardening` previews the sudo, SSH and firewall changes, which are the ones that could lock you out. On a server that still has NOPASSWD, check mode cannot test the sudo password yet, and says so by skipping that check.
 
 ### The server's host key
 
@@ -60,7 +70,7 @@ ssh ops@server.abrunacci.dev                        # from your machine; accept 
 
 If the host key changes later without a rebuild, stop and find out why before removing the old entry.
 
-The Droplet Console logs in by adding a temporary key to `ops`'s `authorized_keys`. The playbook removes keys that are not listed, so a run made right after using the console reports that change; the next one is back to `changed=0`. Logging in as root through the console adds the key to root's `authorized_keys` instead, which the playbook empties in the same way.
+The Droplet Console logs in over SSH by adding a temporary key to `ops`'s `authorized_keys`, so only `ops` can use it (root is refused like any SSH login). The playbook removes keys that are not listed, so a run made right after using the console reports that change; the next one is back to `changed=0`.
 
 ### fail2ban and your SSH agent
 
