@@ -1,4 +1,77 @@
 ---
+# PostgreSQL only starts on data files written by its own major version: with
+# another one's, the container would exit and restart in a loop. So the image's
+# major version is checked against the data's (PG_VERSION) before the compose
+# file or the container change, and a mismatch stops the play with the running
+# PostgreSQL left as it is. A missing or empty volume is initialized by the image.
+- name: Check the image reference
+  ansible.builtin.assert:
+    that:
+      - postgres_image is match('^(docker[.]io/library/)?postgres:[0-9]+[.-]')
+    fail_msg: postgres_image must look like postgres:<major>.<minor>-<variant>@sha256:<digest>.
+    quiet: true
+
+- name: Read the image's major version
+  ansible.builtin.set_fact:
+    postgres_image_major: >-
+      {{ postgres_image | regex_search('^(?:docker[.]io/library/)?postgres:([0-9]+)[.-]', '\1') | first }}
+
+- name: Look for PostgreSQL's data volume
+  community.docker.docker_volume_info:
+    name: "{{ postgres_volume }}"
+  register: postgres_volume_info
+
+- name: Look for the data's major version
+  ansible.builtin.stat:
+    path: "{{ postgres_volume_info.volume.Mountpoint }}/PG_VERSION"
+  register: postgres_data_version_stat
+  when: postgres_volume_info.exists
+
+# PG_VERSION is looked for at the volume's root, where this image keeps its
+# data (/var/lib/postgresql/data). A volume with files but no PG_VERSION there
+# is not treated as empty: another layout (PostgreSQL 18 images keep it one
+# level down) must not pass for a new server.
+- name: Look for anything else in the volume
+  ansible.builtin.find:
+    paths: "{{ postgres_volume_info.volume.Mountpoint }}"
+    file_type: any
+    hidden: true
+  register: postgres_volume_entries
+  when: postgres_volume_info.exists and not postgres_data_version_stat.stat.exists
+
+- name: Read the data's major version
+  ansible.builtin.slurp:
+    src: "{{ postgres_volume_info.volume.Mountpoint }}/PG_VERSION"
+  register: postgres_data_version_raw
+  when: postgres_volume_info.exists and postgres_data_version_stat.stat.exists
+
+- name: Refuse a volume that holds something other than PostgreSQL's data
+  ansible.builtin.assert:
+    that:
+      - postgres_volume_entries is skipped or postgres_volume_entries.matched == 0
+    fail_msg: >-
+      The {{ postgres_volume }} volume is not empty, but it has no PG_VERSION at its root, so its
+      PostgreSQL version cannot be checked. Look inside it before going on:
+      sudo ls -la {{ postgres_volume_info.volume.Mountpoint | default('') }}. Nothing was changed.
+    quiet: true
+
+- name: Refuse an image of another major version than the data
+  ansible.builtin.assert:
+    # No PG_VERSION: a missing or empty volume. Once the file exists, it must
+    # say exactly the image's major version (an empty one fails too).
+    that:
+      - postgres_data_version_raw is skipped or postgres_data_major == postgres_image_major
+    fail_msg: >-
+      The data in the {{ postgres_volume }} volume is from PostgreSQL "{{ postgres_data_major }}"
+      (its PG_VERSION), and the image ({{ postgres_image.split('@') | first }}) is PostgreSQL
+      {{ postgres_image_major }}. It would not start.
+      A major upgrade needs a dump and a restore (or, for an empty server, recreating the volume).
+      Nothing was changed; the running PostgreSQL is untouched.
+    quiet: true
+  vars:
+    postgres_data_major: >-
+      {{ postgres_data_version_raw.content | b64decode | trim if postgres_data_version_raw is not skipped else '' }}
+
 - name: Create the PostgreSQL directory
   ansible.builtin.file:
     path: "{{ postgres_dir }}"
