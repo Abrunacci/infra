@@ -4,6 +4,19 @@
 # itself is started by deploy-backend; the playbook only restarts one that is
 # already deployed, when its configuration changed.
 
+# The same lock as in main.yml, repeated because this file creates databases:
+# they are never created while the check of the ones already on the server was
+# skipped (--skip-tags projects_databases).
+- name: Require the database check before creating databases
+  ansible.builtin.assert:
+    that:
+      - projects_databases_probe is defined
+      - projects_databases_probe is not skipped
+    fail_msg: >-
+      The database check was skipped (--skip-tags projects_databases); databases are not created
+      without it. Run the playbook without that option.
+    quiet: true
+
 # Every backend container runs as this user. No login, no home.
 - name: Create the backends system group
   ansible.builtin.group:
@@ -33,6 +46,8 @@
     - { path: "{{ projects_backends_state_dir }}", mode: "0700" }
     - { path: "{{ projects_registry_config_dir }}", mode: "0700" }
     - { path: /usr/local/lib/infra, mode: "0755" }
+    # Dumps taken before migrations and by project-db (root only).
+    - { path: /var/backups/infra, mode: "0700" }
   loop_control:
     label: "{{ item.path }}"
 
@@ -70,8 +85,17 @@
     # Run by deploy.sh for a CI key, and by the admin.
     - { src: deploy-backend, dest: /usr/local/sbin/deploy-backend, mode: "0755" }
     - { src: backend-rollback, dest: /usr/local/sbin/backend-rollback, mode: "0755" }
+    - { src: project-db, dest: /usr/local/sbin/project-db, mode: "0755" }
   loop_control:
     label: "{{ item.dest }}"
+
+- name: Write PostgreSQL's address for the backend commands
+  ansible.builtin.template:
+    src: database.conf.j2
+    dest: /etc/infra/database.conf
+    owner: root
+    group: root
+    mode: "0644"
 
 # Created empty once and never replaced: its values are set on the server
 # (project-secret) and never pass through Ansible.
@@ -84,6 +108,20 @@
     group: root
     mode: "0600"
   loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Creates the database and roles of each project that has one, or checks
+# them; writes database-app.env and database-migrate.env, which the compose
+# file below needs. Never creates an empty database where one existed (see
+# project-db). Passwords are generated and used on the server only. Not run in
+# check mode.
+- name: Create or check each project's database
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/project-db, ensure, "{{ item.name }}"]
+  register: projects_db_ensure
+  changed_when: projects_db_ensure.rc == 0 and projects_db_ensure.stdout != 'unchanged'
+  loop: "{{ projects_backends | selectattr('database') | list }}"
   loop_control:
     label: "{{ item.name }}"
 

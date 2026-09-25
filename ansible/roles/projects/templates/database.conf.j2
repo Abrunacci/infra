@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/projects). Read by project-db and deploy-backend
+# (/usr/local/lib/infra/backend.sh), which source it as shell: every value is
+# quoted.
+POSTGRES_ADDRESS={{ postgres_ipv4_address | quote }}
+POSTGRES_PORT=5432
+POSTGRES_COMPOSE_PROJECT={{ projects_postgres_compose_project | quote }}
+POSTGRES_COMPOSE_SERVICE={{ projects_postgres_compose_service | quote }}

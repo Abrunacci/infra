@@ -9,6 +9,9 @@ services:
   backend:
     image: ${BACKEND_IMAGE:?no release deployed yet}
     restart: unless-stopped
+    # A minimal init as PID 1 passes SIGTERM on (an app running as PID 1 may
+    # ignore it, and then waits out stop_grace_period) and reaps zombies.
+    init: true
     # The backends user, whatever the image declares: never root.
     user: "{{ projects_backends_uid }}:{{ projects_backends_uid }}"
     read_only: true
@@ -24,18 +27,64 @@ services:
         format: raw
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets.env
         format: raw
+{% if item.database %}
+      # DATABASE_URL, as the app's role (project-db).
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
+        format: raw
+{% endif %}
     # No published port: Caddy reaches it on the edge network by this alias.
     networks:
       edge:
         aliases:
           - {{ item.name }}-backend
+{% if item.database %}
+      # PostgreSQL, at its fixed address. Internal: no route out.
+      db: {}
+{% endif %}
     mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     pids_limit: 256
     stop_grace_period: 20s
     labels:
       infra.release: ${BACKEND_RELEASE:-}
+{% if item.backend.migrate is defined %}
+
+  # Run once per deploy by deploy-backend (docker compose run --rm migrate),
+  # with the new image, before the backend switches to it. Only the public
+  # env and the owner's connection: none of the app's secrets, and no route
+  # out of the db network.
+  migrate:
+    image: ${BACKEND_IMAGE:?no image given}
+    profiles:
+      - migrate
+    command: {{ item.backend.migrate | to_json }}
+    restart: "no"
+    init: true
+    user: "{{ projects_backends_uid }}:{{ projects_backends_uid }}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
+        format: raw
+      # MIGRATION_DATABASE_URL (the owner) and APP_DB_USER (project-db).
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-migrate.env
+        format: raw
+    networks:
+      - db
+    mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    pids_limit: 256
+{% endif %}
 
 networks:
   edge:
     external: true
+{% if item.database %}
+  db:
+    external: true
+{% endif %}

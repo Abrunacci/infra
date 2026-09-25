@@ -10,7 +10,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 17 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server. Refuses an image whose major version is not the data's |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
-| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`). Refuses what is not built yet (databases), and refuses to run while a database on the server has no project declaring it (see "Retiring a project with a database") |
+| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
@@ -49,6 +49,14 @@ The roles run in that order: each one depends on the previous ones, and `project
   - **Retention and rollbacks.** The last 5 releases are kept, with their images, plus the one that was running before the latest deploy; the image of a failed deploy is removed. `sudo backend-rollback` moves back to any of them, with the same health check and way back, and shows a failed container's log in the terminal. Without a release name it goes to the one deployed before the current one in the history (`--list` shows the order). Database migrations are never undone.
   - **Journal.** Every deploy and rollback is logged (`journalctl -t deploy-backend`, `-t backend-rollback`), the log of a container that failed its health check (`-t backend-log`), and every secret change (`-t project-secret`, never the value).
 - **Databases are never dropped by the playbook.** Before any change, it compares `projects.yml` with two sources: the server's registry (`/etc/infra/projects.json`, projects that had `database: true`) and PostgreSQL itself (every database except `postgres` and the templates, including one made by hand). A database whose project is gone from `projects.yml`, or now says `database: false`, stops the play until it is retired by hand. If PostgreSQL's data volume exists but PostgreSQL cannot be asked, the play stops too, instead of trusting the registry alone. A new server, without Docker or the volume, has no databases.
+- **Per-project databases.** A project with `database: true` gets, in the shared PostgreSQL, a database named after it (`my-app` → `my_app`) and two roles, created by `sudo project-db ensure` (the playbook runs it):
+  - `my_app`, owner of the database, used only by the migrations. It can create roles of its own (`CREATEROLE`), but PostgreSQL does not let it create superusers or roles that bypass row level security, or change roles it did not create.
+  - `my_app_app`, the app's login. It owns nothing and can only connect to its own database; the owner administers it (to grant it privileges) without inheriting or assuming it.
+  - Nobody else can connect to the database (`CONNECT` is revoked from `PUBLIC` on it, on `postgres` and on `template1`). An existing role is only accepted if it carries the comment `project-db` sets and nobody else has a hold on it (no membership in the owner; in the app's role, only the owner's), checked on every run: roles another project's migrations prepared in advance are never taken over.
+  - Migrations may grant privileges to `my_app_app` and give it roles, but must not change its password or drop it: the app would lose its connection until the next playbook run puts it back.
+  - Passwords are generated on the server (`/etc/infra/secrets/projects/<name>/`, root only), never pass through Ansible, and reach PostgreSQL through psql's stdin. The containers get them in env files Compose reads literally: the backend `DATABASE_URL` (as `my_app_app`); the migrations `MIGRATION_DATABASE_URL` (as `my_app`) and `APP_DB_USER`. The URL's scheme is `database_url_scheme` (`postgresql` by default). These names are reserved: `env` and `secrets` cannot set them, nor `APP_DB_PASSWORD`, which the app's role must never be given by a project.
+  - A marker (`/var/lib/infra/backends/<name>/database`) records when the database was created. If it is missing later, neither the playbook nor `project-db` create an empty one: it has to be restored, or recreated on purpose (`--allow-empty`).
+- **Migrations.** With `migrate` (a command, such as `[alembic, upgrade, head]`), every deploy first dumps the database (`/var/backups/infra/<name>/before-<release>.dump`, root only; the last 3 are kept) and runs the command in a one-off container of the new image, on the `db` network only (no internet), with the public `env`, `MIGRATION_DATABASE_URL` and `APP_DB_USER`, and none of the app's secrets. If it fails or takes more than 10 minutes, the deploy stops there: the running release is untouched. Its output goes to the journal only (`journalctl -t backend-migrate`). Only then does the container switch to the new image; if that one is not healthy, the previous image comes back, but the schema stays migrated. So migrations must keep working with the previous release (add before removing), and `backend-rollback` never touches the schema. Restoring a dump is the only way back for data.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
 - **Automatic reboots.** When a security update needs a reboot (kernel, libc), unattended-upgrades reboots at 07:30 UTC. Docker stops PostgreSQL cleanly first (60 s grace period) and every container comes back through its restart policy. Set `base_auto_reboot: false` to turn it off.
@@ -270,6 +278,16 @@ sudo backend-rollback <project> --restart   # recreate the deployed release
 sudo backend-rollback <project> --apply     # apply configuration changes, if any (the playbook runs it)
 ```
 
+### Databases
+
+```sh
+sudo project-db list                        # databases, owners and sizes
+sudo project-db dump <project>              # a dump now, in /var/backups/infra/<project>/
+sudo project-db ensure <project>            # create or check the database and roles (the playbook runs it)
+sudo project-db retire <project>            # see "Retiring a project with a database"
+sudo journalctl -t backend-migrate          # what the migrations printed
+```
+
 ### Removing a project's backend
 
 When a project loses its `backend` (or leaves `projects.yml`), the next playbook run stops its container, and removes its compose files and its Caddy routes. Its secrets, its release history and its images stay, so a mistake is undone by putting the entry back and running the playbook again (it starts the last deployed release). Once sure, remove them by hand:
@@ -289,21 +307,50 @@ Taking a project out of `projects.yml`, or setting its `database` to `false`, ma
 projects.yml no longer declares database: true for a project whose database is still on the server (...). The playbook never drops a database, and it does not run until each one is retired by hand ...
 ```
 
-This is on purpose: removing a line from a file must never be enough to lose data. The failure lists the projects found in the server's registry and the databases found in PostgreSQL. Its database name is the project's name with `-` turned into `_`.
+This is on purpose: removing a line from a file must never be enough to lose data. The failure lists the projects found in the server's registry and the databases found in PostgreSQL (named after the project, with `-` turned into `_`). The database is retired by hand, on the server, and only then does the playbook run again:
 
-The database is retired by hand, on the server, and only then does the playbook run again. The full procedure, with a `project-db retire` command that takes a final dump, stops the backend and drops the database, its roles, its secrets and its entry in `/etc/infra/projects.json`, arrives with per-project databases: the playbook does not create any yet. Until then, a database on the server can only have been created by hand, and is retired by hand:
+1. **Take the project out of `projects.yml`** (or set `database: false`) in a branch. The playbook refuses to run from it, which is expected.
+2. **Retire the database**, on the server:
 
-```sh
-# On the server. Dump it first if it holds anything worth keeping, and copy the dump off the server.
-(umask 077; sudo docker compose --project-directory /opt/infra/postgres exec -T postgres \
-  pg_dump -U postgres -Fc NAME > NAME.dump)
-sudo docker compose --project-directory /opt/infra/postgres exec -T postgres \
-  psql -U postgres -c 'DROP DATABASE "NAME"'
-```
+   ```sh
+   sudo project-db retire <project>
+   ```
 
-A project listed under the registry but whose database is missing from PostgreSQL is a different case: its data was lost (for example, the volume was recreated). The remedy is restoring the backup, not retiring it.
+   It lists what it will do and asks for the project's name. Then it stops the backend, takes a final dump in `/var/backups/infra/retired/<project>-<UTC time>.dump` (root only), drops the database and every role its owner administers (the app's login and any role its migrations created), removes the database's credentials and its pre-migration dumps, and marks the project in the server's registry as having no database. It leaves a marker saying the database was retired, so a playbook run that still declares it does not create an empty one.
+3. **Copy the final dump off the server**, and keep it as long as the data may be needed:
+
+   ```sh
+   ssh -t ops@server.abrunacci.dev 'sudo install -m 0600 -o ops /var/backups/infra/retired/<file>.dump ~ops/'
+   scp ops@server.abrunacci.dev:<file>.dump .
+   ssh ops@server.abrunacci.dev 'rm <file>.dump'
+   ```
+
+   The directory is root only, so the dump goes through `ops`'s home for the copy. The one in `/var/backups/infra/retired/` stays until removed by hand.
+
+4. **Run the playbook** from the branch: the check passes, and the backend's container, compose files and Caddy site go (see "Removing a project's backend"). Merge the branch, and apply Terraform if the subdomain goes too.
 
 `--skip-tags always` or `--skip-tags projects_databases` would skip this check: never use them to get past this failure.
+
+## Restoring a project's database
+
+When a project still declares its database but PostgreSQL does not have it (a lost volume, a database dropped by hand), the playbook, `project-db` and deploys refuse to go on, because they would otherwise start an empty one:
+
+```
+<project>'s database was created on <date> and PostgreSQL does not have it. The playbook does not create an empty one in its place: restore it ...
+```
+
+To restore from a dump (one taken before a migration, `sudo project-db dump`, or a backup), on the server:
+
+```sh
+sudo project-db ensure <project> --allow-empty     # asks for the project's name; creates an empty database and its roles
+pg=$(sudo docker ps -q --filter label=com.docker.compose.project=postgres \
+  --filter label=com.docker.compose.service=postgres --filter label=com.docker.compose.oneoff=False)
+sudo docker exec -i "$pg" pg_restore -U postgres -d <database> --no-owner --role=<database> --exit-on-error \
+  < /var/backups/infra/<project>/<file>.dump
+sudo backend-rollback <project> --restart
+```
+
+`--role=<database>` makes the owner role own what is restored. The roles its migrations created must exist for the dump's grants to them: dropping a database does not drop them, but a lost volume does. In that case `pg_restore` stops at the first grant to a missing role; create those roles first (as the owner, with the attributes the migrations give them: `sudo docker exec -i "$pg" psql -U <database> -d <database>`, using the owner's password from `/etc/infra/secrets/projects/<project>/db-owner.password`), then restore. To start over with an empty database instead, run only the first command; the next deploy runs every migration.
 
 ### When the databases cannot be listed
 

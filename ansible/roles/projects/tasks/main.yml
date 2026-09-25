@@ -15,18 +15,6 @@
       --tags docker,postgres; run the playbook without it.
     quiet: true
 
-# Per-project databases are built in a later PR. Until then, a project that
-# needs one fails here instead of half existing.
-- name: Refuse components that are not supported yet
-  ansible.builtin.assert:
-    that:
-      - not item.database
-    fail_msg: "projects.yml: {{ item.name }} has database: true; databases are not supported yet."
-    quiet: true
-  loop: "{{ projects_registry.projects }}"
-  loop_control:
-    label: "{{ item.name }}"
-
 - name: Write the registry for the server
   ansible.builtin.template:
     src: projects.json.j2

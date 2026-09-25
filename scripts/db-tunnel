@@ -80,10 +80,13 @@ lock() {
 
 postgres_ip() {
   local id
+  # Only the service's own container: a one-off `docker compose run` of the
+  # same service (a restore, for example) carries the same labels.
   id="$(docker ps -q \
     --filter "label=com.docker.compose.project=$DB_COMPOSE_PROJECT" \
-    --filter "label=com.docker.compose.service=$DB_COMPOSE_SERVICE")"
-  [[ -n "$id" ]] || return 1
+    --filter "label=com.docker.compose.service=$DB_COMPOSE_SERVICE" \
+    --filter label=com.docker.compose.oneoff=False)"
+  [[ -n "$id" && "$id" != *$'\n'* ]] || return 1
   docker inspect -f "{{with index .NetworkSettings.Networks \"$DB_NETWORK\"}}{{.IPAddress}}{{end}}" "$id"
 }
 
