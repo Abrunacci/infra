@@ -35,3 +35,4 @@ projects:
     repo: https://github.com/Abrunacci/abrunacci.dev
     site: true
     database: false
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJITKgKgF+4yXbqYGiYVx4Z26x/rf0qn9/gqE2KMu1pJ abrunacci-dev-deploy
