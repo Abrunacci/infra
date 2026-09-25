@@ -57,7 +57,7 @@
           "type": "boolean"
         },
         "database": {
-          "description": "A PostgreSQL database and user for the backend. Never turned back off automatically.",
+          "description": "A PostgreSQL database and user for the backend. The playbook never drops it: while it exists on the server, removing the project or setting false fails the playbook until it is retired by hand (ansible/README.md).",
           "type": "boolean"
         },
         "backend": { "$ref": "#/$defs/backend" },

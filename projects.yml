@@ -11,7 +11,10 @@
 #   repo       linked from the placeholder page (optional: leave it out for
 #              private repositories)
 #   site       true: Caddy serves /srv/sites/<name>/current
-#   database   true: a PostgreSQL database and user; needs a backend
+#   database   true: a PostgreSQL database and user; needs a backend. Never
+#              undone by the playbook: while the database exists, taking the
+#              project out of this file or setting false makes every run fail.
+#              See ansible/README.md, "Retiring a project with a database".
 #   deploy_key public ed25519 key of the project's CI (optional: without it the
 #              project cannot be deployed). It can only deploy this project.
 #              How to create it: ansible/README.md, "Deploying a project".

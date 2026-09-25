@@ -10,10 +10,10 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 16 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
-| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`) and serves each static site (see below). Refuses what is not built yet (backends) and never turns a database off. Backends and databases are added in a later PR |
+| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`) and serves each static site (see below). Refuses what is not built yet (backends), and refuses to run while a database on the server has no project declaring it (see "Retiring a project with a database"). Backends and databases are added in later PRs |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` and `site-rollback`. See "Deploying a project" |
 
-The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose). `--tags projects` on its own needs a server that `base` has already set up.
+The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
 
 ## Design notes
 
@@ -39,6 +39,7 @@ The roles run in that order: each one depends on the previous ones, and `project
   - **Retention.** The last 5 releases are kept, plus the published one.
   - **Journal.** Every attempt is logged (`journalctl -t deploy`): project, release, sha, run id, key fingerprint, client address, size and result.
   - **Rollbacks** are run on the server by the admin (`sudo site-rollback`), never by CI keys; the procedure is in private operations documentation.
+- **Databases are never dropped by the playbook.** Before any change, it compares `projects.yml` with two sources: the server's registry (`/etc/infra/projects.json`, projects that had `database: true`) and PostgreSQL itself (every database except `postgres` and the templates, including one made by hand). A database whose project is gone from `projects.yml`, or now says `database: false`, stops the play until it is retired by hand. If PostgreSQL's data volume exists but PostgreSQL cannot be asked, the play stops too, instead of trusting the registry alone. A new server, without Docker or the volume, has no databases.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
 - **Automatic reboots.** When a security update needs a reboot (kernel, libc), unattended-upgrades reboots at 07:30 UTC. Docker stops PostgreSQL cleanly first (60 s grace period) and every container comes back through its restart policy. Set `base_auto_reboot: false` to turn it off.
@@ -213,6 +214,42 @@ The workflow lives in the project's repository, with `permissions: {}` at the to
 ```
 
 The command is always `deploy <commit sha> <run id>`, and the archive's root is the site's root. The run id is optional for `deploy.sh`, so a manual test can leave it out; the workflow always sends it. The deploy prints `Deployed <project> release <id>`, or the reason it was rejected, and fails the job if it was.
+
+## Retiring a project with a database
+
+Taking a project out of `projects.yml`, or setting its `database` to `false`, makes every playbook run fail with this message, before anything changes:
+
+```
+projects.yml no longer declares database: true for a project whose database is still on the server (...). The playbook never drops a database, and it does not run until each one is retired by hand ...
+```
+
+This is on purpose: removing a line from a file must never be enough to lose data. The failure lists the projects found in the server's registry and the databases found in PostgreSQL. Its database name is the project's name with `-` turned into `_`.
+
+The database is retired by hand, on the server, and only then does the playbook run again. The full procedure, with a `project-db retire` command that takes a final dump, stops the backend and drops the database, its roles, its secrets and its entry in `/etc/infra/projects.json`, arrives with per-project databases: the playbook does not create any yet. Until then, a database on the server can only have been created by hand, and is retired by hand:
+
+```sh
+# On the server. Dump it first if it holds anything worth keeping, and copy the dump off the server.
+(umask 077; sudo docker compose --project-directory /opt/infra/postgres exec -T postgres \
+  pg_dump -U postgres -Fc NAME > NAME.dump)
+sudo docker compose --project-directory /opt/infra/postgres exec -T postgres \
+  psql -U postgres -c 'DROP DATABASE "NAME"'
+```
+
+A project listed under the registry but whose database is missing from PostgreSQL is a different case: its data was lost (for example, the volume was recreated). The remedy is restoring the backup, not retiring it.
+
+`--skip-tags always` or `--skip-tags projects_databases` would skip this check: never use them to get past this failure.
+
+### When the databases cannot be listed
+
+Once PostgreSQL's data volume exists, the check needs PostgreSQL to answer. If it cannot ask (Docker stopped, the container stopped or failing), the play stops with `Cannot tell which databases exist on the server`, followed by the cause and what to run: start Docker, start the container, or read its log.
+
+If the fix is in the playbook itself (the `docker` role must reinstall Docker, or a change to the `postgres` role is what makes PostgreSQL fail), run only those roles, skipping the database check alone: they create and start things, but never touch projects or databases. `projects.yml` is still checked, and facts are still gathered (`--skip-tags always` would skip those too, and the `docker` role needs them).
+
+```sh
+./play site.yml -K --diff --tags docker,postgres --skip-tags projects_databases
+```
+
+The `projects` role refuses to run when the database check was skipped, so this bypass cannot reach the projects or rewrite the server's registry. Then run the whole playbook as usual; the check runs again.
 
 ## Rotating the admin SSH key
 

@@ -97,3 +97,130 @@
              | map('regex_escape') | map('regex_replace', '$', '.*') | list)
            + (projects_backend_paths | reject('match', '.*[*]$') | map('regex_escape') | list))
            | join('|') }})\Z
+
+# Databases. The playbook never drops one, and a projects.yml that would leave
+# one without its project stops the play here, before any change: taking a
+# project out of the file, or setting database: false, only runs once its
+# database has been retired by hand (ansible/README.md, "Retiring a project
+# with a database"). Two sources are checked, so losing either one never lets
+# a database through: the registry the server keeps (/etc/infra/projects.json)
+# and PostgreSQL itself.
+
+# Only a missing registry (a new server) is expected. Any other read error
+# stops the play: skipping the check silently would be worse.
+- name: Look for the registry the server already has
+  tags: [projects_databases]
+  ansible.builtin.stat:
+    path: "{{ projects_server_registry }}"
+  register: projects_previous_stat
+
+- name: Read the registry the server already has
+  tags: [projects_databases]
+  ansible.builtin.slurp:
+    src: "{{ projects_server_registry }}"
+  register: projects_previous_raw
+  when: projects_previous_stat.stat.exists
+
+# Read-only, so it also runs in check mode. A server without Docker or without
+# PostgreSQL's data volume has no databases (a new server: this runs before
+# the roles that install them). Once the volume exists, PostgreSQL must answer:
+# if it cannot be asked, the play stops instead of trusting the registry alone,
+# and the script says what to do (ansible/README.md, "When the databases
+# cannot be listed"). Every database counts except PostgreSQL's own, including
+# one made by hand. Names come out as JSON strings, one per line, so a name
+# with a newline in it cannot pass for two others.
+- name: List the databases on the server
+  tags: [projects_databases]
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      if ! command -v docker >/dev/null 2>&1; then
+        if [ -e "/var/lib/docker/volumes/$VOLUME" ]; then
+          echo "Docker is not installed, but PostgreSQL's data is still on disk" \
+            "(/var/lib/docker/volumes/$VOLUME). Reinstall it:" \
+            "./play site.yml -K --tags docker --skip-tags projects_databases" >&2
+          exit 1
+        fi
+        echo none
+        exit 0
+      fi
+      timeout 30 docker info >/dev/null 2>&1 \
+        || { echo "the Docker daemon does not answer. Start it: sudo systemctl start docker" >&2; exit 1; }
+      # The name filter matches substrings: compare each name exactly.
+      volumes="$(timeout 30 docker volume ls -q --filter "name=$VOLUME")" \
+        || { echo "cannot list the Docker volumes" >&2; exit 1; }
+      found=
+      for v in $volumes; do [ "$v" = "$VOLUME" ] && found=1; done
+      [ -n "$found" ] || { echo none; exit 0; }
+      # Only the service's own container: a one-off `docker compose run` of
+      # the same service carries the same project and service labels.
+      ids="$(timeout 30 docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+        --filter "label=com.docker.compose.service=$SERVICE" --filter "label=com.docker.compose.oneoff=False")"
+      # Container ids never contain spaces: split them into $1, $2...
+      # shellcheck disable=SC2086
+      set -- $ids
+      if [ $# -eq 0 ]; then
+        echo "the $VOLUME volume exists but the PostgreSQL container is not running." \
+          "Start it: sudo docker compose --project-directory $DIR up -d" >&2
+        exit 1
+      fi
+      [ $# -eq 1 ] || { echo "more than one PostgreSQL container is running: sudo docker ps -a" >&2; exit 1; }
+      if ! out="$(timeout 30 docker exec "$1" psql -U postgres -d postgres -AtX -v ON_ERROR_STOP=1 -c "
+          SELECT to_json(datname) FROM pg_database
+          WHERE datname NOT IN ('postgres', 'template0', 'template1') ORDER BY datname")"; then
+        echo "PostgreSQL did not answer (it may still be starting; try again in a minute)." \
+          "Its log: sudo docker compose --project-directory $DIR logs --tail 50" >&2
+        exit 1
+      fi
+      echo databases
+      [ -z "$out" ] || printf '%s\n' "$out"
+  environment:
+    VOLUME: "{{ projects_postgres_volume }}"
+    PROJECT: "{{ projects_postgres_compose_project }}"
+    SERVICE: "{{ projects_postgres_compose_service }}"
+    DIR: "{{ infra_opt_dir }}/{{ projects_postgres_compose_project }}"
+  register: projects_databases_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  timeout: 180
+
+- name: Check that the databases could be listed
+  tags: [projects_databases]
+  ansible.builtin.assert:
+    that:
+      - projects_databases_probe.rc is defined and projects_databases_probe.rc == 0
+      - projects_databases_probe.stdout_lines[:1] in [['none'], ['databases']]
+    fail_msg: >-
+      Cannot tell which databases exist on the server:
+      {{ projects_databases_probe.stderr | default('', true) | trim
+         or projects_databases_probe.msg | default('unexpected output', true) }}
+      Nothing was changed. See ansible/README.md, "When the databases cannot be listed".
+    quiet: true
+
+- name: Refuse leaving a database without its project
+  tags: [projects_databases]
+  ansible.builtin.assert:
+    that:
+      - projects_orphans_registry | length == 0
+      - projects_orphans_postgres | length == 0
+    fail_msg: >-
+      projects.yml no longer declares database: true for a project whose database is still on the server
+      (projects in {{ projects_server_registry }}: {{ projects_orphans_registry | join(', ') or 'none' }};
+      databases in PostgreSQL: {{ projects_orphans_postgres | join(', ') or 'none' }}).
+      The playbook never drops a database, and it does not run until each one is retired by hand:
+      see ansible/README.md, "Retiring a project with a database". Nothing was changed.
+    quiet: true
+  vars:
+    projects_with_database: "{{ projects_registry.projects | selectattr('database') | map(attribute='name') | list }}"
+    # Same rule as the database name in projects.json: - turned into _.
+    projects_declared_databases: "{{ projects_with_database | map('replace', '-', '_') | list }}"
+    projects_previous: >-
+      {{ (projects_previous_raw.content | b64decode | from_json).projects
+         if projects_previous_stat.stat.exists else [] }}
+    projects_orphans_registry: >-
+      {{ projects_previous | selectattr('database') | map(attribute='name')
+         | reject('in', projects_with_database) | list }}
+    projects_orphans_postgres: >-
+      {{ projects_databases_probe.stdout_lines[1:] | map('from_json')
+         | reject('in', projects_declared_databases) | list }}

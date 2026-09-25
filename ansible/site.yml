@@ -3,7 +3,10 @@
   hosts: all
   become: true
   pre_tasks:
-    # Before any change: a broken projects.yml stops the play here.
+    # Before any change: a broken projects.yml, or one that leaves a database
+    # without its project, stops the play here. Its database tasks are also
+    # tagged projects_databases, the only ones meant to be skipped (to repair
+    # Docker or PostgreSQL; see ansible/README.md).
     - name: Check the project registry
       ansible.builtin.import_role:
         name: projects
