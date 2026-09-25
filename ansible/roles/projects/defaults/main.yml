@@ -7,7 +7,8 @@ projects_file: "{{ playbook_dir }}/../projects.yml"
 projects_server_registry: /etc/infra/projects.json
 
 # Where validate.yml looks for the databases that exist on the server. Same
-# names as roles/postgres (compose project, service and data volume).
+# names as roles/postgres (compose project, service and postgres_volume):
+# roles/postgres is not loaded yet when validate.yml runs.
 projects_postgres_compose_project: postgres
 projects_postgres_compose_service: postgres
 projects_postgres_volume: postgres_data

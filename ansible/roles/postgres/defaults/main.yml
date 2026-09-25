@@ -1,7 +1,11 @@
 ---
-# Pinned by digest, like Caddy. A minor bump (16.x) is a pull and a restart;
-# a major one (17) needs a dump and restore, never just a new tag.
-postgres_image: postgres:16.15-trixie@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
+# Pinned by digest, like Caddy. A minor bump (17.x) is a pull and a restart;
+# a major one (18) needs a dump and restore, never just a new tag: the role
+# refuses to start an image whose major version is not the data's.
+postgres_image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+# Fixed name, so it does not depend on the compose project name. Also in
+# roles/projects/defaults (the database check): rename them together.
+postgres_volume: postgres_data
 postgres_dir: "{{ infra_opt_dir }}/postgres"
 # Superuser password, generated on the server on the first run. PostgreSQL
 # reads it only when it initializes the data directory.
