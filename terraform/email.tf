@@ -12,9 +12,11 @@ locals {
 # it needs on the root domain and locks them: their values (MX priorities, the
 # DKIM key) are Cloudflare's, so they are not declared here. Destroying this
 # resource turns Email Routing off.
+# No `name`: it turns Email Routing on for a subdomain of the zone, and the API
+# rejects the root domain there ("must be a subdomain"). Without it, the call
+# applies to the root domain.
 resource "cloudflare_email_routing_dns" "this" {
   zone_id = var.cloudflare_zone_id
-  name    = var.domain
 }
 
 # Cloudflare emails this address a verification link on creation. Until it is
@@ -59,7 +61,9 @@ resource "cloudflare_email_routing_rule" "forward" {
 
 # Any other address is rejected while the message is being delivered, so the
 # sender gets a bounce. Declared, disabled, so turning it on from the dashboard
-# shows up in the next plan.
+# shows up in the next plan. Every zone has exactly one catch-all rule: creating
+# this resource only sets it, and destroying it only drops it from the state,
+# leaving the rule as it was last set.
 resource "cloudflare_email_routing_catch_all" "this" {
   zone_id = var.cloudflare_zone_id
   name    = "Catch-all (Terraform, infra repo): off"
