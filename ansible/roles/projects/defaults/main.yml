@@ -6,6 +6,12 @@ projects_file: "{{ playbook_dir }}/../projects.yml"
 # changes that would lose data.
 projects_server_registry: /etc/infra/projects.json
 
+# Where validate.yml looks for the databases that exist on the server. Same
+# names as roles/postgres (compose project, service and data volume).
+projects_postgres_compose_project: postgres
+projects_postgres_compose_service: postgres
+projects_postgres_volume: postgres_data
+
 # Static sites. Each project with site: true gets
 #   /srv/sites/<name>/placeholder/     root's; shown until the first deploy
 #   /srv/sites/<name>/releases/<id>/   one directory per deployed version,
