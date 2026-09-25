@@ -27,11 +27,13 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only | set when created |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – | – |
+| Backups admin token (not in `.env`) | Cloudflare API token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration. Kept in the password manager and typed in only for its runs | `Account → Workers R2 Storage → Edit` on this account only | set when created |
+| Backup token (not in `.env`) | R2 S3 credentials the server uploads backups with. Created by hand, stored only on the server | `Object Read & Write` on `infra-backups` only | set when created |
 | GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | set when created |
 
 When you create a token, replace "set when created" with its expiration date (not a secret), and put a reminder in your calendar a week before it: an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running.
 
-The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. The R2 credentials are a separate token: a leak of either one does not expose the other.
+The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. It has no R2 permission on purpose: see [`backup-bucket/`](backup-bucket/README.md). The R2 credentials (the state's and the server's) are separate tokens: a leak of one does not expose the others.
 
 ## State
 
@@ -71,6 +73,10 @@ Check that ICMPv6 passes the cloud firewall. DigitalOcean's docs do not state it
 ping -6 -c3 server.abrunacci.dev
 tracepath -6 server.abrunacci.dev   # should report the path MTU without stalling
 ```
+
+## Backups bucket
+
+The R2 bucket for the server's backups, its lock and its lifecycle are a separate configuration, with its own state and its own token, in [`backup-bucket/`](backup-bucket/README.md): the token that can change them is not the one in `.env`.
 
 ## Safety rails
 
