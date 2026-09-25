@@ -5,16 +5,19 @@ locals {
   projects   = yamldecode(file("${path.module}/../projects.yml")).projects
   subdomains = [for p in local.projects : p.subdomain]
   reserved   = ["server", "status", "www"]
-  # "@" is the root domain. www exists only with it, and only redirects to it.
-  has_root = contains(local.subdomains, "@")
+  # "@" is the root domain. www exists only when a site is served there: its
+  # redirect lives in that site's Caddy file.
+  has_root_site = contains([for p in local.projects : p.subdomain if p.site], "@")
 
   # Every hostname that points at the Droplet, keyed by its label ("@" for the
   # root domain):
   #   server -> SSH/Ansible target, so no IP address is ever written in the repo
   #   status -> Gatus status page
   #   one per project subdomain, and www when a project is on the root domain
+  # distinct(): a repeated or reserved subdomain must reach the preconditions
+  # in dns.tf, which say what is wrong, instead of failing here as a duplicate key.
   hostnames = {
-    for h in concat(["server", "status"], local.subdomains, local.has_root ? ["www"] : []) :
+    for h in distinct(concat(["server", "status"], local.subdomains, local.has_root_site ? ["www"] : [])) :
     h => h == "@" ? var.domain : "${h}.${var.domain}"
   }
 

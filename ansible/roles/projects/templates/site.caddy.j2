@@ -41,6 +41,10 @@
 # The root domain's project also answers on www, only to send visitors to the
 # root domain, keeping the path and query string.
 www.{{ domain }} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
 	redir https://{{ domain }}{uri} permanent
 }
 {% endif %}

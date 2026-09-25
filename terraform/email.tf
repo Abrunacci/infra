@@ -22,6 +22,14 @@ resource "cloudflare_email_routing_dns" "this" {
 resource "cloudflare_email_routing_address" "forward" {
   account_id = var.cloudflare_account_id
   email      = var.email_forward_to
+
+  lifecycle {
+    # Changing the inbox replaces the address. The new one is created first;
+    # the rules' precondition stops them from moving to it until it is
+    # verified, and the old one is destroyed only after they move. Mail keeps
+    # reaching the old inbox meanwhile (see "Mail" in the README).
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_email_routing_rule" "forward" {

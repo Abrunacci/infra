@@ -101,7 +101,7 @@ variable "email_forward_to" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", var.email_forward_to)) && !endswith(var.email_forward_to, "@${var.domain}")
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", lower(var.email_forward_to))) && !endswith(lower(var.email_forward_to), "@${var.domain}")
     error_message = "email_forward_to must be an address outside the domain (forwarding to itself would loop)."
   }
 }
