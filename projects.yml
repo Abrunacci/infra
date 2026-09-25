@@ -28,3 +28,10 @@ projects:
     site: true
     database: false
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICpY4pPwbax2IDkkw0zvPWsFXQ6DAxkLUBbxWsEJ6939 cuanto-cuesta-deploy
+
+  - name: abrunacci-dev
+    subdomain: "@"
+    title: Alejandro Brunacci
+    repo: https://github.com/Abrunacci/abrunacci.dev
+    site: true
+    database: false
