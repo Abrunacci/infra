@@ -1,2 +1,3 @@
-# Python scripts installed on the server (scripts/). Same line length as yamllint.
+# Python scripts installed on the server (scripts/) and the test image
+# (tests/db-probe/). Same line length as yamllint.
 line-length = 120

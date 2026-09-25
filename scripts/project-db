@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# A project's PostgreSQL database and roles. Run on the server by the admin,
+# and by the playbook (ensure).
+#
+#   sudo project-db list                        databases, owners and sizes
+#   sudo project-db ensure PROJECT [--allow-empty]
+#                                               create or check the database and roles (the
+#                                               playbook runs it); --allow-empty: see below
+#   sudo project-db dump PROJECT                a dump now, in /var/backups/infra/PROJECT/
+#   sudo project-db retire PROJECT              final dump, then drop the database, its roles
+#                                               and its credentials (asks to type the name)
+#
+# For project my-app: database my_app, owned by the role my_app (LOGIN,
+# CREATEROLE, nothing else), which only the migrations use; the app logs in as
+# my_app_app, which owns nothing and can only connect to its own database. The
+# owner administers my_app_app (to grant it privileges) without inheriting or
+# assuming it, and can create roles of its own, never superusers or roles that
+# bypass row level security. An existing role is only accepted if it carries
+# the comment set here and nobody else has a hold on it (no membership in the
+# owner at all; in the app's role, only the owner's, as set here), so roles
+# another project's migrations prepared in advance are never taken over.
+#
+# Passwords are generated here once (/etc/infra/secrets/projects/PROJECT/,
+# root only) and written into the env files Compose passes to the containers:
+#   database-app.env      DATABASE_URL (as my_app_app)             the backend
+#   database-migrate.env  MIGRATION_DATABASE_URL (as my_app),       migrations
+#                         APP_DB_USER
+# They reach PostgreSQL through psql's stdin, never a command line.
+#
+# ensure never creates an empty database where one existed: once created, a
+# marker stays in /var/lib/infra/backends/PROJECT/database (retire leaves it,
+# saying so), and a missing database then has to be restored
+# (ansible/README.md). --allow-empty, run by hand, starts over with an empty
+# one.
+# Installed by Ansible (roles/projects) as /usr/local/sbin/project-db.
+set -euo pipefail
+umask 077
+export LC_ALL=C
+# shellcheck source=scripts/backend-lib.sh
+. /usr/local/lib/infra/backend.sh
+
+fail() {
+  echo "project-db: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: sudo project-db {list | ensure PROJECT [--allow-empty] | dump PROJECT | retire PROJECT}" >&2
+  exit 2
+}
+
+[[ $# -ge 1 ]] || usage
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+action="$1"
+shift
+case "$action" in
+  list) [[ $# -eq 0 ]] || usage ;;
+  ensure) [[ $# -eq 1 || ($# -eq 2 && "$2" == --allow-empty) ]] || usage ;;
+  dump | retire) [[ $# -eq 1 ]] || usage ;;
+  *) usage ;;
+esac
+if [[ $# -ge 1 ]]; then
+  project="$1"
+  [[ "$project" =~ $NAME_RE ]] || fail "invalid project name"
+  db_names "$project"
+  secrets="$SECRETS_DIR/$project"
+  marker="$STATE_DIR/$project/database"
+fi
+# Compose and psql must never pick up files from the admin's directory.
+cd /
+db_container
+
+owner_comment() { echo "infra: owner of database $DB_NAME"; }
+app_comment() { echo "infra: app login of database $DB_NAME"; }
+
+# "count|comment" for a role; "0|" when it does not exist.
+role_state() {
+  db_psql <<<"SELECT count(*) || '|' || coalesce(max(shobj_description(oid, 'pg_authid')), '')
+              FROM pg_roles WHERE rolname = '$1'"
+}
+
+# Memberships in ROLE that do not match what ensure sets: none at all for the
+# owner; for the app's role, only the owner's, with ADMIN and without INHERIT
+# or SET. Prints how many; a role that does not exist has none.
+foreign_members() {
+  local role="$1" allowed="$2"
+  db_psql <<<"SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+              WHERE r.rolname = '$role'
+                AND NOT ('$allowed' <> '' AND m.member = (SELECT oid FROM pg_roles WHERE rolname = '$allowed')
+                         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)"
+}
+
+# A password file, created once: 64 hex characters.
+password() {
+  local file="$secrets/$1.password"
+  if [[ ! -f "$file" ]]; then
+    openssl rand -hex 32 >"$file.tmp"
+    mv -f "$file.tmp" "$file"
+  fi
+  chmod 0600 "$file"
+  local value
+  value="$(<"$file")"
+  [[ "$value" =~ ^[0-9a-f]{64}$ ]] || fail "$file is not a generated password"
+  printf '%s' "$value"
+}
+
+# Replaces FILE with CONTENT if it differs. Returns 0 if it changed.
+write_if_changed() {
+  local file="$1" content="$2"
+  if [[ -f "$file" && "$(<"$file")" == "$content" ]]; then
+    chmod 0600 "$file"
+    return 1
+  fi
+  printf '%s\n' "$content" >"$file.tmp"
+  chmod 0600 "$file.tmp"
+  mv -f "$file.tmp" "$file"
+}
+
+cmd_list() {
+  printf '%-32s %-32s %s\n' DATABASE OWNER SIZE
+  db_psql <<<"SELECT datname || '|' || pg_get_userbyid(datdba) || '|' || pg_size_pretty(pg_database_size(oid))
+              FROM pg_database WHERE datname NOT IN ('postgres', 'template0', 'template1') ORDER BY 1" \
+    | while IFS='|' read -r d o z; do printf '%-32s %-32s %s\n' "$d" "$o" "$z"; done
+}
+
+cmd_ensure() {
+  local allow_empty="${1:-}" owner_state app_state db_owner created=0 changed=0 owner_pw app_pw
+  backend_read "$project"
+  [[ "$BACKEND_DATABASE" == true ]] || fail "$project has no database in projects.yml"
+  [[ -d "$secrets" && -d "$STATE_DIR/$project" ]] || fail "the backend's directories are missing (run the playbook)"
+  backend_lock "$project" 120
+
+  # Never take over what this project did not create.
+  owner_state="$(role_state "$DB_OWNER")"
+  app_state="$(role_state "$DB_APP")"
+  [[ "$owner_state" == "0|" || "$owner_state" == "1|$(owner_comment)" ]] \
+    || fail "role $DB_OWNER exists but was not created for $project; nothing was changed"
+  [[ "$app_state" == "0|" || "$app_state" == "1|$(app_comment)" ]] \
+    || fail "role $DB_APP exists but was not created for $project; nothing was changed"
+  [[ "$(foreign_members "$DB_OWNER" "")" == 0 ]] \
+    || fail "another role has a hold on $DB_OWNER (pg_auth_members); nothing was changed"
+  [[ "$(foreign_members "$DB_APP" "$DB_OWNER")" == 0 ]] \
+    || fail "another role has a hold on $DB_APP (pg_auth_members); nothing was changed"
+  db_owner="$(db_psql <<<"SELECT coalesce(max(pg_get_userbyid(datdba)), '') FROM pg_database WHERE datname = '$DB_NAME'")"
+  [[ -z "$db_owner" || "$db_owner" == "$DB_OWNER" ]] \
+    || fail "database $DB_NAME exists but belongs to $db_owner; nothing was changed"
+  if [[ -z "$db_owner" && -f "$marker" && "$allow_empty" != --allow-empty ]]; then
+    if [[ "$(<"$marker")" == retired* ]]; then
+      fail "database $DB_NAME was $(<"$marker"). To create a new, empty one: sudo project-db ensure $project --allow-empty"
+    fi
+    fail "database $DB_NAME was created on $(<"$marker") and is missing now. Restore it (ansible/README.md," \
+      "\"Restoring a project's database\"), or start over with an empty one: sudo project-db ensure $project --allow-empty"
+  fi
+  if [[ -z "$db_owner" && -f "$marker" ]]; then
+    [[ -t 0 ]] || fail "--allow-empty asks for confirmation: run it in a terminal"
+    local answer
+    read -r -p "Create an EMPTY database $DB_NAME for $project, where one existed? Type the project name: " answer
+    [[ "$answer" == "$project" ]] || fail "not confirmed; nothing was changed"
+  fi
+
+  owner_pw="$(password db-owner)"
+  app_pw="$(password db-app)"
+  [[ "$owner_state" == "0|" || "$app_state" == "0|" || -z "$db_owner" ]] && created=1
+
+  # Attributes, passwords, expiry, connection limits and per-role settings are
+  # set on every run, so a migration cannot leave them changed.
+  # If a statement fails, PostgreSQL would log its text, passwords included.
+  db_psql >/dev/null <<SQL
+SET log_min_error_statement = panic;
+SET client_min_messages = warning;
+$([[ "$owner_state" == "0|" ]] && echo "CREATE ROLE \"$DB_OWNER\" LOGIN;")
+COMMENT ON ROLE "$DB_OWNER" IS '$(owner_comment)';
+ALTER ROLE "$DB_OWNER" LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$owner_pw';
+ALTER ROLE "$DB_OWNER" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_OWNER" RESET ALL;
+$([[ "$app_state" == "0|" ]] && echo "CREATE ROLE \"$DB_APP\" LOGIN;")
+COMMENT ON ROLE "$DB_APP" IS '$(app_comment)';
+ALTER ROLE "$DB_APP" LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$app_pw';
+ALTER ROLE "$DB_APP" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_APP" RESET ALL;
+GRANT "$DB_APP" TO "$DB_OWNER" WITH ADMIN OPTION, INHERIT FALSE, SET FALSE;
+$([[ -z "$db_owner" ]] && echo "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_OWNER\";")
+ALTER ROLE "$DB_OWNER" IN DATABASE "$DB_NAME" RESET ALL;
+ALTER ROLE "$DB_APP" IN DATABASE "$DB_NAME" RESET ALL;
+REVOKE ALL ON DATABASE "$DB_NAME" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$DB_NAME" TO "$DB_APP";
+REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
+SQL
+  [[ -f "$marker" && -n "$db_owner" ]] || date -u '+%F %H:%M UTC' >"$marker"
+
+  local base="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_ADDRESS:$POSTGRES_PORT/$DB_NAME"
+  # shellcheck disable=SC2059
+  write_if_changed "$secrets/database-app.env" "DATABASE_URL=$(printf "$base" "$DB_APP" "$app_pw")" && changed=1
+  # shellcheck disable=SC2059
+  write_if_changed "$secrets/database-migrate.env" \
+    "$(printf 'MIGRATION_DATABASE_URL=%s\nAPP_DB_USER=%s' "$(printf "$base" "$DB_OWNER" "$owner_pw")" "$DB_APP")" \
+    && changed=1
+
+  if ((created)); then
+    logger -t project-db -- "project=$project created database=$DB_NAME by=${SUDO_USER:-root}"
+    echo "created"
+  elif ((changed)); then
+    echo "updated"
+  else
+    echo "unchanged"
+  fi
+}
+
+cmd_dump() {
+  db_exists "$DB_NAME" || fail "there is no database $DB_NAME"
+  local file
+  file="$(db_dump "$DB_NAME" "$DUMPS_DIR/$project" "manual-$(date -u +%Y%m%dT%H%M%SZ)")" || fail "pg_dump failed"
+  logger -t project-db -- "project=$project dump=$file by=${SUDO_USER:-root}"
+  echo "$file ($(du -h "$file" | cut -f1))"
+}
+
+cmd_retire() {
+  [[ -t 0 ]] || fail "retire asks for confirmation: run it in a terminal"
+  local roles r state answer file="" exists=0
+  db_exists "$DB_NAME" && exists=1
+  state="$(role_state "$DB_OWNER")"
+  [[ "$state" == "0|" || "$state" == "1|$(owner_comment)" ]] || fail "role $DB_OWNER was not created for $project"
+  # Every role the owner administers: the app login, and the ones its
+  # migrations created.
+  roles="$(db_psql <<<"SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+                       JOIN pg_roles o ON o.oid = m.member
+                       WHERE o.rolname = '$DB_OWNER' AND m.admin_option ORDER BY 1")"
+
+  echo "This retires $project's database for good:"
+  if ((exists)); then
+    echo "  - stops its backend and takes a final dump in $DUMPS_DIR/retired/"
+    echo "  - drops database $DB_NAME ($(db_psql <<<"SELECT pg_size_pretty(pg_database_size('$DB_NAME'))"))"
+  else
+    echo "  - (database $DB_NAME does not exist)"
+  fi
+  echo "  - drops roles: ${roles//$'\n'/, }${roles:+, }$([[ "$state" == "0|" ]] || echo "$DB_OWNER")"
+  echo "  - removes its database credentials and its dumps in $DUMPS_DIR/$project/"
+  read -r -p "Type the project name to go on: " answer
+  [[ "$answer" == "$project" ]] || fail "not confirmed; nothing was changed"
+
+  backend_lock "$project" 120
+  docker compose --project-name "backend-$project" down </dev/null >&2 9>&- || fail "could not stop the backend"
+  if ((exists)); then
+    file="$(db_dump "$DB_NAME" "$DUMPS_DIR/retired" "$project-$(date -u +%Y%m%dT%H%M%SZ)")" \
+      || fail "the final dump failed; nothing was dropped"
+    echo "Final dump: $file ($(du -h "$file" | cut -f1)). Copy it off the server."
+  fi
+  {
+    ((exists)) && echo "DROP DATABASE \"$DB_NAME\" WITH (FORCE);"
+    while read -r r; do [[ -n "$r" ]] && echo "DROP ROLE IF EXISTS \"$r\";"; done <<<"$roles"
+    [[ "$state" == "0|" ]] || echo "DROP ROLE \"$DB_OWNER\";"
+  } | db_psql >/dev/null
+  rm -f "$secrets/db-owner.password" "$secrets/db-app.password" \
+    "$secrets/database-app.env" "$secrets/database-migrate.env"
+  # Kept, saying so: a playbook run that still declares the database does not
+  # create an empty one in its place.
+  [[ -d "$STATE_DIR/$project" ]] && echo "retired on $(date -u '+%F %H:%M UTC')" >"$marker"
+  rm -rf "${DUMPS_DIR:?}/$project"
+  # The server's registry stops saying this project has a database, so the
+  # playbook's check lets it go.
+  python3 -I - "$REGISTRY" "$project" <<'PY'
+import json, os, sys
+path, name = sys.argv[1], sys.argv[2]
+registry = json.load(open(path))
+for p in registry["projects"]:
+    if p["name"] == name:
+        p["database"] = False
+        p["database_name"] = None
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(registry, f, indent=4, sort_keys=True, ensure_ascii=False)
+    f.write("\n")
+os.chmod(tmp, 0o644)
+os.replace(tmp, path)
+PY
+  logger -t project-db -- "project=$project retired database=$DB_NAME dump=${file:-none} by=${SUDO_USER:-root}"
+  echo "Retired $project's database. Now take it out of projects.yml (or set database: false) and run the playbook."
+}
+
+case "$action" in
+  list) cmd_list ;;
+  ensure) cmd_ensure "${2:-}" ;;
+  dump) cmd_dump ;;
+  retire) cmd_retire ;;
+esac

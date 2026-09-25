@@ -1,7 +1,7 @@
 # shellcheck shell=bash disable=SC2034
 # (SC2034: the constants and SWITCH_RESULT are used by the scripts that source this file.)
-# Shared by deploy-backend, backend-rollback, backend-status and
-# project-secret, which source it. Each of them defines fail() first.
+# Shared by deploy-backend, backend-rollback, backend-status, project-secret
+# and project-db, which source it. Each of them defines fail() first.
 # Installed by Ansible (roles/projects) as /usr/local/lib/infra/backend.sh.
 #
 # Per project (names as in roles/projects/defaults):
@@ -12,6 +12,13 @@
 #                                                 BACKEND_IMAGE, BACKEND_RELEASE
 #   /var/lib/infra/backends/NAME/releases         history, oldest first:
 #                                                 "<release> <image@digest>"
+# With a database (project-db):
+#   /etc/infra/secrets/projects/NAME/db-owner.password, db-app.password
+#   /etc/infra/secrets/projects/NAME/database-app.env      DATABASE_URL (the app)
+#   /etc/infra/secrets/projects/NAME/database-migrate.env  MIGRATION_DATABASE_URL,
+#                                                          APP_DB_USER (migrations)
+#   /var/lib/infra/backends/NAME/database         when the database was created
+#   /var/backups/infra/NAME/                      dumps taken before migrations
 
 readonly REGISTRY=/etc/infra/projects.json
 readonly BACKENDS_DIR=/opt/infra/projects
@@ -28,6 +35,11 @@ readonly RELEASE_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$'
 readonly DIGEST_RE='^sha256:[0-9a-f]{64}$'
 readonly REPO_RE='^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$'
 readonly KEY_RE='^[A-Z][A-Z0-9_]{0,63}$'
+readonly DUMPS_DIR=/var/backups/infra
+readonly KEEP_DUMPS=3
+readonly MIGRATE_SECONDS=600
+# PostgreSQL's fixed address and Compose names (roles/projects writes it).
+readonly DATABASE_CONF=/etc/infra/database.conf
 # 1: also print a failed container's log. Only backend-rollback (run by the
 # admin in a terminal) sets it, after sourcing this file; never taken from the
 # environment. A deploy never prints it: its output goes to CI's logs, which
@@ -35,10 +47,11 @@ readonly KEY_RE='^[A-Z][A-Z0-9_]{0,63}$'
 BACKEND_SHOW_LOGS=0
 
 # Reads PROJECT's backend from the server's registry into BACKEND_REPO,
-# BACKEND_PORT, BACKEND_HEALTH and BACKEND_SECRETS (an array of "KEY kind").
+# BACKEND_PORT, BACKEND_HEALTH, BACKEND_DATABASE and BACKEND_MIGRATE (true or
+# false), BACKEND_URL_SCHEME and BACKEND_SECRETS (an array of "KEY kind").
 # The registry is written by Ansible from a checked projects.yml; every value
-# is checked again here, since it ends up in commands.
-backend_load() {
+# is checked again here, since it ends up in commands and files.
+backend_read() {
   local out s
   local -a lines
   out="$(python3 -I - "$REGISTRY" "$1" <<'PY'
@@ -54,6 +67,9 @@ for p in json.load(open(registry))["projects"]:
         print(b["image"])
         print(b["port"])
         print(b["health"])
+        print("true" if p.get("database") else "false")
+        print("true" if b.get("migrate") else "false")
+        print(b.get("database_url_scheme") or "postgresql")
         for key, kind in sorted((b.get("secrets") or {}).items()):
             print(f"{key} {kind}")
         break
@@ -63,13 +79,22 @@ PY
   mapfile -t lines <<<"$out"
   [[ "${lines[0]}" == backend ]] || fail "$1 has no backend"
   BACKEND_REPO="${lines[1]}" BACKEND_PORT="${lines[2]}" BACKEND_HEALTH="${lines[3]}"
-  BACKEND_SECRETS=("${lines[@]:4}")
+  BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
+  BACKEND_SECRETS=("${lines[@]:7}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
   [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
   [[ "$BACKEND_HEALTH" =~ ^/[A-Za-z0-9._~/-]*$ ]] || fail "invalid health path in the registry"
+  [[ "$BACKEND_DATABASE" =~ ^(true|false)$ && "$BACKEND_MIGRATE" =~ ^(true|false)$ ]] \
+    || fail "invalid database settings in the registry"
+  [[ "$BACKEND_URL_SCHEME" =~ ^[a-z][a-z0-9+.-]{0,31}$ ]] || fail "invalid database URL scheme in the registry"
   for s in "${BACKEND_SECRETS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual)$ ]] || fail "invalid secret in the registry"
   done
+}
+
+# backend_read, and the backend's files must be there (the playbook ran).
+backend_load() {
+  backend_read "$1"
   [[ -f "$BACKENDS_DIR/$1/compose.yml" && -d "$STATE_DIR/$1" ]] \
     || fail "the backend's files are missing (run the playbook)"
 }
@@ -102,11 +127,14 @@ backend_release_image() {
   done <"$file"
 }
 
+# Compose for PROJECT's backend. The deployed release's image comes from
+# release.env; before the first deploy there is none, and a caller that
+# needs an image sets BACKEND_IMAGE itself (it wins over the file).
 backend_compose() {
-  local project="$1"
+  local project="$1" env_file=()
   shift
-  docker compose --project-directory "$BACKENDS_DIR/$project" \
-    --env-file "$STATE_DIR/$project/release.env" "$@" </dev/null 9>&-
+  [[ -f "$STATE_DIR/$project/release.env" ]] && env_file=(--env-file "$STATE_DIR/$project/release.env")
+  docker compose --project-directory "$BACKENDS_DIR/$project" "${env_file[@]}" "$@" </dev/null 9>&-
 }
 
 # Checks the health path from Caddy's container, the way requests get there
@@ -246,4 +274,59 @@ backend_secret_problems() {
     fi
   done
   return "$bad"
+}
+
+# ---------------------------------------------------------------------------
+# Databases
+
+# Names of PROJECT's database and roles: the database and its owner share the
+# name (the project's, with - turned into _), and the app logs in as <db>_app.
+db_names() {
+  DB_NAME="${1//-/_}"
+  DB_OWNER="$DB_NAME"
+  DB_APP="${DB_NAME}_app"
+}
+
+# Loads PostgreSQL's address and finds its container into PG_CONTAINER.
+db_container() {
+  [[ -r "$DATABASE_CONF" ]] || fail "missing $DATABASE_CONF (run the playbook)"
+  # shellcheck source=/dev/null
+  . "$DATABASE_CONF"
+  : "${POSTGRES_ADDRESS:?}" "${POSTGRES_PORT:?}" "${POSTGRES_COMPOSE_PROJECT:?}" "${POSTGRES_COMPOSE_SERVICE:?}"
+  PG_CONTAINER="$(docker ps -q --filter "label=com.docker.compose.project=$POSTGRES_COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.service=$POSTGRES_COMPOSE_SERVICE" \
+    --filter label=com.docker.compose.oneoff=False 9>&-)"
+  [[ -n "$PG_CONTAINER" && "$PG_CONTAINER" != *$'\n'* ]] || fail "the PostgreSQL container is not running"
+}
+
+# Runs psql as the superuser, over the container's local socket, reading SQL
+# from stdin (so passwords never appear in any command line). Prints the
+# unaligned output.
+db_psql() {
+  docker exec -i "$PG_CONTAINER" psql -U postgres -d "${1:-postgres}" -AtqX -v ON_ERROR_STOP=1 9>&-
+}
+
+db_exists() {
+  [[ "$(db_psql <<<"SELECT count(*) FROM pg_database WHERE datname = '$1'")" == 1 ]]
+}
+
+# Dumps DATABASE (custom format) to DIR/LABEL.dump, root only, and keeps the
+# newest KEEP dumps whose name starts like LABEL's prefix (before the first -).
+# Prints the dump's path.
+db_dump() {
+  local database="$1" dir="$2" label="$3" keep_dumps="${4:-0}" file tmp prefix
+  install -d -m 0700 -o root -g root "$DUMPS_DIR" "$dir"
+  file="$dir/$label.dump"
+  tmp="$dir/.$label.dump.$$"
+  if ! (umask 077 && docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$database" >"$tmp" 9>&-); then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$file"
+  if ((keep_dumps > 0)); then
+    prefix="${label%%-*}-"
+    find "$dir" -maxdepth 1 -type f -name "$prefix*.dump" -printf '%f\n' | sort -r | tail -n +$((keep_dumps + 1)) \
+      | while read -r old; do rm -f -- "${dir:?}/$old"; done
+  fi
+  printf '%s\n' "$file"
 }

@@ -24,11 +24,19 @@
       - projects_subdomains | unique | length == projects_subdomains | length
       # One key per project: a key must never deploy two projects.
       - projects_deploy_keys | unique | length == projects_deploy_keys | length
-    fail_msg: "projects.yml: it must hold only a projects list, with unique names, subdomains and deploy keys."
+      # Database roles are shared by the whole cluster: project x-app's
+      # database role (x_app) must not be project x's app role.
+      - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
+    fail_msg: >-
+      projects.yml: it must hold only a projects list, with unique names, subdomains and deploy keys,
+      and no project with a database named like another one's plus -app.
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
     projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
+    projects_db_names: >-
+      {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database', 'true')
+         | map(attribute='name') | select('string') | map('replace', '-', '_') | list }}
     # The key itself (its base64 blob), whatever its comment says.
     # Malformed keys are left to the per-project check below, which says why.
     projects_deploy_keys: >-
@@ -52,7 +60,8 @@
         item.backend is not defined
         or (item.backend is mapping
             and item.backend.keys()
-                | difference(['image', 'port', 'health', 'paths', 'env', 'secrets', 'memory']) | length == 0
+                | difference(['image', 'port', 'health', 'paths', 'env', 'secrets', 'memory', 'migrate',
+                              'database_url_scheme']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and item.backend.port is integer and item.backend.port is not boolean
@@ -73,6 +82,22 @@
       # At least one component; only a backend can use a database.
       - item.site or item.backend is defined
       - not item.database or item.backend is defined
+      # <name>_app, the app's role, must fit PostgreSQL's 63 characters.
+      - not item.database or item.name | length <= 59
+      - >-
+        item.backend is not defined
+        or ((item.backend.migrate is not defined and item.backend.database_url_scheme is not defined) or item.database)
+      - >-
+        item.backend is not defined or item.backend.migrate is not defined
+        or (item.backend.migrate is sequence and item.backend.migrate is not string
+            and item.backend.migrate is not mapping
+            and item.backend.migrate | length >= 1 and item.backend.migrate | length <= 32
+            and item.backend.migrate | reject('string') | list | length == 0
+            and item.backend.migrate | reject('match', '^[^$\n\r]{1,256}\Z') | list | length == 0)
+      - >-
+        item.backend is not defined or item.backend.database_url_scheme is not defined
+        or (item.backend.database_url_scheme is string
+            and item.backend.database_url_scheme is match('^[a-z][a-z0-9+.-]{0,31}\Z'))
       # With a site the backend gets only its paths, which must include its
       # health check; without a site it gets every path.
       - >-
@@ -229,6 +254,50 @@
          or projects_databases_probe.msg | default('unexpected output', true) }}
       Nothing was changed. See ansible/README.md, "When the databases cannot be listed".
     quiet: true
+
+# The other way round: a project that declares a database which was created
+# once (project-db leaves a marker right after creating it) and PostgreSQL
+# does not have it any more: a lost volume, a database dropped by hand, or one
+# retired with project-db. The playbook would otherwise create an empty one in
+# its place. A project whose database was never created has no marker.
+- name: Look for the markers of databases created before
+  ansible.builtin.stat:
+    path: "{{ projects_backends_state_dir }}/{{ item.name }}/database"
+  register: projects_db_markers
+  loop: "{{ projects_registry.projects | selectattr('database') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [projects_databases]
+
+- name: Read the markers of databases created before
+  ansible.builtin.slurp:
+    src: "{{ item.stat.path }}"
+  register: projects_db_marker_contents
+  loop: "{{ projects_db_markers.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [projects_databases]
+
+- name: Refuse a declared database that is missing
+  ansible.builtin.assert:
+    that:
+      - projects_missing | length == 0
+    fail_msg: >-
+      {% for m in projects_missing %}{{ m.item.item.name }}'s database
+      {%- if (m.content | b64decode) is match('retired') %} was {{ m.content | b64decode | trim }}: take the
+      project out of projects.yml (or set database: false), or create a new, empty database:
+      sudo project-db ensure {{ m.item.item.name }} --allow-empty.
+      {%- else %} was created on {{ m.content | b64decode | trim }} and PostgreSQL does not have it. The playbook
+      does not create an empty one in its place: restore it (ansible/README.md, "Restoring a project's
+      database"), or start over with an empty one: sudo project-db ensure {{ m.item.item.name }} --allow-empty.
+      {%- endif %} {% endfor %}Nothing was changed.
+    quiet: true
+  tags: [projects_databases]
+  vars:
+    projects_existing: "{{ projects_databases_probe.stdout_lines[1:] | map('from_json') | list }}"
+    projects_missing: >-
+      {{ projects_db_marker_contents.results
+         | rejectattr('item.item.name', 'in', projects_existing | map('replace', '_', '-') | list) | list }}
 
 - name: Refuse leaving a database without its project
   tags: [projects_databases]

@@ -12,7 +12,11 @@
 #
 # The image repository comes from the project's entry in the server's
 # registry (projects.yml), never from the client: CI only chooses which digest
-# of it. The image is pulled by digest, the container is recreated with it,
+# of it. The image is pulled by digest. With a database and a migrate command,
+# the database is dumped (the last 3 dumps are kept) and the migrations run in
+# a one-off container of the new image, on the db network only; if they fail,
+# the deploy stops there and the running release is untouched. Then the
+# container is recreated with the new image,
 # and its health path is checked from Caddy's container for up to 60 s. If it
 # never answers, the previous release is put back and checked, and the deploy
 # fails; what was running keeps running. The container's log never goes to
@@ -61,18 +65,60 @@ backend_lock "$project"
 problems="$(backend_secret_problems "$project")" \
   || fail "the backend's secrets are not ready: $(tr '\n' ';' <<<"$problems" | sed 's/;$//')"
 
+# A database retired (or dropped from projects.yml) while the compose file,
+# written by the playbook, still expects it: the playbook has to run first.
+if [[ "$BACKEND_DATABASE" != true ]] && grep -q 'database-app.env' "$BACKENDS_DIR/$project/compose.yml"; then
+  fail "the backend's configuration still expects a database that projects.yml no longer declares (run the playbook)"
+fi
+if [[ "$BACKEND_DATABASE" == true ]]; then
+  [[ -f "$SECRETS_DIR/$project/database-app.env" && -f "$SECRETS_DIR/$project/database-migrate.env" ]] \
+    || fail "the project's database is not set up yet (run the playbook)"
+  db_names "$project"
+  db_container
+  db_exists "$DB_NAME" \
+    || fail "database $DB_NAME is missing; nothing was deployed (ansible/README.md, \"Restoring a project's database\")"
+fi
+
 image="$BACKEND_REPO@$digest"
 release="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}"
 [[ -z "$(backend_release_image "$project" "$release")" ]] || fail "release $release already exists; try again"
 
 backend_pull "$image"
 
-previous="$(backend_current "$project" BACKEND_RELEASE)"
-if ! backend_switch "$project" "$release" "$image"; then
-  # The failed image is never in the history, so nothing would ever remove it.
+# A failed image is never in the history, so nothing would ever remove it.
+forget_image() {
   if ! grep -qF " $image" "$STATE_DIR/$project/releases" 2>/dev/null; then
     docker image rm "$image" >/dev/null 2>&1 </dev/null 9>&- || true
   fi
+}
+
+if [[ "$BACKEND_MIGRATE" == true ]]; then
+  dump="$(db_dump "$DB_NAME" "$DUMPS_DIR/$project" "before-$release" "$KEEP_DUMPS")" \
+    || fail "the dump before the migrations failed; nothing was changed"
+  # The migrations' output goes to the journal only, like the container's
+  # log: it can hold connection details.
+  # Named, so it can be removed if it outlives its time: timeout stops the
+  # Compose client, not the container.
+  migrate_container="backend-$project-migrate"
+  docker rm -f "$migrate_container" >/dev/null 2>&1 </dev/null 9>&- || true
+  rc=0
+  out="$(cd / && BACKEND_IMAGE="$image" timeout --kill-after=10 "$MIGRATE_SECONDS" docker compose \
+    --project-directory "$BACKENDS_DIR/$project" run --rm --no-deps -T --name "$migrate_container" migrate \
+    </dev/null 2>&1 9>&-)" || rc=$?
+  docker rm -f "$migrate_container" >/dev/null 2>&1 </dev/null 9>&- || true
+  logger -t backend-migrate -- "project=$project release=$release exit=$rc" 2>/dev/null || true
+  [[ -z "$out" ]] || logger -t backend-migrate <<<"$out" 2>/dev/null || true
+  if [[ $rc -ne 0 ]]; then
+    forget_image
+    what="failed (exit $rc)"
+    [[ $rc -eq 124 || $rc -eq 137 ]] && what="took longer than ${MIGRATE_SECONDS}s and were stopped"
+    fail "the migrations $what; the running release is untouched. Log: sudo journalctl -t backend-migrate. Dump before them: $dump"
+  fi
+fi
+
+previous="$(backend_current "$project" BACKEND_RELEASE)"
+if ! backend_switch "$project" "$release" "$image"; then
+  forget_image
   fail "release $release $SWITCH_RESULT. The container's log is in the journal: sudo journalctl -t backend-log"
 fi
 backend_record "$project" "$release" "$image" "$previous"
