@@ -83,3 +83,25 @@ variable "allow_zero_projects" {
   default     = false
   nullable    = false
 }
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID. Email Routing destination addresses belong to the account, not to the zone."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{32}$", var.cloudflare_account_id))
+    error_message = "cloudflare_account_id must be a 32-character hex string."
+  }
+}
+
+variable "email_forward_to" {
+  description = "Inbox that receives the mail sent to the domain's addresses. Kept out of the repo (it is public): set it in .env. It is stored in the state, which lives in the private R2 bucket."
+  type        = string
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", lower(var.email_forward_to))) && !endswith(lower(var.email_forward_to), "@${var.domain}")
+    error_message = "email_forward_to must be an address outside the domain (forwarding to itself would loop)."
+  }
+}

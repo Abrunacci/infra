@@ -41,8 +41,9 @@
       - item.keys() | difference(projects_allowed_keys) | length == 0
       - item.name is string and item.name is match(projects_label)
       - item.name not in ['postgres', 'template0', 'template1']
-      - item.subdomain is string and item.subdomain is match(projects_label)
-      - item.subdomain not in ['server', 'status']
+      # "@" is the root domain; www is reserved for its redirect.
+      - item.subdomain is string and (item.subdomain == '@' or item.subdomain is match(projects_label))
+      - item.subdomain not in ['server', 'status', 'www']
       - item.site is boolean
       - item.database is boolean
       - item.title is not defined or (item.title is string and item.title | length > 0 and item.title | length <= 80)

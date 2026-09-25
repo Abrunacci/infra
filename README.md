@@ -4,7 +4,7 @@ Infrastructure for my portfolio projects: one DigitalOcean Droplet, Docker Compo
 
 | Directory | What it holds |
 |---|---|
-| [`terraform/`](terraform/README.md) | The Droplet, cloud firewall and DNS records |
+| [`terraform/`](terraform/README.md) | The Droplet, cloud firewall, DNS records and mail forwarding |
 | [`ansible/`](ansible/README.md) | Server configuration: hardening, Docker, Caddy and PostgreSQL |
 | `projects.yml` | Registry of deployed projects: what each one has (a static site, a backend, a database). Checked against `projects.schema.json` |
 
@@ -20,7 +20,7 @@ The domain is registered with Cloudflare Registrar, which requires Cloudflare's 
 - **Fewer moving parts.** With the proxy on, the zone's SSL mode must be "Full (strict)" or requests loop, TLS-ALPN-01 stops working, and caching and WAF rules start affecting the apps. None of that applies here.
 - **Trade-off: the Droplet's IP is public.** Anyone can resolve it, and there is no Cloudflare DDoS protection or WAF in front. For a handful of small portfolio apps this is acceptable. The exposure is kept small instead: the cloud firewall and the host firewall allow only SSH, HTTP(S) and ICMP (see below), SSH accepts keys only, root cannot log in, and sudo asks for a password. If a project ever needs DDoS protection, proxying its record also requires turning Universal SSL back on (or an advanced certificate), adding Cloudflare's CAs to the CAA records, and setting the zone to Full (strict). Without an edge certificate, proxying breaks HTTPS for that host.
 - **CAA records** allow Let's Encrypt and ZeroSSL (`sectigo.com`), the CAs Caddy uses, to issue certificates for the domain, and forbid wildcards. Terraform also turns Cloudflare's Universal SSL off: nothing is proxied, so it is unused, and while it is on, Cloudflare publishes hidden CAA records for its own CAs, wildcards included, which would defeat these.
-- **Least-privilege tokens.** The Cloudflare token can edit only DNS records and SSL settings, and only in this zone. The SSL permission exists solely to keep Universal SSL off. The zone ID is passed as a variable, so the token does not need `Zone:Read`. The R2 credentials for the Terraform state are a separate token, limited to the state bucket.
+- **Least-privilege tokens.** The Cloudflare token can edit DNS records, SSL, Email Routing and zone settings, only in this zone, plus Email Routing destination addresses in the account. The SSL permission exists solely to keep Universal SSL off, and the zone settings one to turn Email Routing on. The zone ID is passed as a variable, so the token does not need `Zone:Read`. The R2 credentials for the Terraform state are a separate token, limited to the state bucket.
 
 ### Firewall: SSH, HTTP(S) and ICMP only
 

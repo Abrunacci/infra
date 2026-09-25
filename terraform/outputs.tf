@@ -15,5 +15,5 @@ output "ipv6_address" {
 
 output "hostnames" {
   description = "Every hostname that points at the Droplet."
-  value       = sort([for h in local.hostnames : "${h}.${var.domain}"])
+  value       = sort(values(local.hostnames))
 }

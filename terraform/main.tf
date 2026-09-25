@@ -4,13 +4,22 @@ locals {
   # would plan the deletion of every project's DNS records.
   projects   = yamldecode(file("${path.module}/../projects.yml")).projects
   subdomains = [for p in local.projects : p.subdomain]
-  reserved   = ["server", "status"]
+  reserved   = ["server", "status", "www"]
+  # "@" is the root domain. www exists only when a site is served there: its
+  # redirect lives in that site's Caddy file.
+  has_root_site = contains([for p in local.projects : p.subdomain if p.site], "@")
 
-  # Every hostname that points at the Droplet:
+  # Every hostname that points at the Droplet, keyed by its label ("@" for the
+  # root domain):
   #   server -> SSH/Ansible target, so no IP address is ever written in the repo
   #   status -> Gatus status page
-  #   one per project subdomain
-  hostnames = toset(concat(local.reserved, local.subdomains))
+  #   one per project subdomain, and www when a project is on the root domain
+  # distinct(): a repeated or reserved subdomain must reach the preconditions
+  # in dns.tf, which say what is wrong, instead of failing here as a duplicate key.
+  hostnames = {
+    for h in distinct(concat(["server", "status"], local.subdomains, local.has_root_site ? ["www"] : [])) :
+    h => h == "@" ? var.domain : "${h}.${var.domain}"
+  }
 
   tags = ["infra", "portfolio"]
 }

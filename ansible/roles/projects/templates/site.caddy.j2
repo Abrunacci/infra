@@ -1,5 +1,5 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
-{{ item.subdomain }}.{{ domain }} {
+{{ domain if item.subdomain == '@' else item.subdomain ~ '.' ~ domain }} {
 	root * {{ projects_sites_dir }}/{{ item.name }}/current
 	encode zstd gzip
 
@@ -36,3 +36,15 @@
 
 	file_server
 }
+{% if item.subdomain == '@' %}
+
+# The root domain's project also answers on www, only to send visitors to the
+# root domain, keeping the path and query string.
+www.{{ domain }} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	redir https://{{ domain }}{uri} permanent
+}
+{% endif %}
