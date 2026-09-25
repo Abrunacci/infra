@@ -16,13 +16,19 @@
 #              project out of this file or setting false makes every run fail.
 #              See ansible/README.md, "Retiring a project with a database".
 #   deploy_key public ed25519 key of the project's CI (optional: without it the
-#              project cannot be deployed). It can only deploy this project.
-#              How to create it: ansible/README.md, "Deploying a project".
-#   backend    optional container, not supported by the playbook yet:
-#                image   repository without tag (the digest lives on the server)
-#                port    port it listens on
-#                health  health check path, with its prefix
-#                paths   paths Caddy sends to it; required with a site
+#              project cannot be deployed). It can only deploy this project:
+#              its site, its backend or both. How to create it:
+#              ansible/README.md, "Deploying a project".
+#   backend    optional container, deployed by CI with deploy-backend:
+#                image    repository without tag (CI sends the digest)
+#                port     port it listens on
+#                health   health check path, with its prefix; any 2xx is healthy
+#                paths    paths Caddy sends to it; required with a site, and
+#                         left out without one (it then gets every path)
+#                env      non-secret variables, public: quoted strings
+#                secrets  names only, each generated or manual; the values
+#                         live on the server (sudo project-secret)
+#                memory   64m to 512m (optional, defaults to 256m)
 projects:
   - name: cuanto-cuesta
     subdomain: cuanto-cuesta

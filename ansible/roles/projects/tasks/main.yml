@@ -15,13 +15,13 @@
       --tags docker,postgres; run the playbook without it.
     quiet: true
 
-# Backends and databases are built in a later PR. Until then, a project that
-# needs a backend fails here instead of half existing.
+# Per-project databases are built in a later PR. Until then, a project that
+# needs one fails here instead of half existing.
 - name: Refuse components that are not supported yet
   ansible.builtin.assert:
     that:
-      - item.backend is not defined
-    fail_msg: "projects.yml: {{ item.name }} has a backend; backend projects are not supported yet."
+      - not item.database
+    fail_msg: "projects.yml: {{ item.name }} has database: true; databases are not supported yet."
     quiet: true
   loop: "{{ projects_registry.projects }}"
   loop_control:
@@ -35,7 +35,17 @@
     group: root
     mode: "0644"
 
-- name: Serve the static sites
+- name: Prepare the static sites
   ansible.builtin.import_tasks: sites.yml
   vars:
     projects_sites: "{{ projects_registry.projects | selectattr('site') | list }}"
+
+- name: Run the backends
+  ansible.builtin.import_tasks: backends.yml
+  vars:
+    projects_backends: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
+
+# After the backends: a Caddy site that sends paths to a backend is written
+# once its container can exist.
+- name: Serve every project through Caddy
+  ansible.builtin.import_tasks: caddy.yml

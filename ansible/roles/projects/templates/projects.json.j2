@@ -10,6 +10,12 @@
         'database': p.database,
         'database_name': (p.name | replace('-', '_')) if p.database else none,
         'deploy_key': p.deploy_key | default(none),
+        'backend': {
+          'image': p.backend.image,
+          'port': p.backend.port,
+          'health': p.backend.health,
+          'secrets': p.backend.secrets | default({}),
+        } if p.backend is defined else none,
       }) -%}
 {%- endfor -%}
 {{ {'projects': entries} | to_nice_json(sort_keys=true, ensure_ascii=false) }}

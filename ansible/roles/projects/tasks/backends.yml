@@ -1,0 +1,201 @@
+---
+# Backends for the projects with one (projects_backends, from main.yml): the
+# commands, directories, env and secrets files and compose file. The container
+# itself is started by deploy-backend; the playbook only restarts one that is
+# already deployed, when its configuration changed.
+
+# Every backend container runs as this user. No login, no home.
+- name: Create the backends system group
+  ansible.builtin.group:
+    name: backends
+    gid: "{{ projects_backends_uid }}"
+    system: true
+
+- name: Create the backends system user
+  ansible.builtin.user:
+    name: backends
+    uid: "{{ projects_backends_uid }}"
+    group: backends
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create the backend directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ projects_backends_dir }}", mode: "0755" }
+    - { path: "{{ projects_backends_secrets_dir }}", mode: "0700" }
+    - { path: "{{ projects_backends_state_dir }}", mode: "0700" }
+    - { path: "{{ projects_registry_config_dir }}", mode: "0700" }
+    - { path: /usr/local/lib/infra, mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create each backend's directories
+  ansible.builtin.file:
+    path: "{{ item.1.base }}/{{ item.0.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.1.mode }}"
+  loop: "{{ projects_backends | product(projects_backend_dirs) | list }}"
+  loop_control:
+    label: "{{ item.1.base }}/{{ item.0.name }}"
+  vars:
+    projects_backend_dirs:
+      - { base: "{{ projects_backends_dir }}", mode: "0755" }
+      - { base: "{{ projects_backends_secrets_dir }}", mode: "0700" }
+      - { base: "{{ projects_backends_state_dir }}", mode: "0700" }
+
+# Server scripts live in scripts/ at the repo root. All of them together, and
+# before this role uses them (backend-rollback --apply below), so the library
+# and the commands that source it never come from different versions.
+- name: Install the backend commands
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    # Sourced by every backend command; never executed.
+    - { src: backend-lib.sh, dest: /usr/local/lib/infra/backend.sh, mode: "0644" }
+    - { src: project-secret, dest: /usr/local/sbin/project-secret, mode: "0755" }
+    - { src: backend-status, dest: /usr/local/sbin/backend-status, mode: "0755" }
+    # Run by deploy.sh for a CI key, and by the admin.
+    - { src: deploy-backend, dest: /usr/local/sbin/deploy-backend, mode: "0755" }
+    - { src: backend-rollback, dest: /usr/local/sbin/backend-rollback, mode: "0755" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+# Created empty once and never replaced: its values are set on the server
+# (project-secret) and never pass through Ansible.
+- name: Create each backend's secrets file
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ projects_backends_secrets_dir }}/{{ item.name }}/secrets.env"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write each backend's environment
+  ansible.builtin.template:
+    src: backend-app.env.j2
+    dest: "{{ projects_backends_dir }}/{{ item.name }}/app.env"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Checked by Compose itself before it replaces the current file.
+- name: Write each backend's compose file
+  ansible.builtin.template:
+    src: backend-compose.yml.j2
+    dest: "{{ projects_backends_dir }}/{{ item.name }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/bin/env BACKEND_IMAGE=validate docker compose --file %s config --quiet
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# The value is created and written on the server; it never appears in the
+# output. Only a missing one is generated.
+- name: Generate each backend's generated secrets
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/project-secret, "{{ item.name }}", generate, "{{ item.key }}"]
+  register: projects_generated
+  changed_when: projects_generated.stdout == 'generated'
+  loop: "{{ projects_generated_secrets }}"
+  loop_control:
+    label: "{{ item.name }} {{ item.key }}"
+  vars:
+    projects_generated_secrets: >-
+      {%- set out = [] -%}
+      {%- for p in projects_backends -%}
+      {%-   for key, kind in (p.backend.secrets | default({})).items() if kind == 'generated' -%}
+      {%-     set _ = out.append({'name': p.name, 'key': key}) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+# From here on, only backends that were deployed: the others have no image
+# yet, and deploy-backend starts them.
+- name: Look for each backend's deployed release
+  ansible.builtin.stat:
+    path: "{{ projects_backends_state_dir }}/{{ item.name }}/release.env"
+  register: projects_releases
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Applies env, memory and secret changes to a deployed backend: Compose
+# recreates the container only if its configuration changed, and its health is
+# then checked. backend-rollback takes the same lock as deploys (so it never
+# runs in the middle of one) and refuses missing or undeclared secrets. There
+# is no automatic way back here: the image did not change, the configuration
+# did. Not run in check mode.
+- name: Apply each deployed backend's configuration
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/backend-rollback, "{{ item.item.name }}", --apply]
+  register: projects_backend_apply
+  changed_when: projects_backend_apply.stdout is match('Applied')
+  loop: "{{ projects_releases.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# A project that no longer has a backend: its container and compose files go.
+# Its secrets, release history and images stay until removed by hand
+# (ansible/README.md, "Removing a project's backend").
+- name: Find the backends on the server
+  ansible.builtin.find:
+    paths: "{{ projects_backends_dir }}"
+    file_type: directory
+  register: projects_backend_dirs_found
+
+# By its Compose project name, so it works even if the compose file or the
+# release was already removed by hand. Under the project's deploy lock.
+- name: Stop the backends that are gone
+  ansible.builtin.shell:
+    cmd: >-
+      install -d -m 0700 -o root -g root /run/infra-backend &&
+      flock -w 120 "/run/infra-backend/$NAME.lock" docker compose --project-name "backend-$NAME" down 2>&1
+    # No compose.yml or .env of the current directory may be picked up.
+    chdir: /
+  environment:
+    NAME: "{{ item.path | basename }}"
+  register: projects_backend_down
+  changed_when: projects_backend_down.stdout is search('Removed')
+  failed_when: projects_backend_down.rc != 0
+  loop: "{{ projects_gone_backends }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    projects_gone_backends: &projects_gone_backends >-
+      {{ projects_backend_dirs_found.files | rejectattr('path', 'in', projects_expected_backends) | list }}
+    projects_expected_backends: &projects_expected_backends >-
+      {{ projects_backends | map(attribute='name')
+         | map('regex_replace', '^(.*)$', projects_backends_dir ~ '/\1') | list }}
+
+- name: Remove the compose files of backends that are gone
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ projects_gone_backends }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    projects_gone_backends: *projects_gone_backends
+    projects_expected_backends: *projects_expected_backends

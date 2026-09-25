@@ -51,7 +51,8 @@
       - >-
         item.backend is not defined
         or (item.backend is mapping
-            and item.backend.keys() | difference(['image', 'port', 'health', 'paths']) | length == 0
+            and item.backend.keys()
+                | difference(['image', 'port', 'health', 'paths', 'env', 'secrets', 'memory']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and item.backend.port is integer and item.backend.port is not boolean
@@ -69,8 +70,6 @@
       - >-
         item.deploy_key is not defined
         or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
-      # Only static sites can be deployed for now.
-      - item.deploy_key is not defined or item.site
       # At least one component; only a backend can use a database.
       - item.site or item.backend is defined
       - not item.database or item.backend is defined
@@ -97,6 +96,39 @@
              | map('regex_escape') | map('regex_replace', '$', '.*') | list)
            + (projects_backend_paths | reject('match', '.*[*]$') | map('regex_escape') | list))
            | join('|') }})\Z
+
+# A backend's environment, checked apart from the rest of the entry so the
+# message can say which value is wrong. Values end up in env files that
+# Compose reads literally (format: raw), one per line.
+- name: Check each backend's environment
+  ansible.builtin.assert:
+    that:
+      - projects_env is mapping
+      - projects_secrets is mapping
+      - projects_env.keys() | reject('match', projects_env_name) | list | length == 0
+      - projects_secrets.keys() | reject('match', projects_env_name) | list | length == 0
+      - projects_env.keys() | intersect(projects_backend_reserved_env) | length == 0
+      - projects_secrets.keys() | intersect(projects_backend_reserved_env) | length == 0
+      - projects_env.keys() | intersect(projects_secrets.keys()) | length == 0
+      - projects_env.values() | reject('string') | list | length == 0
+      - projects_env.values() | select('match', '.*[\n\r]') | list | length == 0
+      - projects_env.values() | map('length') | select('gt', 1024) | list | length == 0
+      - projects_secrets.values() | difference(['generated', 'manual']) | length == 0
+      - projects_memory is string and projects_memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
+    fail_msg: >-
+      projects.yml: invalid backend env, secrets or memory for {{ item.name }}. Names are uppercase
+      (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
+      in secrets but not both; env values are quoted strings on one line; secrets are generated or manual;
+      memory goes from 64m to 512m. See projects.schema.json.
+    quiet: true
+  loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_env: "{{ item.backend.env | default({}) }}"
+    projects_secrets: "{{ item.backend.secrets | default({}) }}"
+    projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
+    projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
 
 # Databases. The playbook never drops one, and a projects.yml that would leave
 # one without its project stops the play here, before any change: taking a
