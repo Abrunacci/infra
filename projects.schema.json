@@ -30,10 +30,15 @@
           ]
         },
         "subdomain": {
-          "description": "DNS record (Terraform) and Caddy site.",
-          "allOf": [
-            { "$ref": "#/$defs/label" },
-            { "not": { "enum": ["server", "status"] } }
+          "description": "DNS record (Terraform) and Caddy site. \"@\" is the root domain, and also gets www redirected to it.",
+          "oneOf": [
+            { "const": "@" },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/label" },
+                { "not": { "enum": ["server", "status", "www"] } }
+              ]
+            }
           ]
         },
         "title": {

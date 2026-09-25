@@ -6,7 +6,7 @@ resource "cloudflare_dns_record" "a" {
   for_each = local.hostnames
 
   zone_id = var.cloudflare_zone_id
-  name    = "${each.key}.${var.domain}"
+  name    = each.value
   type    = "A"
   content = digitalocean_droplet.server.ipv4_address
   ttl     = 300
@@ -29,8 +29,8 @@ resource "cloudflare_dns_record" "a" {
       error_message = "projects.yml: every subdomain must be a string (quote values such as \"yes\" or \"0123\")."
     }
     precondition {
-      condition     = alltrue([for s in local.subdomains : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", s))])
-      error_message = "projects.yml: every subdomain must be a lowercase DNS label (a-z, 0-9, hyphens)."
+      condition     = alltrue([for s in local.subdomains : s == "@" || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", s))])
+      error_message = "projects.yml: every subdomain must be a lowercase DNS label (a-z, 0-9, hyphens), or \"@\" for the root domain."
     }
     precondition {
       condition     = length(distinct(local.subdomains)) == length(local.subdomains)
@@ -38,7 +38,7 @@ resource "cloudflare_dns_record" "a" {
     }
     precondition {
       condition     = length(setintersection(toset(local.subdomains), toset(local.reserved))) == 0
-      error_message = "projects.yml: 'server' and 'status' are reserved subdomains."
+      error_message = "projects.yml: 'server', 'status' and 'www' are reserved subdomains."
     }
   }
 }
@@ -47,7 +47,7 @@ resource "cloudflare_dns_record" "aaaa" {
   for_each = local.hostnames
 
   zone_id = var.cloudflare_zone_id
-  name    = "${each.key}.${var.domain}"
+  name    = each.value
   type    = "AAAA"
   content = digitalocean_droplet.server.ipv6_address
   ttl     = 300

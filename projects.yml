@@ -5,7 +5,8 @@
 #
 #   name       directories, registry entry and, with a database, the database
 #              and user (with - turned into _)
-#   subdomain  DNS record and Caddy site
+#   subdomain  DNS record and Caddy site. "@" (quoted) is the root domain;
+#              www then redirects to it. server, status and www are reserved
 #   title      shown on the placeholder page (optional, defaults to name)
 #   repo       linked from the placeholder page (optional: leave it out for
 #              private repositories)

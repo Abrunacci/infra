@@ -7,7 +7,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Droplet (`s-1vcpu-2gb`, `nyc3`, Ubuntu 24.04, IPv6, minimal cloud-init) | `main.tf` |
 | Admin SSH key, tags and a DigitalOcean project that groups the resources | `main.tf` |
 | Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
-| A/AAAA records for `server`, `status` and each project in `../projects.yml` | `dns.tf` |
+| A/AAAA records for `server`, `status` and each project in `../projects.yml`: the root domain for a project on `"@"`, plus `www` | `dns.tf` |
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
 
@@ -60,7 +60,7 @@ tracepath -6 server.abrunacci.dev   # should report the path MTU without stallin
 - **Resizing** (`droplet_size`) keeps the Droplet but powers it off: `graceful_shutdown = true` stops PostgreSQL cleanly, and `resize_disk = false` changes only CPU and RAM, so the Droplet can go back to a smaller size.
 - **`projects.yml` is validated**, so a mistake fails instead of being read as zero projects, which would plan the deletion of every project's DNS records:
   - A missing file, invalid YAML, a missing or empty top-level `projects` key, or an entry without `subdomain` fails `terraform validate`.
-  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated or reserved (`server`, `status`) fail the plan.
+  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated or reserved (`server`, `status`, `www`) fail the plan. `"@"` is the root domain, and adds `www`.
   - A registry with no projects fails the plan too, unless it is allowed on purpose, for that run only: `terraform plan -out=tfplan -var=allow_zero_projects=true`. Never put it in `.env`: the guard would stay off without anyone noticing. That also covers a key repeated in the file, such as a second `projects: []` left by a bad merge: YAML keeps the last one.
   - yamllint also rejects repeated keys (`key-duplicates`) in pre-commit and CI. A repeated key that still leaves some projects, or a repeated `subdomain`, is caught only there, so run `pre-commit run --all-files` before a local plan.
 - **`proxied = false`** is set explicitly on every record, so the Cloudflare proxy cannot be turned on by accident (see the DNS decision in the main README).
