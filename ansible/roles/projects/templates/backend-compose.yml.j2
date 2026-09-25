@@ -1,0 +1,41 @@
+# Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
+# The image comes from the deployed release, never from this file:
+#   docker compose --project-directory {{ projects_backends_dir }}/{{ item.name }} \
+#     --env-file {{ projects_backends_state_dir }}/{{ item.name }}/release.env ...
+# deploy-backend, backend-rollback and the playbook always pass that file.
+name: backend-{{ item.name }}
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?no release deployed yet}
+    restart: unless-stopped
+    # The backends user, whatever the image declares: never root.
+    user: "{{ projects_backends_uid }}:{{ projects_backends_uid }}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Taken literally (format: raw): no quotes, escapes or comments.
+    env_file:
+      - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
+        format: raw
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets.env
+        format: raw
+    # No published port: Caddy reaches it on the edge network by this alias.
+    networks:
+      edge:
+        aliases:
+          - {{ item.name }}-backend
+    mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    pids_limit: 256
+    stop_grace_period: 20s
+    labels:
+      infra.release: ${BACKEND_RELEASE:-}
+
+networks:
+  edge:
+    external: true

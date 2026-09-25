@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Shows a project's backend: the deployed release, its container and whether
+# its health path answers (from Caddy's container, like requests).
+#
+#   sudo backend-status PROJECT           check once
+#   sudo backend-status PROJECT --wait    keep checking for up to 60 s (the playbook
+#                                         uses it after recreating a container)
+#
+# Exit status: 0 healthy, 1 not healthy, 3 nothing deployed yet.
+# Installed by Ansible (roles/projects) as /usr/local/sbin/backend-status.
+set -euo pipefail
+export LC_ALL=C
+# shellcheck source=scripts/backend-lib.sh
+. /usr/local/lib/infra/backend.sh
+
+fail() {
+  echo "backend-status: $*" >&2
+  exit 1
+}
+
+[[ $# -eq 1 || ($# -eq 2 && "$2" == --wait) ]] || { echo "usage: sudo backend-status PROJECT [--wait]" >&2; exit 2; }
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+project="$1"
+[[ "$project" =~ $NAME_RE ]] || fail "invalid project name"
+backend_load "$project"
+
+release="$(backend_current "$project" BACKEND_RELEASE)"
+if [[ -z "$release" ]]; then
+  echo "$project: nothing deployed yet"
+  exit 3
+fi
+echo "release:   $release"
+echo "image:     $(backend_current "$project" BACKEND_IMAGE)"
+echo "container: $(backend_compose "$project" ps -a --format '{{.Name}} {{.State}} {{.Status}}' backend 2>/dev/null || echo unknown)"
+
+seconds=0
+[[ "${2:-}" == --wait ]] && seconds="$HEALTH_SECONDS"
+if backend_healthy "$project" "$seconds"; then
+  echo "health:    ok (http://$project-backend:$BACKEND_PORT$BACKEND_HEALTH)"
+  exit 0
+fi
+echo "health:    NOT OK (http://$project-backend:$BACKEND_PORT$BACKEND_HEALTH)"
+echo "log:       sudo docker compose --project-directory $BACKENDS_DIR/$project --env-file $STATE_DIR/$project/release.env logs --tail 50"
+exit 1

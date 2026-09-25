@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Project registry (projects.yml)",
-  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names, subdomains and deploy keys) or several fields (health inside paths) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
+  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names, subdomains and deploy keys) or several fields (health inside paths, a name in both env and secrets) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
   "type": "object",
   "required": ["projects"],
   "additionalProperties": false,
@@ -62,7 +62,7 @@
         },
         "backend": { "$ref": "#/$defs/backend" },
         "deploy_key": {
-          "description": "Public ed25519 key of the project's CI. Its authorized_keys line is fixed to deploying this project only. Without it, the project cannot be deployed.",
+          "description": "Public ed25519 key of the project's CI. Its authorized_keys line is fixed to deploying this project only: its site, its backend or both. Without it, the project cannot be deployed.",
           "type": "string",
           "pattern": "^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48}( [A-Za-z0-9._@-]{1,64})?$"
         }
@@ -72,11 +72,6 @@
           "description": "At least one component: a site or a backend.",
           "if": { "properties": { "site": { "const": false } } },
           "then": { "required": ["backend"] }
-        },
-        {
-          "description": "Only static sites can be deployed for now: a deploy key needs a site.",
-          "if": { "required": ["deploy_key"] },
-          "then": { "properties": { "site": { "const": true } } }
         },
         {
           "description": "Only a backend can use a database.",
@@ -104,13 +99,13 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Image repository without a tag or digest: deploy.sh records the digest on the server.",
+          "description": "Image repository without a tag or digest, such as ghcr.io/abrunacci/epb-stock-backend. CI sends the digest of each deploy, and the server records it.",
           "type": "string",
           "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$"
         },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "health": {
-          "description": "Health check path, with the prefix: Caddy does not strip it.",
+          "description": "Health check path, with the prefix: Caddy does not strip it. Checked from Caddy's container after each deploy; any 2xx answer is healthy.",
           "type": "string",
           "pattern": "^/[A-Za-z0-9._~/-]*$"
         },
@@ -120,8 +115,31 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^/[A-Za-z0-9._~/-]*\\*?$" }
+        },
+        "env": {
+          "description": "Non-secret environment variables, public like the rest of this file. Values are strings: quote numbers and booleans.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/env_name" },
+          "additionalProperties": { "type": "string", "maxLength": 1024, "pattern": "^[^\\n\\r]*$" }
+        },
+        "secrets": {
+          "description": "Secret environment variables: only their names are here, the values live on the server. generated: created once on the server (64 hex characters). manual: set by the admin with project-secret.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/env_name" },
+          "additionalProperties": { "enum": ["generated", "manual"] }
+        },
+        "memory": {
+          "description": "Memory limit of the container, from 64m to 512m. Defaults to 256m.",
+          "type": "string",
+          "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
         }
       }
+    },
+    "env_name": {
+      "description": "An environment variable name. The ones the infrastructure sets itself (per-project databases) are reserved.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+      "not": { "enum": ["DATABASE_URL", "MIGRATION_DATABASE_URL", "APP_DB_USER", "APP_DB_PASSWORD"] }
     }
   }
 }

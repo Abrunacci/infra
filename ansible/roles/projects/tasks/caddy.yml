@@ -1,0 +1,40 @@
+---
+# One Caddy site per project: its static site, its backend or both.
+
+# Checked with the rest of Caddy's config before it replaces the current file,
+# so an invalid site can never stop Caddy at its next restart.
+- name: Write each Caddy site
+  ansible.builtin.template:
+    src: site.caddy.j2
+    dest: "{{ projects_caddy_sites_dir }}/{{ item.name }}.caddy"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: >-
+      /usr/local/sbin/caddy-validate-site {{ caddy_image }} {{ caddy_uid }}
+      {{ caddy_dir }}/conf %s {{ item.name }}
+  loop: "{{ projects_registry.projects }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload Caddy
+
+# A project that is no longer in projects.yml stops being served. Only the
+# Caddy site goes: its files in /srv/sites stay until removed by hand.
+- name: Find the Caddy sites
+  ansible.builtin.find:
+    paths: "{{ projects_caddy_sites_dir }}"
+    patterns: "*.caddy"
+  register: projects_caddy_sites
+
+- name: Remove Caddy sites of projects that are gone
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ projects_caddy_sites.files | rejectattr('path', 'in', projects_expected_sites) | list }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    projects_expected_sites: >-
+      {{ projects_registry.projects | map(attribute='name')
+         | map('regex_replace', '^(.*)$', projects_caddy_sites_dir ~ '/\1.caddy') | list }}
+  notify: Reload Caddy

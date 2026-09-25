@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploys one release of a project's static site. Never run by hand: it is the
-# forced command of each project's CI key in ~deploy/.ssh/authorized_keys
-# (roles/deploy), through the deploy user's only sudo rule:
+# Deploys one release of a project's static site, or hands a backend deploy to
+# deploy-backend. Never run by hand: it is the forced command of each
+# project's CI key in ~deploy/.ssh/authorized_keys (roles/deploy), through the
+# deploy user's only sudo rule:
 #
 #   restrict,command="sudo -n /usr/local/sbin/deploy.sh PROJECT \"$SSH_CLIENT\" \"$SSH_ORIGINAL_COMMAND\"" KEY
 #
@@ -10,7 +11,11 @@
 #
 #   deploy <40-character commit sha> [<GitHub Actions run id>]
 #
-# and sends a gzipped tar of the site on stdin, for example:
+# or, for the project's backend (see deploy-backend),
+#
+#   deploy-backend <40-character commit sha> <image digest> [<GitHub Actions run id>]
+#
+# A site deploy sends a gzipped tar of the site on stdin, for example:
 #
 #   tar -C dist -cz . | ssh deploy@server.abrunacci.dev deploy "$GITHUB_SHA" "$GITHUB_RUN_ID"
 #
@@ -67,12 +72,16 @@ read -r addr _ <<<"$2" || true
 [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "invalid project name"
 project="$1"
 
-# What the client asked for.
-if [[ "$3" =~ ^deploy\ ([0-9a-f]{40})(\ ([0-9]{1,20}))?$ ]]; then
+# What the client asked for. A backend deploy is deploy-backend's job from
+# here on: it checks and logs everything itself (journal tag deploy-backend).
+if [[ "$3" =~ ^deploy-backend\ ([0-9a-f]{40})\ (sha256:[0-9a-f]{64})(\ ([0-9]{1,20}))?$ ]]; then
+  trap - EXIT
+  exec /usr/local/sbin/deploy-backend "$project" "$client" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]:--}" </dev/null
+elif [[ "$3" =~ ^deploy\ ([0-9a-f]{40})(\ ([0-9]{1,20}))?$ ]]; then
   sha="${BASH_REMATCH[1]}"
   run_id="${BASH_REMATCH[3]:--}"
 else
-  fail "unsupported command (expected: deploy <40-character commit sha> [<run id>])"
+  fail "unsupported command (expected: deploy <40-character commit sha> [<run id>], or deploy-backend <sha> <sha256:digest> [<run id>])"
 fi
 
 # The project must be in the server's registry, with a site and a deploy key.

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Deploys one image of a project's backend. Never run by hand: deploy.sh, the
+# forced command of each project's CI key, runs it when SSH_ORIGINAL_COMMAND is
+#
+#   deploy-backend <40-character commit sha> <image digest> [<GitHub Actions run id>]
+#
+# for example
+#
+#   ssh deploy@server.abrunacci.dev deploy-backend "$GITHUB_SHA" "sha256:..." "$GITHUB_RUN_ID" </dev/null
+#
+#   deploy-backend PROJECT CLIENT SHA DIGEST RUN_ID     (as deploy.sh calls it)
+#
+# The image repository comes from the project's entry in the server's
+# registry (projects.yml), never from the client: CI only chooses which digest
+# of it. The image is pulled by digest, the container is recreated with it,
+# and its health path is checked from Caddy's container for up to 60 s. If it
+# never answers, the previous release is put back and checked, and the deploy
+# fails; what was running keeps running. The container's log never goes to
+# the client, since CI logs may be public: it goes to the journal (tag
+# backend-log). The last 5 releases are kept for backend-rollback, with their
+# images, plus the one that was running before. Every attempt is logged to the
+# journal (tag: deploy-backend).
+# Installed by Ansible (roles/projects) as /usr/local/sbin/deploy-backend.
+set -euo pipefail
+umask 022
+export LC_ALL=C
+# shellcheck source=scripts/backend-lib.sh
+. /usr/local/lib/infra/backend.sh
+
+project="-" client="-" sha="-" run_id="-" digest="-" release="-"
+result="failed" reason="unexpected error"
+
+log_result() {
+  local extra=""
+  [[ -n "$reason" ]] && extra=" reason=\"${reason//\"/\'}\""
+  logger -t deploy-backend -- "result=$result project=$project release=$release digest=$digest sha=$sha run_id=$run_id client=$client$extra"
+}
+trap 'log_result' EXIT
+
+fail() {
+  reason="$1"
+  echo "deploy-backend: $reason" >&2
+  exit 1
+}
+
+[[ "$EUID" -eq 0 ]] || fail "must run as root (through deploy.sh)"
+[[ $# -eq 5 ]] || fail "internal: expected PROJECT CLIENT SHA DIGEST RUN_ID"
+[[ "$1" =~ $NAME_RE ]] || fail "invalid project name"
+project="$1"
+[[ "$2" =~ ^[0-9A-Fa-f:.]{2,45}$ ]] && client="$2"
+[[ "$3" =~ ^[0-9a-f]{40}$ ]] || fail "invalid commit sha"
+sha="$3"
+[[ "$4" =~ $DIGEST_RE ]] || fail "invalid image digest (expected sha256:<64 hex characters>)"
+digest="$4"
+[[ "$5" =~ ^([0-9]{1,20}|-)$ ]] || fail "invalid run id"
+run_id="$5"
+
+backend_load "$project"
+backend_lock "$project"
+
+problems="$(backend_secret_problems "$project")" \
+  || fail "the backend's secrets are not ready: $(tr '\n' ';' <<<"$problems" | sed 's/;$//')"
+
+image="$BACKEND_REPO@$digest"
+release="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}"
+[[ -z "$(backend_release_image "$project" "$release")" ]] || fail "release $release already exists; try again"
+
+backend_pull "$image"
+
+previous="$(backend_current "$project" BACKEND_RELEASE)"
+if ! backend_switch "$project" "$release" "$image"; then
+  # The failed image is never in the history, so nothing would ever remove it.
+  if ! grep -qF " $image" "$STATE_DIR/$project/releases" 2>/dev/null; then
+    docker image rm "$image" >/dev/null 2>&1 </dev/null 9>&- || true
+  fi
+  fail "release $release $SWITCH_RESULT. The container's log is in the journal: sudo journalctl -t backend-log"
+fi
+backend_record "$project" "$release" "$image" "$previous"
+result="ok" reason=""
+echo "Deployed backend $project release $release ($digest)"

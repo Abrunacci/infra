@@ -10,8 +10,8 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability |
 | `postgres` | PostgreSQL 17 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server. Refuses an image whose major version is not the data's |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
-| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`) and serves each static site (see below). Refuses what is not built yet (backends), and refuses to run while a database on the server has no project declaring it (see "Retiring a project with a database"). Backends and databases are added in later PRs |
-| `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` and `site-rollback`. See "Deploying a project" |
+| `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`). Refuses what is not built yet (databases), and refuses to run while a database on the server has no project declaring it (see "Retiring a project with a database") |
+| `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
 
@@ -39,6 +39,15 @@ The roles run in that order: each one depends on the previous ones, and `project
   - **Retention.** The last 5 releases are kept, plus the published one.
   - **Journal.** Every attempt is logged (`journalctl -t deploy`): project, release, sha, run id, key fingerprint, client address, size and result.
   - **Rollbacks** are run on the server by the admin (`sudo site-rollback`), never by CI keys; the procedure is in private operations documentation.
+- **Backends.** A project with a `backend` runs one container from a private or public image, deployed by CI with `ssh deploy@server.abrunacci.dev deploy-backend <sha> <digest> <run id>` (see "Deploying a backend").
+  - **The image comes from `projects.yml`.** CI only sends the digest; `deploy-backend` pulls `<image>@<digest>`, so a key can only ever run its own project's image.
+  - **Locked down like the other containers.** The container runs as the `backends` user (uid 10005) whatever its image declares, with a read-only filesystem, a `/tmp` tmpfs, no capabilities, no published port, and a memory limit (`memory`, 256 MB by default, no swap). It is on the `edge` network only, as `<name>-backend`, which is how Caddy reaches it. Every backend shares `edge` with Caddy and the other backends, so one could reach another's port directly, bypassing Caddy's `paths`: acceptable for a few projects of the same owner; a network per project, joined by Caddy, is the fix if that changes.
+  - **Routing.** With `site: true`, Caddy sends the backend's `paths` (for example `/api/*`) to it and serves everything else from the static site. Without a site, every path goes to the backend. Request bodies are limited to 10 MB. While the container is recreated, Caddy holds requests for up to 15 s instead of failing them; before the first deploy, the backend's paths answer 502 after those 15 s. Caddy forces `Strict-Transport-Security` and `X-Content-Type-Options` and removes `Server` on every answer; `Referrer-Policy` and `Content-Security-Policy` are defaults the backend can replace with its own.
+  - **Health and automatic way back.** After a deploy, the backend's `health` path must answer with a 2xx from Caddy's container within 60 s. If it does not, or the container stops or restarts, the previous release is put back and checked, and the deploy fails. A first deploy that fails leaves the backend stopped. The container's log is never sent to CI, whose logs may be public: it goes to the journal (`sudo journalctl -t backend-log`). There is no Docker healthcheck (an image may have no HTTP client), so a process that hangs without exiting is not restarted by itself: `sudo backend-status` is the check.
+  - **Configuration.** `env` in `projects.yml` is public (`/opt/infra/projects/<name>/app.env`); `secrets` only names variables, whose values live in `/etc/infra/secrets/projects/<name>/secrets.env` (root only). `generated` values are created on the server by the playbook; `manual` ones are set by the admin with `sudo project-secret`. Neither ever passes through Ansible or the repo. Compose reads both files literally (`format: raw`). A deploy refuses to start while a declared secret has no value, or a value is set that `projects.yml` does not declare.
+  - **Changes.** When `env`, `memory` or a secret changes, the next playbook run applies it (`backend-rollback <name> --apply`, under the deploy lock): the container is recreated and its health checked, with no automatic way back, since the image did not change. After `project-secret set`, `sudo backend-rollback <name> --restart` applies it at once. A new `image` takes effect at the next deploy; the history keeps the previous repository's releases, and rolling back to one of them runs that image.
+  - **Retention and rollbacks.** The last 5 releases are kept, with their images, plus the one that was running before the latest deploy; the image of a failed deploy is removed. `sudo backend-rollback` moves back to any of them, with the same health check and way back, and shows a failed container's log in the terminal. Without a release name it goes to the one deployed before the current one in the history (`--list` shows the order). Database migrations are never undone.
+  - **Journal.** Every deploy and rollback is logged (`journalctl -t deploy-backend`, `-t backend-rollback`), the log of a container that failed its health check (`-t backend-log`), and every secret change (`-t project-secret`, never the value).
 - **Databases are never dropped by the playbook.** Before any change, it compares `projects.yml` with two sources: the server's registry (`/etc/infra/projects.json`, projects that had `database: true`) and PostgreSQL itself (every database except `postgres` and the templates, including one made by hand). A database whose project is gone from `projects.yml`, or now says `database: false`, stops the play until it is retired by hand. If PostgreSQL's data volume exists but PostgreSQL cannot be asked, the play stops too, instead of trusting the registry alone. A new server, without Docker or the volume, has no databases.
 - **Database access for debugging** is only through a temporary SSH tunnel; the procedure is in private operations documentation.
 - **Client IPs over IPv6.** The `edge` network is IPv4 only, so IPv6 connections reach Caddy through Docker's userland proxy and Caddy logs the bridge gateway instead of the client's address. IPv4 keeps the real address. It matters only once something acts on client IPs (rate limits, a fail2ban jail for Caddy); the fix then is IPv6 on `edge`.
@@ -214,6 +223,63 @@ The workflow lives in the project's repository, with `permissions: {}` at the to
 ```
 
 The command is always `deploy <commit sha> <run id>`, and the archive's root is the site's root. The run id is optional for `deploy.sh`, so a manual test can leave it out; the workflow always sends it. The deploy prints `Deployed <project> release <id>`, or the reason it was rejected, and fails the job if it was.
+
+## Deploying a backend
+
+A backend is deployed with the same key, environment and secrets as the site (steps 1 to 4 above), once the project has a `backend` and a `deploy_key` in `projects.yml` and the playbook has run. CI builds and pushes the image, then sends its digest:
+
+```sh
+ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+  deploy@server.abrunacci.dev deploy-backend "$GITHUB_SHA" "sha256:<64 hex characters>" "$GITHUB_RUN_ID" </dev/null
+```
+
+It prints `Deployed backend <project> release <id> (<digest>)`, or the reason it failed, and fails the job if it did. When the new container was not healthy, its log is on the server only (`sudo journalctl -t backend-log`), never in CI's output. Deploy the backend before the site when both change, and keep database migrations compatible with the previous release: a rollback puts back the image, not the schema.
+
+Before the first deploy, set the backend's manual secrets (below). The full guide for a project's repository (building and publishing the image to GHCR, cleaning old versions) comes with the first project that uses it.
+
+### Pulling private images
+
+A public image needs nothing. For private images in GHCR, the server logs in once with a GitHub personal access token (classic) whose only scope is `read:packages`, with an expiration date. Fine-grained tokens do not work with GHCR. Create it in **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**, write its expiration date in `terraform/README.md` ("Credentials"), and on the server:
+
+```sh
+sudo docker --config /etc/infra/secrets/registry login ghcr.io -u Abrunacci --password-stdin
+# paste the token, press Enter, then Ctrl-D
+```
+
+It prints `Login Succeeded`. The credentials stay in `/etc/infra/secrets/registry/config.json` (root only), used only by `deploy-backend` and `backend-rollback`; they never leave the server. Before the token expires, create a new one and run the same command. A token that expired makes new deploys fail with `cannot pull ...: unauthorized`; what is running keeps running.
+
+### Backend secrets
+
+```sh
+sudo project-secret <project> list          # declared names and whether each has a value
+sudo project-secret <project> set KEY       # asks for the value without showing it
+sudo project-secret <project> unset KEY
+sudo project-secret <project> check
+```
+
+Only names declared in `projects.yml` as `manual` can be set. A value is one line, taken exactly as typed. It reaches the container at the next deploy, or at once with `sudo backend-rollback <project> --restart`.
+
+### Backend status and rollbacks
+
+```sh
+sudo backend-status <project>               # release, container and health
+sudo backend-rollback <project> --list      # releases, newest first; * is the deployed one
+sudo backend-rollback <project>             # back to the release before the deployed one
+sudo backend-rollback <project> RELEASE     # to that release
+sudo backend-rollback <project> --restart   # recreate the deployed release
+sudo backend-rollback <project> --apply     # apply configuration changes, if any (the playbook runs it)
+```
+
+### Removing a project's backend
+
+When a project loses its `backend` (or leaves `projects.yml`), the next playbook run stops its container, and removes its compose files and its Caddy routes. Its secrets, its release history and its images stay, so a mistake is undone by putting the entry back and running the playbook again (it starts the last deployed release). Once sure, remove them by hand:
+
+```sh
+sudo rm -r /etc/infra/secrets/projects/<project> /var/lib/infra/backends/<project>
+sudo docker image ls --digests <image>      # then: sudo docker image rm <image>@<digest> for each
+```
+
+A project with a database cannot be removed this way: see "Retiring a project with a database".
 
 ## Retiring a project with a database
 

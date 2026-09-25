@@ -30,3 +30,24 @@ projects_caddy_sites_dir: "{{ caddy_dir }}/conf/sites"
 # A project's CI key: ed25519, one line, an optional simple comment. Same
 # pattern as projects.schema.json.
 projects_deploy_key: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48}( [A-Za-z0-9._@-]{1,64})?\Z'
+
+# Backends: one container per project with a backend, run with Compose.
+#   /opt/infra/projects/<name>/             compose.yml and app.env (the
+#                                           non-secret env from projects.yml)
+#   /etc/infra/secrets/projects/<name>/     secrets.env (root only), set with
+#                                           project-secret or generated
+#   /var/lib/infra/backends/<name>/         release.env (the deployed image)
+#                                           and releases (the history)
+projects_backends_dir: "{{ infra_opt_dir }}/projects"
+projects_backends_secrets_dir: "{{ infra_secrets_dir }}/projects"
+projects_backends_state_dir: /var/lib/infra/backends
+# Credentials for pulling private images (docker login, see ansible/README.md).
+projects_registry_config_dir: "{{ infra_secrets_dir }}/registry"
+# Every backend container runs as this user, whatever its image declares.
+# Fixed, like caddy (10001), db-tunnel (10002), sites (10003) and deploy
+# (10004). No login, no home, owns no file on the host.
+projects_backends_uid: 10005
+projects_backend_default_memory: 256m
+# Env names the infrastructure sets itself (per-project databases): a project
+# cannot set them in env or secrets.
+projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]

@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Moves a project's backend to an earlier release, or restarts the current
+# one. Run on the server by the admin; CI keys cannot run it.
+#
+#   sudo backend-rollback PROJECT --list      releases, newest first; * marks the deployed one
+#   sudo backend-rollback PROJECT             back to the release before the deployed one
+#   sudo backend-rollback PROJECT RELEASE     to that release
+#   sudo backend-rollback PROJECT --restart   recreate the deployed release (after a secret
+#                                             changes, for example)
+#   sudo backend-rollback PROJECT --apply     apply configuration changes (env, memory,
+#                                             secrets) to the deployed release, if any; the
+#                                             playbook runs it
+#
+# Only releases in the history can be deployed (deploy-backend keeps the last
+# 5, plus the one that was running before the latest deploy, with their
+# images). Without RELEASE, it goes to the release deployed before the current
+# one in the history, which after a rollback is not necessarily the one that
+# was running before it: --list shows the order. Like a deploy, the new
+# container must answer on its health path within 60 s, or what was running
+# before is put back. Database migrations are never undone. Logged to the
+# journal (tag: backend-rollback).
+# Installed by Ansible (roles/projects) as /usr/local/sbin/backend-rollback.
+set -euo pipefail
+umask 022
+export LC_ALL=C
+# shellcheck source=scripts/backend-lib.sh
+. /usr/local/lib/infra/backend.sh
+# The admin runs this in a terminal: a failed container's log is shown too.
+BACKEND_SHOW_LOGS=1
+
+fail() {
+  echo "backend-rollback: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: sudo backend-rollback PROJECT [--list | RELEASE | --restart | --apply]" >&2
+  exit 2
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || usage
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+project="$1"
+[[ "$project" =~ $NAME_RE ]] || fail "invalid project name"
+backend_load "$project"
+
+releases_newest_first() {
+  [[ -f "$STATE_DIR/$project/releases" ]] || return 0
+  tac "$STATE_DIR/$project/releases"
+}
+
+if [[ "${2:-}" == --list ]]; then
+  current="$(backend_current "$project" BACKEND_RELEASE)"
+  found=0
+  while read -r r i; do
+    found=1
+    if [[ "$r" == "$current" ]]; then echo "* $r  ${i##*@}"; else echo "  $r  ${i##*@}"; fi
+  done < <(releases_newest_first)
+  ((found)) || echo "(no releases)"
+  exit 0
+fi
+
+# The playbook's --apply waits for a deploy in progress instead of failing.
+if [[ "${2:-}" == --apply ]]; then backend_lock "$project" 120; else backend_lock "$project"; fi
+current="$(backend_current "$project" BACKEND_RELEASE)"
+[[ -n "$current" ]] || fail "$project has no deployed release"
+problems="$(backend_secret_problems "$project")" \
+  || fail "the backend's secrets are not ready: $(tr '\n' ';' <<<"$problems" | sed 's/;$//')"
+
+# Compose recreates the container only if its configuration changed; the
+# health check then runs, with no automatic way back (the image is the same).
+if [[ "${2:-}" == --apply ]]; then
+  before="$(backend_compose "$project" ps -q backend 2>/dev/null)" || before=""
+  backend_compose "$project" up -d --pull never --remove-orphans --quiet-pull >&2 \
+    || fail "could not apply the configuration"
+  after="$(backend_compose "$project" ps -q backend 2>/dev/null)" || after=""
+  if [[ -n "$before" && "$before" == "$after" ]]; then
+    echo "Unchanged: $project release $current"
+    exit 0
+  fi
+  if backend_healthy "$project" "$HEALTH_SECONDS"; then
+    logger -t backend-rollback -- "project=$project apply release=$current result=ok by=${SUDO_USER:-root}"
+    echo "Applied the configuration of $project release $current: healthy"
+    exit 0
+  fi
+  logger -t backend-rollback -- "project=$project apply release=$current result=unhealthy by=${SUDO_USER:-root}"
+  fail "applied the configuration of $project release $current, but it is not healthy (sudo backend-status $project)"
+fi
+
+if [[ "${2:-}" == --restart ]]; then
+  backend_compose "$project" up -d --pull never --remove-orphans --force-recreate --quiet-pull >&2 \
+    || fail "could not recreate the container"
+  if backend_healthy "$project" "$HEALTH_SECONDS"; then
+    logger -t backend-rollback -- "project=$project restart release=$current result=ok by=${SUDO_USER:-root}"
+    echo "Restarted $project release $current: healthy"
+    exit 0
+  fi
+  logger -t backend-rollback -- "project=$project restart release=$current result=unhealthy by=${SUDO_USER:-root}"
+  fail "restarted $project release $current, but it is not healthy after ${HEALTH_SECONDS}s (sudo backend-status $project)"
+fi
+
+if [[ $# -eq 2 ]]; then
+  target="$2"
+  [[ "$target" =~ $RELEASE_RE ]] || fail "invalid release name: $target"
+else
+  target=""
+  prev=""
+  while read -r r _; do
+    if [[ "$prev" == "$current" ]]; then
+      target="$r"
+      break
+    fi
+    prev="$r"
+  done < <(releases_newest_first)
+  [[ -n "$target" ]] || fail "there is no release older than $current (see --list)"
+fi
+[[ "$target" != "$current" ]] || fail "$target is already deployed (--restart recreates it)"
+image="$(backend_release_image "$project" "$target")"
+[[ -n "$image" ]] || fail "no release $target (see --list)"
+backend_pull "$image"
+
+if backend_switch "$project" "$target" "$image"; then
+  logger -t backend-rollback -- "project=$project from=$current to=$target result=ok by=${SUDO_USER:-root}"
+  echo "Deployed $project release $target (was $current)"
+else
+  logger -t backend-rollback -- "project=$project from=$current to=$target result=failed by=${SUDO_USER:-root}"
+  fail "release $target $SWITCH_RESULT"
+fi

@@ -1,42 +1,76 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
 {{ domain if item.subdomain == '@' else item.subdomain ~ '.' ~ domain }} {
-	root * {{ projects_sites_dir }}/{{ item.name }}/current
 	encode zstd gzip
 
-	# Files under /assets/ carry a content hash in their name (Vite), so they
-	# never change; everything else is revalidated on each visit. A missing
-	# asset is not cached: after a rollback, a newer release may need it again.
-	@assets {
-		path /assets/*
-		file
-	}
-	header @assets Cache-Control "public, max-age=31536000, immutable"
-	@not_assets not {
-		path /assets/*
-		file
-	}
-	header @not_assets Cache-Control "no-cache"
-
+	# Applied after the response is written (defer), so they replace a
+	# backend's own values instead of being added next to them. The two with ?
+	# are defaults: a backend that sends a stricter policy keeps it.
 	header {
+		defer
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
+		?Referrer-Policy "strict-origin-when-cross-origin"
 		# No other site may frame this one (clickjacking).
-		Content-Security-Policy "frame-ancestors 'none'"
+		?Content-Security-Policy "frame-ancestors 'none'"
 		-Server
 	}
+{% if item.backend is defined %}
+{%   set backend %}
+		request_body {
+			max_size 10MB
+		}
+		# The container's alias on the edge network. While it is recreated
+		# (a deploy or a rollback), requests wait for it instead of failing.
+		reverse_proxy {{ item.name }}-backend:{{ item.backend.port }} {
+			lb_try_duration 15s
+			lb_try_interval 250ms
+		}
+{%   endset %}
+{% endif %}
+{% if item.site and item.backend is defined %}
 
-	# Single-page app: a path that is not a file gets index.html. A missing
-	# asset stays a 404 instead of returning HTML.
-	@spa {
-		not path /assets/*
-		not file
+	# The backend's paths. Everything else is the static site below.
+	@backend path {{ item.backend.paths | join(' ') }}
+	handle @backend {
+{{ backend }}	}
+{% elif item.backend is defined %}
+
+	# No static site: every path goes to the backend.
+	handle {
+{{ backend }}	}
+{% endif %}
+{% if item.site %}
+
+	handle {
+		root * {{ projects_sites_dir }}/{{ item.name }}/current
+
+		# Files under /assets/ carry a content hash in their name (Vite), so they
+		# never change; everything else is revalidated on each visit. A missing
+		# asset is not cached: after a rollback, a newer release may need it again.
+		@assets {
+			path /assets/*
+			file
+		}
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@not_assets not {
+			path /assets/*
+			file
+		}
+		header @not_assets Cache-Control "no-cache"
+
+		# Single-page app: a path that is not a file gets index.html. A missing
+		# asset stays a 404 instead of returning HTML.
+		@spa {
+			not path /assets/*
+			not file
+		}
+		rewrite @spa /index.html
+
+		file_server
 	}
-	rewrite @spa /index.html
-
-	file_server
+{% endif %}
 }
-{% if item.subdomain == '@' %}
+{% if item.subdomain == '@' and item.site %}
 
 # The root domain's project also answers on www, only to send visitors to the
 # root domain, keeping the path and query string.
