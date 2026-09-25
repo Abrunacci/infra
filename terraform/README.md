@@ -10,6 +10,8 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | A/AAAA records for `server`, `status` and each project in `../projects.yml`: the root domain for a project on `"@"`, plus `www` | `dns.tf` |
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
+| Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
+| DMARC `p=reject`: the domain sends no mail | `email.tf` |
 
 ## Credentials
 
@@ -18,13 +20,15 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 | Variable | What it is | Minimum scope |
 |---|---|---|
 | `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | `Zone → DNS → Edit` and `Zone → SSL and Certificates → Edit`, both on the `abrunacci.dev` zone only |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` |
+| `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account |
+| `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Not a credential, but kept out of the repo, which is public. It is stored in the state |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – |
 
-The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off; it still cannot touch any other zone or account setting. The R2 credentials are a separate token: a leak of either one does not expose the other.
+The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. The R2 credentials are a separate token: a leak of either one does not expose the other.
 
 ## State
 
@@ -41,6 +45,15 @@ terraform init
 terraform plan -out=tfplan  # review it
 terraform apply tfplan      # only after the plan has been reviewed
 ```
+
+## Mail
+
+Cloudflare Email Routing forwards `hello@`, `postmaster@` and `abuse@` to `TF_VAR_email_forward_to` (`email.tf`). Every other address is rejected while the message is being delivered, so the sender gets a bounce: the catch-all rule is declared, disabled.
+
+- **MX, SPF and DKIM are Cloudflare's.** `cloudflare_email_routing_dns` turns Email Routing on, and Cloudflare writes those records and locks them. They are not declared in `dns.tf`: their values (the MX priorities, the DKIM key) are assigned by Cloudflare, and a locked record cannot be managed by Terraform anyway. Destroying `cloudflare_email_routing_dns` turns Email Routing off.
+- **The destination address must be verified.** Creating it makes Cloudflare send a verification email. Until its link is clicked, the forwarding rules cannot be created: their precondition fails the plan with that message. So the first apply goes in two steps: `terraform apply` with `-target=cloudflare_email_routing_address.forward`, click the link, then the full plan and apply.
+- **DMARC `p=reject`.** The domain sends no mail, so receivers reject any message that claims to come from it. Replies go out from the inbox's own address: Gmail's "Send mail as" with an `@abrunacci.dev` address would fail DMARC too.
+- **The inbox address is in the state.** `email_forward_to` is `sensitive`, so plans hide it, but the state in R2 stores it in plain text.
 
 ## After the first apply
 
