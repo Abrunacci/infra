@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/backup). Sourced as shell by the backup commands
+# (/usr/local/lib/infra/backup.sh): every value is quoted.
+BACKUP_BUCKET={{ backup_bucket | quote }}
+BACKUP_ENDPOINT={{ backup_endpoint | quote }}
+BACKUP_RCLONE_IMAGE={{ backup_rclone_image | quote }}
+BACKUP_PROVIDER={{ backup_rclone_provider | quote }}
+BACKUP_MAX_AGE_HOURS={{ backup_max_age_hours | quote }}

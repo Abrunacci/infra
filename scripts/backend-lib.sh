@@ -276,6 +276,29 @@ backend_secret_problems() {
   return "$bad"
 }
 
+# Runs PROJECT's migrations with IMAGE in a one-off container of its migrate
+# service (db network only, the owner's connection, no app secrets), for up
+# to MIGRATE_SECONDS. Named, so it can be removed if it outlives its time:
+# timeout stops the Compose client, not the container. Its output goes to the
+# journal only (tag backend-migrate): it can hold connection details. LABEL
+# names the run in the journal. Returns 1 on failure, with MIGRATE_RESULT
+# saying why.
+backend_migrate() {
+  local project="$1" image="$2" label="$3" container rc=0 out
+  container="backend-$project-migrate"
+  docker rm -f "$container" >/dev/null 2>&1 </dev/null 9>&- || true
+  out="$(cd / && BACKEND_IMAGE="$image" timeout --kill-after=10 "$MIGRATE_SECONDS" docker compose \
+    --project-directory "$BACKENDS_DIR/$project" run --rm --no-deps -T --name "$container" migrate \
+    </dev/null 2>&1 9>&-)" || rc=$?
+  docker rm -f "$container" >/dev/null 2>&1 </dev/null 9>&- || true
+  logger -t backend-migrate -- "project=$project run=$label exit=$rc" 2>/dev/null || true
+  [[ -z "$out" ]] || logger -t backend-migrate <<<"$out" 2>/dev/null || true
+  ((rc == 0)) && return 0
+  MIGRATE_RESULT="failed (exit $rc)"
+  [[ $rc -eq 124 || $rc -eq 137 ]] && MIGRATE_RESULT="took longer than ${MIGRATE_SECONDS}s and were stopped"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Databases
 

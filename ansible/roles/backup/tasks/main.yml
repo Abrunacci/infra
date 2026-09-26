@@ -1,0 +1,98 @@
+---
+# The public keys and the account ID must be set before anything else: a
+# backup job that could not encrypt, or upload, is worse than none, because it
+# looks like one.
+- name: Check the backup settings
+  ansible.builtin.assert:
+    that:
+      - backup_age_recipients is sequence and backup_age_recipients is not string
+      - backup_age_recipients | length > 0
+      - backup_age_recipients | reject('match', '^age1[0-9a-z]{58}\Z') | list | length == 0
+      - backup_cloudflare_account_id is match('^[0-9a-f]{32}\Z')
+    fail_msg: >-
+      Backups need backup_age_recipients (age public keys, age1..., in group_vars/all/main.yml; see
+      ansible/README.md, "Backups") and TF_VAR_cloudflare_account_id from terraform/.env loaded in this shell.
+    quiet: true
+
+- name: Install age
+  ansible.builtin.apt:
+    name: age
+    state: present
+
+# Pulled here, so a backup never downloads anything but the backup itself
+# (docker run --pull never).
+- name: Pull the rclone image
+  community.docker.docker_image_pull:
+    name: "{{ backup_rclone_image }}"
+    pull: not_present
+
+- name: Create the backup directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    # The R2 credentials (backup-credentials).
+    - { path: "{{ infra_secrets_dir }}/backup", mode: "0700" }
+    # The last run's result, public: the login warning reads it.
+    - { path: /var/lib/infra/backup, mode: "0755" }
+    # Also created by roles/projects; this role must not depend on it.
+    - { path: /usr/local/lib/infra, mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the backup configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: backup.conf.j2, dest: /etc/infra/backup.conf }
+    - { src: backup-recipients.txt.j2, dest: /etc/infra/backup-recipients.txt }
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install the backup commands
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    # Sourced by the three commands; never executed.
+    - { src: backup-lib.sh, dest: /usr/local/lib/infra/backup.sh, mode: "0644" }
+    - { src: backup-run, dest: /usr/local/sbin/backup-run, mode: "0755" }
+    - { src: backup-restore, dest: /usr/local/sbin/backup-restore, mode: "0755" }
+    - { src: backup-credentials, dest: /usr/local/sbin/backup-credentials, mode: "0755" }
+    - { src: backup-login.sh, dest: /etc/profile.d/backup-status.sh, mode: "0644" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install the backup service and its timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - backup.service
+    - backup.timer
+  notify: Reload systemd
+
+- name: Apply systemd changes now
+  ansible.builtin.meta: flush_handlers
+
+# Enabled even before the R2 credentials are stored: until then every run
+# fails, and the login warning says so, instead of backups silently not
+# existing.
+- name: Start the daily backup timer
+  ansible.builtin.systemd_service:
+    name: backup.timer
+    enabled: true
+    state: started
