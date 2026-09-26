@@ -95,24 +95,9 @@ forget_image() {
 if [[ "$BACKEND_MIGRATE" == true ]]; then
   dump="$(db_dump "$DB_NAME" "$DUMPS_DIR/$project" "before-$release" "$KEEP_DUMPS")" \
     || fail "the dump before the migrations failed; nothing was changed"
-  # The migrations' output goes to the journal only, like the container's
-  # log: it can hold connection details.
-  # Named, so it can be removed if it outlives its time: timeout stops the
-  # Compose client, not the container.
-  migrate_container="backend-$project-migrate"
-  docker rm -f "$migrate_container" >/dev/null 2>&1 </dev/null 9>&- || true
-  rc=0
-  out="$(cd / && BACKEND_IMAGE="$image" timeout --kill-after=10 "$MIGRATE_SECONDS" docker compose \
-    --project-directory "$BACKENDS_DIR/$project" run --rm --no-deps -T --name "$migrate_container" migrate \
-    </dev/null 2>&1 9>&-)" || rc=$?
-  docker rm -f "$migrate_container" >/dev/null 2>&1 </dev/null 9>&- || true
-  logger -t backend-migrate -- "project=$project release=$release exit=$rc" 2>/dev/null || true
-  [[ -z "$out" ]] || logger -t backend-migrate <<<"$out" 2>/dev/null || true
-  if [[ $rc -ne 0 ]]; then
+  if ! backend_migrate "$project" "$image" "deploy $release"; then
     forget_image
-    what="failed (exit $rc)"
-    [[ $rc -eq 124 || $rc -eq 137 ]] && what="took longer than ${MIGRATE_SECONDS}s and were stopped"
-    fail "the migrations $what; the running release is untouched. Log: sudo journalctl -t backend-migrate. Dump before them: $dump"
+    fail "the migrations $MIGRATE_RESULT; the running release is untouched. Log: sudo journalctl -t backend-migrate. Dump before them: $dump"
   fi
 fi
 

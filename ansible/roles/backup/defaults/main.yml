@@ -1,0 +1,17 @@
+---
+# Encrypted off-site backups to R2 (terraform/backup-bucket). What is backed
+# up and how: scripts/backup-run; how to restore: scripts/backup-restore.
+
+# The same image and version used to test the bucket's lock (#17), pinned by
+# digest like every other image.
+backup_rclone_image: rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5
+backup_bucket: infra-backups
+# R2's S3 endpoint for the account; the account ID comes from terraform/.env,
+# loaded before running the playbook (see ansible/README.md, "Usage").
+backup_cloudflare_account_id: "{{ lookup('ansible.builtin.env', 'TF_VAR_cloudflare_account_id') | trim }}"
+backup_endpoint: "https://{{ backup_cloudflare_account_id }}.r2.cloudflarestorage.com"
+backup_rclone_provider: Cloudflare
+# systemd calendar time, UTC: before the automatic reboot window (07:30).
+backup_time: "03:30:00"
+# The login warning shows when the last successful backup is older than this.
+backup_max_age_hours: 26

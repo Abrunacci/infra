@@ -37,9 +37,7 @@ ICMP and ICMPv6 are the one deliberate exception:
 DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) are turned off on purpose, because they would back up nothing that is not already covered elsewhere:
 
 - **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it, so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand, except the admin's sudo password, which is typed on the server so it is never in the repo.
-- **The data is backed up on its own.** PostgreSQL dumps go to Cloudflare R2 every day, encrypted and with retention (7 daily, 4 weekly, 6 monthly). They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk.
-
-> **Status:** the backup job and its tested restore procedure arrive in an upcoming PR. Until that PR is merged, no project data goes on the server.
+- **The data is backed up on its own.** Every day at 03:30 UTC, each project's database, the roles its migrations created and the projects' secrets go to Cloudflare R2, encrypted with [age](https://age-encryption.org) to a public key whose private half is never on the server. Retention is 7 daily, 4 weekly and 6 monthly copies, and a bucket lock keeps the server itself from deleting them. They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk. See `ansible/README.md`, "Backups", for the restore procedure and the monthly restore drill.
 
 ## Development
 

@@ -26,7 +26,7 @@
           "description": "Directories, registry entry and, with a database, the database and user (with - turned into _).",
           "allOf": [
             { "$ref": "#/$defs/label" },
-            { "not": { "enum": ["postgres", "template0", "template1"] } }
+            { "not": { "enum": ["postgres", "template0", "template1", "restore-drill"] } }
           ]
         },
         "subdomain": {

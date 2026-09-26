@@ -1,0 +1,14 @@
+# Managed by Ansible (roles/backup).
+[Unit]
+Description=Encrypted off-site backup to R2 (backup-run)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/backup-run
+TimeoutStartSec=2h
+# Gives way to everything else on the server.
+Nice=10
+IOSchedulingClass=idle

@@ -29,3 +29,5 @@
       tags: [projects]
     - role: deploy
       tags: [deploy]
+    - role: backup
+      tags: [backup]

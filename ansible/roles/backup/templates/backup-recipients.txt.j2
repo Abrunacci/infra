@@ -1,0 +1,5 @@
+# Managed by Ansible (roles/backup), from backup_age_recipients: the public
+# keys every backup is encrypted to. Their private keys are never on the server.
+{% for r in backup_age_recipients %}
+{{ r }}
+{% endfor %}

@@ -48,7 +48,8 @@
     that:
       - item.keys() | difference(projects_allowed_keys) | length == 0
       - item.name is string and item.name is match(projects_label)
-      - item.name not in ['postgres', 'template0', 'template1']
+      # restore-drill: its database would be backup-restore's scratch one.
+      - item.name not in ['postgres', 'template0', 'template1', 'restore-drill']
       # "@" is the root domain; www is reserved for its redirect.
       - item.subdomain is string and (item.subdomain == '@' or item.subdomain is match(projects_label))
       - item.subdomain not in ['server', 'status', 'www']

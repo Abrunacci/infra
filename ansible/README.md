@@ -12,6 +12,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
+| `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
 
@@ -363,6 +364,138 @@ If the fix is in the playbook itself (the `docker` role must reinstall Docker, o
 ```
 
 The `projects` role refuses to run when the database check was skipped, so this bypass cannot reach the projects or rewrite the server's registry. Then run the whole playbook as usual; the check runs again.
+
+## Backups
+
+Every day at 03:30 UTC, `backup-run` (a systemd timer; `Persistent=true`, so a run missed while the server was off happens when it is back) uploads one encrypted backup to the R2 bucket `infra-backups` (`terraform/backup-bucket/`).
+
+**What each backup holds.** It is one directory, `daily/<UTC time>/`, with:
+- `<project>.dump.age`: `pg_dump -Fc` of each project database;
+- `<project>.roles.tsv.age`: the roles its migrations created and their memberships, stored as data, not SQL;
+- `secrets.tar.age`: `/etc/infra/secrets/projects`, with database passwords and generated and manual secrets;
+- `MANIFEST`: plain text, each file's name, size and SHA-256.
+
+Left out on purpose: the PostgreSQL superuser password, which a new server generates for itself, and the R2 and GHCR credentials, which are typed in again.
+
+**How it is kept safe.**
+- **Encryption:** everything is encrypted with [age](https://age-encryption.org) to the public keys in `backup_age_recipients` (`group_vars/all/main.yml`) as it is written, so nothing lands unencrypted, not even in the temporary directory. The private key is never stored on the server: it lives in the password manager and on paper.
+- **Unique names:** a run's directory name is its own UTC time, so no two runs write the same file.
+- **Retention:** on Sundays the directory is also copied, inside R2, to `weekly/`, and on the 1st to `monthly/`. The bucket keeps 7 daily, 4 weekly and 6 monthly copies, and its lock keeps the server from deleting or overwriting them.
+
+**Checked on every run.** Each encrypted file must start with age's header. After uploading, every file must be in the bucket with its size, in `daily/` and in each copy. A project that declares a database PostgreSQL does not have makes the run fail, after the others are uploaded.
+
+**When something is wrong.** The result goes to the journal (`sudo journalctl -t backup`) and to `/var/lib/infra/backup/`. Every SSH login warns, until fixed, when:
+- no backup has succeeded yet;
+- the last success is more than 26 hours old;
+- or the last run failed.
+
+This warning matters: a server that stops uploading, for whatever reason, sees its daily copies expire after about a week.
+
+### A backup is not trusted blindly
+
+The backups are encrypted to a **public** key, and encrypting proves nothing about who wrote them. Anyone with the server's upload credentials (a compromised server, say) could add a backup of their own that the private key decrypts without complaint. So restoring never gives a backup more than the project's own rights:
+- **Restored as the owner:** data is restored connected as the project's database owner (`CREATEROLE`, nothing else), never as the superuser.
+- **Roles as data:** the roles are read field by field, and recreated by SQL `backup-restore` writes itself.
+- **Chosen by upload time:** `list` shows when R2 **received** each backup, which the uploader cannot set, and the default choice uses it. A backup whose name does not match that time (a date in the future, a name made up later) is marked `SUSPECT` and refused. After a suspected compromise, choose a backup R2 received **before** it.
+
+### Setting it up
+
+1. **The key pair**, on your machine:
+   ```sh
+   age-keygen -o ~/infra-backups.age.key
+   ```
+   It prints the public key (`Public key: age1...`). The file holds the private key (`AGE-SECRET-KEY-1...`).
+   - Copy that line into the password manager.
+   - Write it on paper, and keep the paper somewhere safe, away from the computer.
+   - Then remove the file: `shred -u ~/infra-backups.age.key`. On an SSD, `shred` cannot promise the data is gone, so keep the file on disk as briefly as possible.
+
+   Losing every copy of the private key loses every backup.
+2. **The public key** goes in `backup_age_recipients`, in `group_vars/all/main.yml`, through a PR. Public keys are not secret. More than one can be listed: each backup can then be decrypted with any of them. Until one is set, the playbook stops at the `backup` role, which runs last.
+3. **The playbook** installs everything: `./play site.yml -K --diff`, with `terraform/.env` loaded as in "Usage", since the role builds R2's address from the account ID.
+4. **The R2 credentials**, on the server: `sudo backup-credentials`.
+   - It asks for the "server backups" token's Access Key ID and Secret Access Key, without showing them.
+   - It stores them in `/etc/infra/secrets/backup/r2.env` (root only) and checks them against the bucket.
+   - Run it again to replace an expiring token.
+5. **A first backup** now, instead of waiting for 03:30: `sudo backup-run`.
+
+### Commands
+
+```sh
+sudo backup-run                                        # a backup now
+sudo backup-restore list                               # backups, newest first, with when R2 received them
+sudo backup-restore drill <project> [<snapshot>]       # the restore drill (below)
+sudo backup-restore database <project> [<snapshot>]    # restore a missing or empty database
+sudo backup-restore database <project> --from-dir DIR  # the same, from files decrypted elsewhere
+sudo backup-restore secrets [<snapshot>]
+sudo journalctl -t backup -t backup-restore            # what happened
+systemctl list-timers backup.timer                     # when the next run is
+```
+
+A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without one, the newest trustworthy daily backup is used. The commands that decrypt ask for the private key without showing it: typed from paper, or pasted from the password manager. The key is never written to a file. It stays in the command's memory while it runs, which the kernel could move to swap, like anything else in memory.
+
+### The restore drill, once a month
+
+A backup that has never been restored is only a hope. `sudo backup-restore drill <project>`:
+1. downloads the newest backup and checks it against its manifest;
+2. restores it, as the owner, into a scratch database (`restore_drill`; the project name `restore-drill` is reserved for that);
+3. prints each table's row count in the backup and in the live database;
+4. checks that the roles' list and the secrets decrypt;
+5. drops the scratch database, even if the drill stops halfway.
+
+It changes nothing else. Do it once a month (put it in your calendar), and every few months type the key from the **paper** copy, so you know the paper works.
+
+### Restoring
+
+- **A database:** `sudo backup-restore database <project> [<snapshot>]`. It acts only when the project's database is missing (dropped, a lost volume) or empty (a new server, where the playbook just created it); a database with anything in it is refused. It:
+  1. creates the database and its roles with `project-db` if they are missing (asking you to confirm);
+  2. stops the project's backend, if one is deployed, under its lock, so nothing writes meanwhile;
+  3. recreates, as the owner, the roles its migrations had created;
+  4. restores the data, as the owner;
+  5. if a backend is deployed, runs that release's migrations on the restored data, since the backup may be older than its schema, and starts the backend again, checking its health.
+
+  Do not run the playbook while a restore is in progress: it would wait for the project's lock and then fail (safely, without starting the backend halfway). On a new server, restore before the first deploy: the first deploy's migrations then continue from the restored schema. For a restore from a pre-migration dump instead, see "Restoring a project's database".
+- **Secrets:** `sudo backup-restore secrets [<snapshot>]` decrypts them into `/root/restored-secrets-<time>/` (root only). The live files are never overwritten: copy back what is needed by hand, then remove that directory.
+
+### Restoring without pasting the key on the server
+
+**If there is any suspicion that the server is compromised, do not paste the private key on it.** Someone with root there could read it from memory, and with it every backup. Instead, build a new server from this repo (Terraform, then the playbook, with the project in `projects.yml` but not deployed), and restore there with the backup decrypted on your own machine.
+
+1. **Download the backup to your machine** with the "server backups" token (from the password manager), in a subshell, from `~/infra`.
+   - The credentials go to Docker through the environment, not the command line.
+   - The `DOCKER_CONFIG` line avoids Docker Desktop's credential helper, which fails in WSL.
+   - Replace `daily/20260926T033000Z` with a backup R2 received before the suspected compromise; `backup-restore list` on any server shows the times, and so does the R2 dashboard.
+
+   ```sh
+   (
+     set -a; . terraform/.env; set +a
+     read -rs "RCLONE_CONFIG_R2_ACCESS_KEY_ID?Access Key ID: "; echo
+     read -rs "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY?Secret Access Key: "; echo
+     export RCLONE_CONFIG_R2_ACCESS_KEY_ID RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+     export DOCKER_CONFIG="$(mktemp -d)"
+     mkdir -p ~/restore && cd ~/restore || exit 1
+     docker run --rm -v "$PWD:/work" \
+       -e RCLONE_CONFIG_R2_ACCESS_KEY_ID -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+       -e RCLONE_CONFIG_R2_TYPE=s3 -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+       -e RCLONE_CONFIG_R2_ENDPOINT="https://$TF_VAR_cloudflare_account_id.r2.cloudflarestorage.com" \
+       -e RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
+       rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5 \
+       copy r2:infra-backups/daily/20260926T033000Z /work
+   )
+   ```
+2. **Decrypt it on your machine.** Install `age` first (`sudo apt install age`). Paste the key when asked:
+   ```sh
+   (
+     cd ~/restore || exit 1
+     read -rs "KEY?age private key: "; echo
+     for f in *.age; do age -d -i <(printf '%s\n' "$KEY") -o "${f%.age}" "$f"; done
+   )
+   ```
+3. **On the new server**, copy `<project>.dump` and `<project>.roles.tsv` into a directory in `ops`'s home (`scp` them to `~/restore/`), then:
+   ```sh
+   sudo backup-restore database <project> --from-dir /home/ops/restore
+   ```
+   It restores exactly as from R2 (as the owner, the roles checked field by field), without asking for any key. Take what you need from `secrets.tar` by hand.
+4. **Remove the decrypted files** from both machines when done: `shred -u ~/restore/*`. They are plain text.
 
 ## Rotating the admin SSH key
 

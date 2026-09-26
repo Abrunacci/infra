@@ -39,3 +39,10 @@ postgres_ipv4_address: 172.30.0.10
 # Loopback port of the temporary PostgreSQL bridge (roles/db_tunnel), and the
 # only destination admin_user may forward to over SSH (roles/hardening).
 db_tunnel_port: 15432
+
+# age public keys every backup is encrypted to (roles/backup). Public keys
+# are not secret; their private keys never go on the server: they live in the
+# password manager and on paper (ansible/README.md, "Backups"). Every backup
+# can be decrypted with any one of them. Empty until the first key is created:
+# the backups role refuses to run without one.
+backup_age_recipients: []

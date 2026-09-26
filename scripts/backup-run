@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Takes one encrypted backup and uploads it to R2. Run every day by
+# backup.timer (roles/backup), or by hand: sudo backup-run
+#
+#   1. For every project with a database: pg_dump -Fc of it, and the list of
+#      the roles its migrations created (data, not SQL). Then a tar of
+#      /etc/infra/secrets/projects. Each one is encrypted with age to the
+#      public keys in /etc/infra/backup-recipients.txt as it is written, into
+#      a root-only temporary directory: nothing is written unencrypted.
+#   2. A MANIFEST (plain text: names, sizes, SHA-256) is added, and every
+#      .age file is checked to start with age's header.
+#   3. The directory is uploaded to daily/<UTC time>/, a name no other run
+#      uses: the bucket's lock refuses overwriting anything.
+#   4. The upload is checked: every file is listed in the bucket with its size.
+#   5. On Sundays it is copied inside R2 to weekly/<UTC time>/, on the 1st to
+#      monthly/<UTC time>/, and each copy is checked the same way.
+#   6. The result is written to /var/lib/infra/backup/ (read by the login
+#      warning) and to the journal (tag: backup).
+#
+# A project whose database is declared but missing fails the run (after the
+# other projects are backed up), since the backup would silently lack it.
+# Installed by Ansible (roles/backup) as /usr/local/sbin/backup-run.
+set -euo pipefail
+umask 077
+export LC_ALL=C
+cd /
+
+started="$(date -u +%s)"
+snapshot_time="$(date -u -d "@$started" +%Y%m%dT%H%M%SZ)"
+work=""
+
+record() {
+  # $1: ok or failed; $2: detail. Written atomically, readable by everyone.
+  install -d -m 0755 -o root -g root "$BACKUP_STATE"
+  printf 'result=%s\ntime=%s\ndetail=%s\n' "$1" "$(date -u '+%F %H:%M UTC')" "$2" >"$BACKUP_STATE/.last-run.$$"
+  chmod 0644 "$BACKUP_STATE/.last-run.$$"
+  mv -f "$BACKUP_STATE/.last-run.$$" "$BACKUP_STATE/last-run"
+  if [[ "$1" == ok ]]; then
+    printf '%s\n' "$started" >"$BACKUP_STATE/.last-success.$$"
+    chmod 0644 "$BACKUP_STATE/.last-success.$$"
+    mv -f "$BACKUP_STATE/.last-success.$$" "$BACKUP_STATE/last-success"
+  fi
+}
+
+fail() {
+  echo "backup-run: $*" >&2
+  logger -t backup -- "result=failed snapshot=$snapshot_time reason=\"${*//\"/\'}\"" 2>/dev/null || true
+  record failed "$*"
+  exit 1
+}
+
+cleanup() {
+  [[ -n "$work" ]] && rm -rf -- "$work"
+}
+trap cleanup EXIT
+
+# shellcheck source=scripts/backup-lib.sh
+. /usr/local/lib/infra/backup.sh
+[[ "$EUID" -eq 0 ]] || { echo "backup-run: run it with sudo" >&2; exit 1; }
+backup_load
+exec 8>"$BACKUP_LOCK"
+# Not recorded as a failure: the run holding the lock records its own result.
+flock -n 8 || { echo "backup-run: another backup-run (or a restore) is running" >&2; exit 1; }
+db_container
+
+work="$(mktemp -d /var/tmp/infra-backup.XXXXXX)"
+recipients=(-R "$BACKUP_RECIPIENTS")
+missing=()
+projects=()
+
+# 1. Dumps, roles and secrets, encrypted as they are written.
+while read -r project; do
+  [[ -n "$project" ]] || continue
+  [[ "$project" =~ $NAME_RE ]] || fail "invalid project name in the registry: $project"
+  db_names "$project"
+  if ! db_exists "$DB_NAME"; then
+    missing+=("$project")
+    continue
+  fi
+  docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$DB_NAME" 9>&- \
+    | age "${recipients[@]}" -o "$work/$project.dump.age" \
+    || fail "pg_dump or age failed for $project"
+  db_roles_tsv "$project" | age "${recipients[@]}" -o "$work/$project.roles.tsv.age" \
+    || fail "could not export the roles of $project"
+  projects+=("$project")
+done < <(backup_projects_with_database)
+
+if [[ -d "$SECRETS_DIR" ]]; then
+  tar -C "$(dirname "$SECRETS_DIR")" -c "$(basename "$SECRETS_DIR")" \
+    | age "${recipients[@]}" -o "$work/secrets.tar.age" \
+    || fail "could not archive the secrets"
+fi
+
+# 2. Every encrypted file starts with age's header; the manifest lists them.
+for f in "$work"/*.age; do
+  [[ -e "$f" ]] || continue
+  [[ "$(head -c ${#AGE_HEADER} "$f")" == "$AGE_HEADER" ]] || fail "$(basename "$f") is not an age file"
+done
+(
+  cd "$work"
+  for f in *.age; do
+    [[ -e "$f" ]] || continue
+    printf '%s %s %s\n' "$f" "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"
+  done
+) >"$work/MANIFEST"
+files="$(wc -l <"$work/MANIFEST")"
+bytes="$(awk '{s += $2} END {print s + 0}' "$work/MANIFEST")"
+
+# Every file of the manifest, and the manifest itself, must be in PREFIX in
+# the bucket with its size.
+verify() {
+  local prefix="$1" remote name size
+  remote="$(r2 lsf "r2:$BACKUP_BUCKET/$prefix" --format ps --separator ' ' </dev/null)" \
+    || fail "could not list $prefix after writing it"
+  while read -r name size _; do
+    grep -qxF "$name $size" <<<"$remote" || fail "$prefix/$name is missing or has another size in the bucket"
+  done < <(cat "$work/MANIFEST"; printf 'MANIFEST %s x\n' "$(stat -c %s "$work/MANIFEST")")
+}
+
+# 3. Upload. The container reads the files as root, from a read-only mount.
+chmod 0700 "$work"
+prefix="daily/$snapshot_time"
+r2 --dir-ro "$work" copy /work "r2:$BACKUP_BUCKET/$prefix" --immutable </dev/null \
+  || fail "the upload to $prefix failed"
+
+# 4. Check what the bucket has against the manifest.
+verify "$prefix"
+
+# 5. Weekly and monthly copies, made inside R2.
+copies="daily"
+if [[ "$(date -u -d "@$started" +%u)" == 7 ]]; then
+  r2 copy "r2:$BACKUP_BUCKET/$prefix" "r2:$BACKUP_BUCKET/weekly/$snapshot_time" --immutable </dev/null \
+    || fail "the weekly copy failed"
+  verify "weekly/$snapshot_time"
+  copies+=",weekly"
+fi
+if [[ "$(date -u -d "@$started" +%d)" == 01 ]]; then
+  r2 copy "r2:$BACKUP_BUCKET/$prefix" "r2:$BACKUP_BUCKET/monthly/$snapshot_time" --immutable </dev/null \
+    || fail "the monthly copy failed"
+  verify "monthly/$snapshot_time"
+  copies+=",monthly"
+fi
+
+if ((${#missing[@]})); then
+  fail "uploaded $prefix, but these projects declare a database that PostgreSQL does not have: ${missing[*]}"
+fi
+
+detail="$snapshot_time in $copies: ${#projects[@]} database(s), $files files, $bytes bytes, $(($(date -u +%s) - started)) s"
+logger -t backup -- "result=ok snapshot=$snapshot_time copies=$copies databases=${#projects[@]} files=$files bytes=$bytes" \
+  2>/dev/null || true
+record ok "$detail"
+echo "Backup $detail"
