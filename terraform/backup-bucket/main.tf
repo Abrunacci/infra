@@ -33,6 +33,39 @@ locals {
     weekly  = [28, 35]
     monthly = [180, 186]
   }
+
+  # Sorted by id: Cloudflare returns the rules in that order, and Terraform
+  # compares this list by position, so any other order shows up as a change
+  # in every plan. The precondition below keeps it that way.
+  backup_lifecycle_rules = concat(
+    # An upload the job never finished (a reboot midway) is not an object and
+    # is not locked; its parts are removed after a day. This replaces the
+    # 7-day rule R2 adds to new buckets, like every rule not declared here.
+    [{
+      id         = "abort-incomplete-uploads"
+      enabled    = true
+      conditions = { prefix = "" }
+      abort_multipart_uploads_transition = {
+        condition = {
+          type    = "Age"
+          max_age = 86400
+        }
+      }
+    }],
+    # expire-daily, expire-monthly, expire-weekly: a map is iterated in key
+    # order.
+    [for prefix, days in local.backup_retention : {
+      id         = "expire-${prefix}"
+      enabled    = true
+      conditions = { prefix = "${prefix}/" }
+      delete_objects_transition = {
+        condition = {
+          type    = "Age"
+          max_age = days[1] * 86400
+        }
+      }
+    }],
+  )
 }
 
 resource "cloudflare_r2_bucket" "backups" {
@@ -77,36 +110,14 @@ resource "cloudflare_r2_bucket_lifecycle" "backups" {
   account_id  = var.cloudflare_account_id
   bucket_name = cloudflare_r2_bucket.backups.name
 
-  rules = concat(
-    [for prefix, days in local.backup_retention : {
-      id         = "expire-${prefix}"
-      enabled    = true
-      conditions = { prefix = "${prefix}/" }
-      delete_objects_transition = {
-        condition = {
-          type    = "Age"
-          max_age = days[1] * 86400
-        }
-      }
-    }],
-    # An upload the job never finished (a reboot midway) is not an object and
-    # is not locked; its parts are removed after a day. This replaces the
-    # 7-day rule R2 adds to new buckets, like every rule not declared here.
-    [{
-      id         = "abort-incomplete-uploads"
-      enabled    = true
-      conditions = { prefix = "" }
-      abort_multipart_uploads_transition = {
-        condition = {
-          type    = "Age"
-          max_age = 86400
-        }
-      }
-    }],
-  )
+  rules = local.backup_lifecycle_rules
 
   lifecycle {
     prevent_destroy = true
+    precondition {
+      condition     = join(",", local.backup_lifecycle_rules[*].id) == join(",", sort(local.backup_lifecycle_rules[*].id))
+      error_message = "cloudflare_r2_bucket_lifecycle.backups: keep the rules sorted by id, the order Cloudflare returns them in."
+    }
     precondition {
       # A lifecycle rule that fires while the lock still holds would fail to
       # delete, silently.
