@@ -45,4 +45,5 @@ db_tunnel_port: 15432
 # password manager and on paper (ansible/README.md, "Backups"). Every backup
 # can be decrypted with any one of them. Empty until the first key is created:
 # the backups role refuses to run without one.
-backup_age_recipients: []
+backup_age_recipients:
+  - age1vvaxtrh24zkr49ny7zd42snggm748f9axwpza7xyhgq33vmr69lqc56j6p
