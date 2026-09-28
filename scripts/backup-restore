@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# Restores from the encrypted backups in R2. Run on the server by the admin.
+#
+#   sudo backup-restore list                               the backups, newest first, with the time R2
+#                                                          received each one
+#   sudo backup-restore drill PROJECT [SNAPSHOT]           restore drill: restore into a scratch database,
+#                                                          compare row counts with the live one, check the
+#                                                          roles and secrets decrypt, drop the scratch one
+#   sudo backup-restore database PROJECT [SNAPSHOT]        restore PROJECT's database, which must be missing
+#                                                          (lost, dropped) or empty (a new server). A deployed
+#                                                          backend is stopped meanwhile, its release's
+#                                                          migrations run on the restored data, and it is
+#                                                          started again
+#   sudo backup-restore database PROJECT --from-dir DIR    the same from files decrypted elsewhere
+#                                                          (DIR/PROJECT.dump, DIR/PROJECT.roles.tsv): no key
+#                                                          is asked for on this server
+#   sudo backup-restore secrets [SNAPSHOT]                 decrypt the secrets into /root/restored-secrets-<time>/,
+#                                                          for copying back by hand
+#
+# SNAPSHOT is a line of `list`, such as daily/20260926T033000Z; without it, the
+# newest daily backup. Commands that decrypt ask for the age private key
+# (AGE-SECRET-KEY-1...) without showing it; it is never written to a file.
+#
+# What a backup holds is never trusted with more than the project's own rights.
+# The backups are encrypted to a PUBLIC key, which proves nothing about who
+# wrote them: anyone with the server's upload credentials could add a backup
+# of their own. So:
+#   - data is restored connected as the project's database owner, never as the
+#     superuser;
+#   - the roles are stored as data, checked field by field, and recreated by
+#     SQL this script writes, as the owner;
+#   - a backup is listed and chosen by the time R2 received it, which the
+#     uploader cannot set: one whose name does not match that time (a date in
+#     the future, a name made up afterwards) is refused.
+#
+# If there is any suspicion that this server is compromised, do not paste the
+# key here: decrypt on your own machine and use --from-dir on a new server
+# (ansible/README.md, "Restoring without pasting the key on the server").
+# Installed by Ansible (roles/backup) as /usr/local/sbin/backup-restore.
+set -euo pipefail
+umask 077
+export LC_ALL=C
+cd /
+
+fail() {
+  echo "backup-restore: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: sudo backup-restore {list | drill PROJECT [SNAPSHOT] | database PROJECT [SNAPSHOT | --from-dir DIR] | secrets [SNAPSHOT]}" >&2
+  exit 2
+}
+
+# shellcheck source=scripts/backup-lib.sh
+. /usr/local/lib/infra/backup.sh
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+[[ $# -ge 1 ]] || usage
+action="$1"
+shift
+case "$action" in
+  list) [[ $# -eq 0 ]] || usage ;;
+  drill) [[ $# -ge 1 && $# -le 2 ]] || usage ;;
+  database) [[ $# -ge 1 && $# -le 3 ]] || usage ;;
+  secrets) [[ $# -le 1 ]] || usage ;;
+  *) usage ;;
+esac
+backup_load
+
+work=""
+key=""
+scratch=""
+readonly SCRATCH_DB=restore_drill
+cleanup() {
+  key=""
+  if [[ -n "$scratch" ]]; then
+    db_psql <<<"DROP DATABASE IF EXISTS \"$scratch\" WITH (FORCE)" >/dev/null 2>&1 || true
+  fi
+  [[ -n "$work" ]] && rm -rf -- "$work"
+}
+trap cleanup EXIT
+
+# One line per backup: "<prefix>/<name> <uploaded epoch> <ok|SUSPECT>". The
+# upload time is the MANIFEST's, as R2 records it. A name must not be in the
+# future, and must be at most 3 hours older than its upload (a run, or its
+# weekly and monthly copies).
+snapshots() {
+  local p stamp path name uploaded named now
+  now="$(date -u +%s)"
+  for p in daily weekly monthly; do
+    r2 lsf "r2:$BACKUP_BUCKET/$p" -R --files-only --include '*/MANIFEST' --format tp --separator '|' </dev/null \
+      | while IFS='|' read -r stamp path; do
+        name="${path%/MANIFEST}"
+        [[ "$p/$name" =~ $SNAPSHOT_RE ]] || continue
+        uploaded="$(date -u -d "$stamp" +%s)" || continue
+        named="$(date -u -d "${name:0:4}-${name:4:2}-${name:6:2} ${name:9:2}:${name:11:2}:${name:13:2}" +%s)" || continue
+        if ((named <= now + 300 && uploaded >= named - 300 && uploaded <= named + 10800)); then
+          echo "$p/$name $uploaded ok"
+        else
+          echo "$p/$name $uploaded SUSPECT"
+        fi
+      done
+  done
+}
+
+# The snapshot asked for, if trustworthy, or the newest trustworthy daily one.
+pick_snapshot() {
+  local all line
+  all="$(snapshots)"
+  if [[ -n "${1:-}" ]]; then
+    [[ "$1" =~ $SNAPSHOT_RE ]] || fail "invalid snapshot: $1 (see: sudo backup-restore list)"
+    line="$(grep "^$1 " <<<"$all")" || fail "no backup $1 (see: sudo backup-restore list)"
+    [[ "$line" == *" ok" ]] || fail "$1 was not uploaded when its name says: it is not trusted (see: sudo backup-restore list)"
+    echo "$1"
+    return
+  fi
+  line="$(grep '^daily/.* ok$' <<<"$all" | sort -k2,2n | tail -n 1)" || true
+  [[ -n "$line" ]] || fail "there are no trustworthy daily backups in $BACKUP_BUCKET"
+  echo "${line%% *}"
+}
+
+read_key() {
+  [[ -t 0 ]] || fail "it asks for the private key: run it in a terminal"
+  IFS= read -rs -p "age private key (AGE-SECRET-KEY-1..., not shown): " key
+  echo >&2
+  key="${key^^}"
+  key="${key//[[:space:]]/}"
+  [[ "$key" =~ ^AGE-SECRET-KEY-1[0-9A-Z]{58}$ ]] || fail "that is not an age private key (AGE-SECRET-KEY-1 and 58 more characters)"
+}
+
+# Decrypts FILE to stdout with the key, which reaches age through a pipe.
+decrypt() {
+  age -d -i <(printf '%s\n' "$key") "$1"
+}
+
+new_work() {
+  work="$(mktemp -d /var/tmp/infra-restore.XXXXXX)"
+}
+
+# Downloads SNAPSHOT (only FILTER's files, plus the manifest) and checks
+# every file against the manifest.
+download() {
+  local snapshot="$1" filter="$2" name size sum
+  r2 --dir "$work" copy "r2:$BACKUP_BUCKET/$snapshot" /work --include MANIFEST --include "$filter" </dev/null \
+    || fail "could not download $snapshot"
+  [[ -f "$work/MANIFEST" ]] || fail "$snapshot has no MANIFEST"
+  while read -r name size sum; do
+    [[ -f "$work/$name" ]] || continue
+    [[ "$(stat -c %s "$work/$name")" == "$size" && "$(sha256sum "$work/$name" | cut -d' ' -f1)" == "$sum" ]] \
+      || fail "$name does not match the manifest: the download is damaged"
+  done <"$work/MANIFEST"
+}
+
+# Restores the dump on stdin into DATABASE, connected as PROJECT's owner.
+restore_dump() {
+  local project="$1" database="$2"
+  db_as_owner "$project" "$work" pg_restore -h 127.0.0.1 -U "$DB_OWNER" -d "$database" --no-owner --exit-on-error
+}
+
+# Table sizes of DATABASE, "schema.table count" per line.
+row_counts() {
+  local database="$1" table
+  db_psql "$database" <<<"SELECT format('%I.%I', schemaname, tablename) FROM pg_tables
+                          WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1" \
+    | while read -r table; do
+      printf '%s %s\n' "$table" "$(db_psql "$database" <<<"SELECT count(*) FROM $table")"
+    done
+}
+
+# Tables, views and sequences outside the catalogs: 0 means empty.
+object_count() {
+  db_psql "$1" <<<"SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%'
+                     AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')"
+}
+
+cmd_list() {
+  local found
+  found="$(snapshots | sort -k2,2nr)"
+  [[ -n "$found" ]] || { echo "(no backups)"; return; }
+  printf '%-28s %-24s %s\n' SNAPSHOT "RECEIVED BY R2 (UTC)" ""
+  while read -r name uploaded status; do
+    printf '%-28s %-24s %s\n' "$name" "$(date -u -d "@$uploaded" '+%F %H:%M:%S')" \
+      "$([[ $status == ok ]] || echo 'SUSPECT: its name does not match when it was uploaded; not trusted')"
+  done <<<"$found"
+}
+
+cmd_drill() {
+  local project="$1" snapshot
+  [[ "$project" =~ $NAME_RE ]] || fail "invalid project name"
+  db_names "$project"
+  db_container
+  db_exists "$DB_NAME" || fail "$project has no live database to compare with"
+  db_exists "$SCRATCH_DB" && fail "a database $SCRATCH_DB already exists (an earlier drill that stopped?): drop it first"
+  snapshot="$(pick_snapshot "${2:-}")"
+  exec 8>"$BACKUP_LOCK"
+  flock -w 600 8 || fail "a backup is running; try again later"
+  echo "Drill for $project with $snapshot"
+  new_work
+  download "$snapshot" "$project.*"
+  [[ -f "$work/$project.dump.age" && -f "$work/$project.roles.tsv.age" ]] || fail "$snapshot has no backup of $project"
+  read_key
+  decrypt "$work/$project.roles.tsv.age" >/dev/null 2>&1 || fail "that key does not decrypt this backup"
+
+  echo "== restoring into a scratch database, $SCRATCH_DB, as $project's database owner"
+  scratch="$SCRATCH_DB"
+  db_psql <<<"CREATE DATABASE \"$scratch\" OWNER \"$DB_OWNER\"; REVOKE ALL ON DATABASE \"$scratch\" FROM PUBLIC;" >/dev/null
+  decrypt "$work/$project.dump.age" | restore_dump "$project" "$scratch" || fail "the restore failed"
+
+  echo "== row counts: the backup, restored, and the live database now"
+  printf '%-48s %12s %12s\n' TABLE BACKUP LIVE
+  join -a1 -a2 -e '-' -o 0,1.2,2.2 <(row_counts "$scratch" | sort) <(row_counts "$DB_NAME" | sort) \
+    | while read -r t b l; do printf '%-48s %12s %12s\n' "$t" "$b" "$l"; done
+  echo "(rows written since the backup make LIVE larger; a table only in LIVE is newer than the backup)"
+  db_psql <<<"DROP DATABASE \"$scratch\" WITH (FORCE)" >/dev/null
+  scratch=""
+  echo "== the scratch database was dropped"
+
+  echo "== the roles' list decrypts: $(decrypt "$work/$project.roles.tsv.age" | grep -c . || true) line(s)"
+  if r2 --dir "$work" copy "r2:$BACKUP_BUCKET/$snapshot" /work --include secrets.tar.age </dev/null \
+    && [[ -f "$work/secrets.tar.age" ]]; then
+    echo "== the secrets decrypt: $(decrypt "$work/secrets.tar.age" | tar -t | grep -vc '/$' || true) file(s)"
+  fi
+  logger -t backup-restore -- "drill project=$project snapshot=$snapshot result=ok by=${SUDO_USER:-root}"
+  echo "Drill passed: $snapshot of $project decrypts and restores."
+}
+
+cmd_database() {
+  local project="$1" snapshot="" from="" answer dump roles
+  [[ "$project" =~ $NAME_RE ]] || fail "invalid project name"
+  if [[ "${2:-}" == --from-dir ]]; then
+    [[ $# -eq 3 ]] || usage
+    from="$3"
+  elif [[ $# -eq 3 ]]; then
+    usage
+  fi
+  db_names "$project"
+  db_container
+  backend_read "$project"
+  [[ "$BACKEND_DATABASE" == true ]] || fail "projects.yml does not declare a database for $project"
+  local release="" image=""
+  if [[ -f "$STATE_DIR/$project/release.env" ]]; then
+    release="$(backend_current "$project" BACKEND_RELEASE)"
+    image="$(backend_current "$project" BACKEND_IMAGE)"
+  fi
+  if db_exists "$DB_NAME" && [[ "$(object_count "$DB_NAME")" != 0 ]]; then
+    fail "database $DB_NAME exists and is not empty: this only restores into a missing or empty one (a drill restores alongside)"
+  fi
+  exec 8>"$BACKUP_LOCK"
+  flock -w 600 8 || fail "a backup is running; try again later"
+  new_work
+
+  if [[ -n "$from" ]]; then
+    dump="$from/$project.dump" roles="$from/$project.roles.tsv"
+    [[ -f "$dump" && -f "$roles" ]] || fail "$from must hold $project.dump and $project.roles.tsv"
+    snapshot="files in $from"
+  else
+    snapshot="$(pick_snapshot "${2:-}")"
+    download "$snapshot" "$project.*"
+    [[ -f "$work/$project.dump.age" && -f "$work/$project.roles.tsv.age" ]] || fail "$snapshot has no backup of $project"
+  fi
+  read -r -p "Restore $project's database from $snapshot? Type the project name: " answer
+  [[ "$answer" == "$project" ]] || fail "not confirmed; nothing was changed"
+  if [[ -z "$from" ]]; then
+    read_key
+    dump="$work/$project.dump" roles="$work/$project.roles.tsv"
+    decrypt "$work/$project.roles.tsv.age" >"$roles" 2>/dev/null || fail "that key does not decrypt this backup"
+  fi
+
+  # project-db takes the project's lock itself, so it runs before this script
+  # takes it.
+  if ! db_exists "$DB_NAME"; then
+    echo "== an empty database and its roles (project-db asks to confirm again)"
+    project-db ensure "$project" --allow-empty
+  fi
+  if [[ -n "$release" ]]; then
+    # Nothing writes to the database while it is restored: the backend is
+    # stopped under its own lock (the one deploys and rollbacks take).
+    backend_lock "$project" 120
+    echo "== stopping $project's backend (release $release) while its database is restored"
+    docker compose --project-name "backend-$project" stop </dev/null >&2 9>&- \
+      || fail "could not stop the backend; nothing was changed"
+  fi
+  # Checked again under the lock: a deploy in between could have migrated it.
+  [[ "$(object_count "$DB_NAME")" == 0 ]] || fail "database $DB_NAME is not empty any more; nothing was restored"
+  echo "== the roles its migrations created, as $project's database owner"
+  db_restore_roles "$project" "$work" "$roles"
+  echo "== the data, as $project's database owner"
+  if [[ -z "$from" ]]; then
+    decrypt "$work/$project.dump.age" | restore_dump "$project" "$DB_NAME"
+  else
+    restore_dump "$project" "$DB_NAME" <"$dump"
+  fi || fail "pg_restore failed; the database is incomplete. Drop it (DROP DATABASE $DB_NAME) and run this again: it recreates the database itself.$([[ -n "$release" ]] && echo " The backend stays stopped until a restore succeeds.")"
+  logger -t backup-restore -- "database project=$project snapshot=\"$snapshot\" result=ok by=${SUDO_USER:-root}"
+  if [[ -z "$release" ]]; then
+    echo "Restored $project's database from $snapshot. Deploy the project as usual: its migrations continue from here."
+    return
+  fi
+  # The backup may be older than the deployed release's schema: its
+  # migrations bring the data up to it before the backend starts again.
+  if [[ "$BACKEND_MIGRATE" == true ]]; then
+    echo "== running release $release's migrations on the restored data"
+    backend_migrate "$project" "$image" "restore $release" \
+      || fail "restored, but the migrations $MIGRATE_RESULT; the backend stays stopped (sudo journalctl -t backend-migrate, then: sudo backend-rollback $project --restart)"
+  fi
+  echo "== starting $project's backend again"
+  backend_compose "$project" up -d --pull never --force-recreate --quiet-pull >&2 \
+    || fail "restored, but the backend did not start: sudo backend-status $project"
+  backend_healthy "$project" "$HEALTH_SECONDS" \
+    || fail "restored, but the backend is not healthy: sudo backend-status $project"
+  echo "Restored $project's database from $snapshot; release $release is running on it."
+}
+
+cmd_secrets() {
+  local snapshot target
+  snapshot="$(pick_snapshot "${1:-}")"
+  new_work
+  download "$snapshot" secrets.tar.age
+  [[ -f "$work/secrets.tar.age" ]] || fail "$snapshot has no secrets"
+  read_key
+  target="/root/restored-secrets-${snapshot#*/}"
+  [[ ! -e "$target" ]] || fail "$target already exists"
+  install -d -m 0700 -o root -g root "$target"
+  decrypt "$work/secrets.tar.age" | tar -C "$target" -x --no-same-owner || fail "could not decrypt the secrets"
+  logger -t backup-restore -- "secrets snapshot=$snapshot target=$target by=${SUDO_USER:-root}"
+  echo "Decrypted into $target (root only). Copy back what you need by hand, then: sudo rm -r $target"
+  find "$target" -type f | sed "s#^$target/#  #"
+}
+
+case "$action" in
+  list) cmd_list ;;
+  drill) cmd_drill "$@" ;;
+  database) cmd_database "$@" ;;
+  secrets) cmd_secrets "$@" ;;
+esac
