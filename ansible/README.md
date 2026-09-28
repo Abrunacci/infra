@@ -387,7 +387,8 @@ Left out on purpose: the PostgreSQL superuser password, which a new server gener
 **When something is wrong.** The result goes to the journal (`sudo journalctl -t backup`) and to `/var/lib/infra/backup/`. Every SSH login warns, until fixed, when:
 - no backup has succeeded yet;
 - the last success is more than 26 hours old;
-- or the last run failed.
+- the last run failed;
+- or the status cannot be read (a permissions problem on `/var/lib/infra`).
 
 This warning matters: a server that stops uploading, for whatever reason, sees its daily copies expire after about a week.
 

@@ -134,3 +134,8 @@
     - { path: /etc/infra, mode: "0755" }
     - { path: "{{ infra_secrets_dir }}", mode: "0700" }
     - { path: "{{ infra_opt_dir }}", mode: "0755" }
+    # State the scripts keep. Created here with its own mode: a role that
+    # creates a directory inside it first would otherwise leave it with that
+    # directory's mode (Ansible gives missing parents the same one), and a
+    # 0700 parent hides the public backup status from the login warning.
+    - { path: /var/lib/infra, mode: "0755" }

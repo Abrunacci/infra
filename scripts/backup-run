@@ -31,7 +31,9 @@ work=""
 
 record() {
   # $1: ok or failed; $2: detail. Written atomically, readable by everyone.
-  install -d -m 0755 -o root -g root "$BACKUP_STATE"
+  # The parent too: under umask 077 install would create it 0700, and the
+  # login warning (run as the user) could not read what is written here.
+  install -d -m 0755 -o root -g root "${BACKUP_STATE%/*}" "$BACKUP_STATE"
   printf 'result=%s\ntime=%s\ndetail=%s\n' "$1" "$(date -u '+%F %H:%M UTC')" "$2" >"$BACKUP_STATE/.last-run.$$"
   chmod 0644 "$BACKUP_STATE/.last-run.$$"
   mv -f "$BACKUP_STATE/.last-run.$$" "$BACKUP_STATE/last-run"

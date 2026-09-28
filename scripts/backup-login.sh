@@ -7,7 +7,11 @@ backup_status_dir=/var/lib/infra/backup
 backup_status_max_hours=$(sed -n 's/^BACKUP_MAX_AGE_HOURS=//p' /etc/infra/backup.conf 2>/dev/null)
 backup_status_max_hours=${backup_status_max_hours:-26}
 backup_status_msg=""
-if [ ! -r "$backup_status_dir/last-success" ]; then
+# Created by the playbook before any run: if it cannot be read, the files in
+# it cannot either, and "none has succeeded" would be a guess.
+if [ ! -r "$backup_status_dir" ] || [ ! -x "$backup_status_dir" ]; then
+  backup_status_msg="Cannot read the backup status in $backup_status_dir (check its permissions and those of /var/lib/infra)."
+elif [ ! -r "$backup_status_dir/last-success" ]; then
   backup_status_msg="No backup has succeeded yet."
 else
   backup_status_age=$(( ($(date +%s) - $(cat "$backup_status_dir/last-success")) / 3600 ))
