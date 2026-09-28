@@ -42,7 +42,7 @@ To create the admin token:
 2. **Token name:** `terraform backups bucket`.
 3. **Permissions:** `Account` · `Workers R2 Storage` · `Edit`.
 4. **Account Resources:** Include · your account.
-5. **TTL:** an end date, for example a year from now.
+5. **TTL:** put the date in **End Date** (for example, a year from now) and leave **Start Date** empty. A Start Date in the future makes the token unusable until then: Terraform gets `401 Unauthorized`.
 6. **Continue to summary** → **Create Token**.
 
 Copy the value into the password manager; Cloudflare shows it once. Write its end date in the table above.
@@ -53,7 +53,7 @@ From the repo's root, with the admin token in the password manager. The parenthe
 
 ```sh
 (
-  cd terraform/backup-bucket
+  cd terraform/backup-bucket || exit 1           # stops here if not run from the repo's root
   set -a; . ../.env; set +a                      # state credentials and account ID
   read -rs "CLOUDFLARE_API_TOKEN?Backups admin token: "; echo; export CLOUDFLARE_API_TOKEN
   terraform init -input=false                    # needed once; harmless afterwards
