@@ -51,3 +51,26 @@ projects:
     site: true
     database: false
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJITKgKgF+4yXbqYGiYVx4Z26x/rf0qn9/gqE2KMu1pJ abrunacci-dev-deploy
+
+  - name: epb-stock
+    subdomain: epb
+    title: EPB Stock
+    site: true
+    database: true
+    backend:
+      image: ghcr.io/abrunacci/epb-stock-backend
+      port: 8000
+      health: /api/health
+      paths: ["/api/*"]
+      env:
+        PUBLIC_APP_URL: "https://epb.abrunacci.dev"
+        CORS_ORIGINS: "https://epb.abrunacci.dev"
+        TRUST_FORWARDED_FOR: "true"
+        MAIL_BACKEND: "resend"
+        MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
+      secrets:
+        SECRET_KEY: generated
+        RESEND_API_KEY: manual
+        SETUP_TOKEN: generated
+      migrate: [alembic, upgrade, head]
+      database_url_scheme: postgresql+psycopg
