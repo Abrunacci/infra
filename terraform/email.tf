@@ -1,6 +1,6 @@
 # Mail for the domain: Cloudflare Email Routing forwards a few addresses to one
-# inbox (var.email_forward_to). Nothing is hosted here and nothing is sent from
-# the domain.
+# inbox (var.email_forward_to), and Resend sends the projects' mail from
+# mail.<domain> (records at the end). Nothing else sends from the domain.
 
 locals {
   # Local parts forwarded to the inbox. hello is the public contact address;
@@ -73,9 +73,12 @@ resource "cloudflare_email_routing_catch_all" "this" {
   actions  = [{ type = "drop" }]
 }
 
-# The domain sends no mail, so any message that claims to come from it is
-# forged: receivers must reject it. SPF comes from Email Routing (above) and
-# does not cover senders such as Gmail's "Send mail as".
+# Only Resend sends mail for the domain, from mail.<domain>, and it passes
+# DMARC through its DKIM signature (records below). Any other message that
+# claims to come from the domain or a subdomain is forged: receivers must
+# reject it. The policy covers subdomains too, since there is no sp= tag. SPF
+# on the root domain comes from Email Routing (above) and does not cover
+# senders such as Gmail's "Send mail as".
 resource "cloudflare_dns_record" "dmarc" {
   zone_id = var.cloudflare_zone_id
   name    = "_dmarc.${var.domain}"
@@ -85,4 +88,46 @@ resource "cloudflare_dns_record" "dmarc" {
   ttl     = 3600
   proxied = false
   comment = "Managed by Terraform (infra repo)"
+}
+
+# Resend sends the projects' mail (EPB Stock's, for now) from mail.<domain>.
+# These records were created on 2026-09-28 by Resend's Domain Connect flow and
+# adopted into Terraform with the import blocks below, so they are declared
+# exactly as Resend wrote them: no comment, TTL 1 h, DNS only. Changing any of
+# them breaks sending until Resend verifies the domain again.
+#   send.mail, rsend.mail  -> Resend's sending subdomains (bounces, SPF)
+#   resend._domainkey.mail -> DKIM public key; mail is signed for mail.<domain>,
+#                             which aligns with the root domain's DMARC policy
+locals {
+  resend_records = {
+    send  = { name = "send.mail", type = "CNAME", content = "send.forge.rmta.net" }
+    rsend = { name = "rsend.mail", type = "CNAME", content = "rsend.forge.rmta.net" }
+    # Quoted, as Cloudflare stores TXT content (see the DMARC record above).
+    dkim = {
+      name    = "resend._domainkey.mail"
+      type    = "TXT"
+      content = "\"p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDL9T/C/Q5cYd/AlUpzKN75GuSHDXkdvosuw598BFIndbYII9nIZ8VBSLT/I8lsaLmyHkm8yd3bhvhj9R1J1Tae7qssXsRlughwdFxWU9ZsG3dV5IhVNqrb7uLYO/Vgw8+q5B7USU8Wo+huKPKJXmGXSar2C9irkNcwPkhne6lqRQIDAQAB\""
+    }
+  }
+}
+
+resource "cloudflare_dns_record" "resend" {
+  for_each = local.resend_records
+
+  zone_id = var.cloudflare_zone_id
+  name    = "${each.value.name}.${var.domain}"
+  type    = each.value.type
+  content = each.value.content
+  ttl     = 3600
+  proxied = false
+}
+
+# Adopts the existing records instead of creating duplicates. Inert unless
+# resend_record_ids is passed, which happens once, in the import run (see
+# "Mail" in the README); afterwards the records are in the state.
+import {
+  for_each = var.resend_record_ids
+
+  to = cloudflare_dns_record.resend[each.key]
+  id = "${var.cloudflare_zone_id}/${each.value}"
 }

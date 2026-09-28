@@ -11,7 +11,8 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
 | Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
-| DMARC `p=reject`: the domain sends no mail | `email.tf` |
+| DMARC `p=reject`: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
+| Resend's sending records (two CNAMEs and the DKIM key) under `mail.abrunacci.dev` | `email.tf` |
 
 ## Credentials
 
@@ -62,7 +63,17 @@ Cloudflare Email Routing forwards `hello@`, `postmaster@` and `abuse@` to `TF_VA
 
   Without step 1, the full apply creates the address and then fails at the precondition. Nothing breaks: the next plan and apply, after the click, finish the job.
 - **Changing the inbox** (`TF_VAR_email_forward_to`) replaces the address, new one first (`create_before_destroy`). The apply creates it and then stops at the rules' precondition, on purpose: the rules still forward to the old inbox, which keeps working. Click the link sent to the new inbox, then plan and apply again: the rules move to it, and only then is the old address destroyed.
-- **DMARC `p=reject`.** The domain sends no mail, so receivers reject any message that claims to come from it. Replies go out from the inbox's own address: Gmail's "Send mail as" with an `@abrunacci.dev` address would fail DMARC too.
+- **DMARC `p=reject`.** Only Resend sends mail for the domain (below), so receivers reject any other message that claims to come from it or a subdomain. Replies go out from the inbox's own address: Gmail's "Send mail as" with an `@abrunacci.dev` address would fail DMARC too.
+- **Resend sends the projects' mail from `mail.abrunacci.dev`** (EPB Stock's, for now). Its three records (`send.mail` and `rsend.mail`, CNAMEs to Resend, and the DKIM key in `resend._domainkey.mail`) were created on 2026-09-28 by Resend's Domain Connect flow, then adopted with `import` blocks. They are declared exactly as Resend wrote them (no comment, TTL 1 h, DNS only): a change to any of them breaks sending until Resend verifies the domain again. Mail passes DMARC through the DKIM signature, whose domain `mail.abrunacci.dev` aligns with the root domain's policy.
+- **Adopting records created outside Terraform.** The `import` block in `email.tf` runs only when the records' Cloudflare IDs are passed, for that run only: `terraform plan -out=tfplan -var='resend_record_ids={send="<id>",rsend="<id>",dkim="<id>"}'`. The IDs come from the API (the token in `.env` can read them):
+
+  ```sh
+  curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+    "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name.endswith=mail.abrunacci.dev" \
+    | jq -r '.result[] | [.id, .type, .name, .ttl, .proxied, .content] | @tsv'
+  ```
+
+  Once they are in the state, the block does nothing and the variable is no longer passed.
 - **The inbox address is in the state.** `email_forward_to` is `sensitive`, so plans hide it, but the state in R2 stores it in plain text.
 
 ## After the first apply
