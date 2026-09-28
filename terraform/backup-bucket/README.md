@@ -66,3 +66,27 @@ From the repo's root, with the admin token in the password manager. The parenthe
 The state credentials in `../.env` can also write this configuration's state (`infra/backups.tfstate`). That does not let anyone change R2 without the admin token; at most, an altered state would make the next plan propose recreating something, which the review of that plan catches.
 
 The server's S3 credentials (`Object Read & Write` on `infra-backups` only) are created by hand in **R2 → Manage API tokens**, so their secret never reaches the state; the backup job's documentation says how.
+
+## A plan that removes empty blocks after the rules change
+
+When the order of the rules in Terraform's state differs from the order Cloudflare returns them in, the next plan shows an update that is not a real change, like this:
+
+```
+  ~ resource "cloudflare_r2_bucket_lifecycle" "backups" {
+      ~ rules        = [
+          ~ {
+              - delete_objects_transition          = {
+                  - condition = {} -> null
+                } -> null
+                id                                 = "abort-incomplete-uploads"
+```
+
+**Why:** the provider (5.25) reads the rules by starting from the previous state and writing Cloudflare's answer over it, rule by rule, **by position**. A rule that moved position keeps an empty block from the rule that used to be there. Those empty blocks exist only in Terraform's state: Cloudflare does not return them, and the bucket's rules are what the code says.
+
+**How to tell it from a real change:** it only **removes** blocks whose content is empty (`condition = {} -> null`). The number of rules does not change: no whole rule is added (`+ {`) or removed (`- {`). Every rule's `id`, `prefix` and `max_age` stay the same, so no `~` or `+` appears on them.
+
+**What to do:** apply that plan once. It sends Cloudflare the same rules it already has, and it writes the state in the code's order, which the precondition keeps sorted by `id`, the order Cloudflare returns. From then on, each rule is read over itself, and the plan is empty.
+
+**When it can come back:** only when the state's order and Cloudflare's order drift apart again. That happens when the rules are changed outside Terraform (the dashboard, wrangler), or if Cloudflare ever changes how it orders them. Adding or removing rules through this configuration does not bring it back: the apply writes the state in the sorted order.
+
+Anything else in such a plan (a different `max_age`, a missing rule, a `+`) is a real change: review it like any other.
