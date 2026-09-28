@@ -66,3 +66,7 @@ backups/
 .idea/
 *.swp
 .DS_Store
+
+# --- Claude Code -----------------------------------------------------------
+# .claude/settings.json (shared deny rules) is versioned; personal overrides are not.
+.claude/settings.local.json
