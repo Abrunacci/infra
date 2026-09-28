@@ -57,7 +57,7 @@ projects:
     title: EPB Stock
     site: true
     database: true
-    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDuLDLr71eL+ShDZhAo2M/1WjX5fkPxQCwDYYz1QUJ3J epb-stock-deploy
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMB6oIcQR/2AStIyAJjIVXcGkgxd4sKd2S0+9lOo54w/ epb-stock-deploy
     backend:
       image: ghcr.io/abrunacci/epb-stock-backend
       port: 8000
