@@ -11,7 +11,8 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
 | Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
-| DMARC `p=reject`: the domain sends no mail | `email.tf` |
+| DMARC `p=reject`: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
+| Resend's sending records (two CNAMEs and the DKIM key) under `mail.abrunacci.dev` | `email.tf` |
 
 ## Credentials
 
@@ -19,17 +20,17 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 
 | Variable | What it is | Minimum scope | Expires |
 |---|---|---|---|
-| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet | set when created |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | set when created |
+| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet | ~2026-11-23 (to confirm in the panel) |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` | – |
 | `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account | – |
 | `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Not a credential, but kept out of the repo, which is public. It is stored in the state | – |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only | set when created |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – | – |
-| Backups admin token (not in `.env`) | Cloudflare API token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration. Kept in the password manager and typed in only for its runs | `Account → Workers R2 Storage → Edit` on this account only | set when created |
-| Backup token (not in `.env`) | R2 S3 credentials the server uploads backups with. Created by hand, stored only on the server | `Object Read & Write` on `infra-backups` only | set when created |
-| GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | set when created |
+| Backups admin token (not in `.env`) | Cloudflare API token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration. Kept in the password manager and typed in only for its runs | `Account → Workers R2 Storage → Edit` on this account only | ~2027-09-25 (to confirm in the panel) |
+| Backup token (not in `.env`) | R2 S3 credentials the server uploads backups with. Created by hand, stored only on the server | `Object Read & Write` on `infra-backups` only | ~2026-12-24 (to confirm in the panel) |
+| GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | Created 2026-09-25; expiry to confirm on GitHub |
 
 When you create a token, replace "set when created" with its expiration date (not a secret), and put a reminder in your calendar a week before it: an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running.
 
@@ -62,7 +63,17 @@ Cloudflare Email Routing forwards `hello@`, `postmaster@` and `abuse@` to `TF_VA
 
   Without step 1, the full apply creates the address and then fails at the precondition. Nothing breaks: the next plan and apply, after the click, finish the job.
 - **Changing the inbox** (`TF_VAR_email_forward_to`) replaces the address, new one first (`create_before_destroy`). The apply creates it and then stops at the rules' precondition, on purpose: the rules still forward to the old inbox, which keeps working. Click the link sent to the new inbox, then plan and apply again: the rules move to it, and only then is the old address destroyed.
-- **DMARC `p=reject`.** The domain sends no mail, so receivers reject any message that claims to come from it. Replies go out from the inbox's own address: Gmail's "Send mail as" with an `@abrunacci.dev` address would fail DMARC too.
+- **DMARC `p=reject`.** Only Resend sends mail for the domain (below), so receivers reject any other message that claims to come from it or a subdomain. Replies go out from the inbox's own address: Gmail's "Send mail as" with an `@abrunacci.dev` address would fail DMARC too.
+- **Resend sends the projects' mail from `mail.abrunacci.dev`** (EPB Stock's, for now). Its three records (`send.mail` and `rsend.mail`, CNAMEs to Resend, and the DKIM key in `resend._domainkey.mail`) were created on 2026-09-28 by Resend's Domain Connect flow, then adopted with `import` blocks. They are declared exactly as Resend wrote them (no comment, TTL 1 h, DNS only): a change to any of them breaks sending until Resend verifies the domain again. Mail passes DMARC through the DKIM signature, whose domain `mail.abrunacci.dev` aligns with the root domain's policy.
+- **Adopting records created outside Terraform.** The `import` block in `email.tf` runs only when the records' Cloudflare IDs are passed, for that run only: `terraform plan -out=tfplan -var='resend_record_ids={send="<id>",rsend="<id>",dkim="<id>"}'`. The IDs come from the API (the token in `.env` can read them):
+
+  ```sh
+  curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+    "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name.endswith=mail.abrunacci.dev" \
+    | jq -r '.result[] | [.id, .type, .name, .ttl, .proxied, .content] | @tsv'
+  ```
+
+  Once they are in the state, the block does nothing and the variable is no longer passed.
 - **The inbox address is in the state.** `email_forward_to` is `sensitive`, so plans hide it, but the state in R2 stores it in plain text.
 
 ## After the first apply

@@ -105,3 +105,14 @@ variable "email_forward_to" {
     error_message = "email_forward_to must be an address outside the domain (forwarding to itself would loop)."
   }
 }
+
+variable "resend_record_ids" {
+  description = "Cloudflare IDs of the existing Resend records, keyed send, rsend and dkim. Passed only in the run that imports them (see \"Mail\" in the README); empty otherwise."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k, id in var.resend_record_ids : contains(["send", "rsend", "dkim"], k) && can(regex("^[0-9a-f]{32}$", id))])
+    error_message = "resend_record_ids keys must be send, rsend or dkim, and each value a 32-character hex record ID."
+  }
+}
