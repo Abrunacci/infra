@@ -32,15 +32,16 @@ services:
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
         format: raw
 {% endif %}
-    networks:
 {% if item.subdomain is defined %}
-      # No published port: Caddy reaches it on the edge network by this alias.
+    # No published port: Caddy reaches it on the edge network by this alias.
+    networks:
       edge:
         aliases:
           - {{ item.name }}-backend
 {% else %}
-      # Internal: not on edge, so neither Caddy nor the other backends reach
-      # it. Its own network, with a route out to the internet only.
+    # Internal (no subdomain): not on edge, so neither Caddy nor the other
+    # backends reach it. Its own network, only for its route out to the internet.
+    networks:
       outbound: {}
 {% endif %}
 {% if item.database %}
