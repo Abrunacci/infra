@@ -30,7 +30,7 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – | – |
 | Backups admin token (not in `.env`) | Cloudflare API token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration. Kept in the password manager and typed in only for its runs | `Account → Workers R2 Storage → Edit` on this account only | ~2027-09-25 (to confirm in the panel) |
 | Backup token (not in `.env`) | R2 S3 credentials the server uploads backups with. Created by hand, stored only on the server | `Object Read & Write` on `infra-backups` only | ~2026-12-24 (to confirm in the panel) |
-| GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | Created 2026-09-25; expiry to confirm on GitHub |
+| GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | 2026-10-25 |
 
 When you create a token, replace "set when created" with its expiration date (not a secret), and put a reminder in your calendar a week before it: an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running.
 
