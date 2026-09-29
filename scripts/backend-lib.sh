@@ -49,6 +49,8 @@ BACKEND_SHOW_LOGS=0
 # Reads PROJECT's backend from the server's registry into BACKEND_REPO,
 # BACKEND_PORT, BACKEND_HEALTH, BACKEND_DATABASE and BACKEND_MIGRATE (true or
 # false), BACKEND_URL_SCHEME and BACKEND_SECRETS (an array of "KEY kind").
+# An internal backend (a project without a subdomain) has no port or health
+# path: both are empty, and the image's own HEALTHCHECK is its health.
 # The registry is written by Ansible from a checked projects.yml; every value
 # is checked again here, since it ends up in commands and files.
 backend_read() {
@@ -65,8 +67,8 @@ for p in json.load(open(registry))["projects"]:
             break
         print("backend")
         print(b["image"])
-        print(b["port"])
-        print(b["health"])
+        print(b.get("port") or "")
+        print(b.get("health") or "")
         print("true" if p.get("database") else "false")
         print("true" if b.get("migrate") else "false")
         print(b.get("database_url_scheme") or "postgresql")
@@ -82,8 +84,10 @@ PY
   BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
   BACKEND_SECRETS=("${lines[@]:7}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
-  [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
-  [[ "$BACKEND_HEALTH" =~ ^/[A-Za-z0-9._~/-]*$ ]] || fail "invalid health path in the registry"
+  if [[ -n "$BACKEND_PORT$BACKEND_HEALTH" ]]; then
+    [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
+    [[ "$BACKEND_HEALTH" =~ ^/[A-Za-z0-9._~/-]*$ ]] || fail "invalid health path in the registry"
+  fi
   [[ "$BACKEND_DATABASE" =~ ^(true|false)$ && "$BACKEND_MIGRATE" =~ ^(true|false)$ ]] \
     || fail "invalid database settings in the registry"
   [[ "$BACKEND_URL_SCHEME" =~ ^[a-z][a-z0-9+.-]{0,31}$ ]] || fail "invalid database URL scheme in the registry"
@@ -137,23 +141,56 @@ backend_compose() {
   docker compose --project-directory "$BACKENDS_DIR/$project" "${env_file[@]}" "$@" </dev/null 9>&-
 }
 
+# What backend_healthy checks, for messages.
+backend_health_target() {
+  if [[ -z "$BACKEND_HEALTH" ]]; then
+    echo "the image's HEALTHCHECK"
+  else
+    echo "http://$1-backend:$BACKEND_PORT$BACKEND_HEALTH"
+  fi
+}
+
 # Checks the health path from Caddy's container, the way requests get there
 # (the container's alias on the edge network), for up to SECONDS. Any 2xx
-# answer is healthy.
+# answer is healthy. An internal backend has no health path: Docker's own
+# health status, from the image's HEALTHCHECK, must be healthy instead.
 #
 # A container that already stopped or restarted will not get better by
 # waiting: that fails at once, so a broken image costs seconds of errors
-# instead of the whole wait.
+# instead of the whole wait. So does an internal backend whose image has no
+# HEALTHCHECK, or whose HEALTHCHECK already says unhealthy.
 backend_healthy() {
-  local project="$1" seconds="$2" caddy container deadline restarts status
+  local project="$1" seconds="$2" caddy="" container deadline restarts status health
+  container="$(backend_compose "$project" ps -a -q backend 2>/dev/null)" || container=""
+  deadline=$((SECONDS + seconds))
+  if [[ -z "$BACKEND_HEALTH" ]]; then
+    if [[ -z "$container" || "$container" == *$'\n'* ]]; then
+      echo "the backend's container is not there" >&2
+      return 1
+    fi
+    while :; do
+      read -r restarts status health < <(docker inspect \
+        -f '{{.RestartCount}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+        "$container" 2>/dev/null </dev/null 9>&-) || { echo "cannot inspect the backend's container" >&2; return 1; }
+      case "$health" in
+        healthy) return 0 ;;
+        none) echo "the image has no HEALTHCHECK, which a backend without a subdomain needs" >&2; return 1 ;;
+        unhealthy) echo "the image's HEALTHCHECK reports unhealthy" >&2; return 1 ;;
+      esac
+      if [[ "$restarts" != 0 || "$status" == exited || "$status" == dead ]]; then
+        echo "the container is not staying up (status $status, $restarts restarts)" >&2
+        return 1
+      fi
+      ((SECONDS < deadline)) || return 1
+      sleep 2
+    done
+  fi
   caddy="$(docker ps -q --filter label=com.docker.compose.project=caddy \
     --filter label=com.docker.compose.service=caddy --filter label=com.docker.compose.oneoff=False)"
   if [[ -z "$caddy" || "$caddy" == *$'\n'* ]]; then
     echo "the Caddy container is not running" >&2
     return 1
   fi
-  container="$(backend_compose "$project" ps -a -q backend 2>/dev/null)" || container=""
-  deadline=$((SECONDS + seconds))
   while :; do
     docker exec "$caddy" wget -q -T 5 -O /dev/null \
       "http://$project-backend:$BACKEND_PORT$BACKEND_HEALTH" >/dev/null 2>&1 </dev/null 9>&- && return 0
@@ -201,13 +238,13 @@ backend_switch() {
   if [[ -z "$prev_release" ]]; then
     backend_compose "$project" down >&2 || true
     rm -f "$STATE_DIR/$project/release.env"
-    SWITCH_RESULT="not healthy (no answer on its health path within ${HEALTH_SECONDS}s, or it stopped); there is no earlier release, so the backend was stopped"
+    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; there is no earlier release, so the backend was stopped"
     return 1
   fi
   if backend_activate "$project" "$prev_release" "$prev_image"; then
-    SWITCH_RESULT="not healthy (no answer on its health path within ${HEALTH_SECONDS}s, or it stopped); back to release $prev_release, which is healthy"
+    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is healthy"
   else
-    SWITCH_RESULT="not healthy (no answer on its health path within ${HEALTH_SECONDS}s, or it stopped); back to release $prev_release, which is NOT healthy either"
+    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is NOT healthy either"
   fi
   return 1
 }

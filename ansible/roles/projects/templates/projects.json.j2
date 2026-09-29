@@ -3,7 +3,7 @@
 {%- for p in projects_registry.projects -%}
 {%-   set _ = entries.append({
         'name': p.name,
-        'subdomain': p.subdomain,
+        'subdomain': p.subdomain | default(none),
         'title': p.title | default(p.name),
         'repo': p.repo | default(none),
         'site': p.site,
@@ -12,8 +12,8 @@
         'deploy_key': p.deploy_key | default(none),
         'backend': {
           'image': p.backend.image,
-          'port': p.backend.port,
-          'health': p.backend.health,
+          'port': p.backend.port | default(none),
+          'health': p.backend.health | default(none),
           'secrets': p.backend.secrets | default({}),
           'migrate': p.backend.migrate is defined,
           'database_url_scheme': p.backend.database_url_scheme | default('postgresql'),

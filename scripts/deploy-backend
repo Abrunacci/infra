@@ -17,8 +17,10 @@
 # a one-off container of the new image, on the db network only; if they fail,
 # the deploy stops there and the running release is untouched. Then the
 # container is recreated with the new image,
-# and its health path is checked from Caddy's container for up to 60 s. If it
-# never answers, the previous release is put back and checked, and the deploy
+# and its health path is checked from Caddy's container for up to 60 s (for an
+# internal backend, without a subdomain, Docker must report it healthy from
+# the image's HEALTHCHECK instead). If it
+# never becomes healthy, the previous release is put back and checked, and the deploy
 # fails; what was running keeps running. The container's log never goes to
 # the client, since CI logs may be public: it goes to the journal (tag
 # backend-log). The last 5 releases are kept for backend-rollback, with their

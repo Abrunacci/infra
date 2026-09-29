@@ -16,7 +16,8 @@
 # images). Without RELEASE, it goes to the release deployed before the current
 # one in the history, which after a rollback is not necessarily the one that
 # was running before it: --list shows the order. Like a deploy, the new
-# container must answer on its health path within 60 s, or what was running
+# container must answer on its health path within 60 s (or, for an internal
+# backend, be healthy by its image's HEALTHCHECK), or what was running
 # before is put back. Database migrations are never undone. Logged to the
 # journal (tag: backend-rollback).
 # Installed by Ansible (roles/projects) as /usr/local/sbin/backend-rollback.

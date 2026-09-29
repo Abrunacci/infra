@@ -19,7 +19,7 @@
     },
     "project": {
       "type": "object",
-      "required": ["name", "subdomain", "site", "database"],
+      "required": ["name", "site", "database"],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -30,7 +30,7 @@
           ]
         },
         "subdomain": {
-          "description": "DNS record (Terraform) and Caddy site. \"@\" is the root domain, and also gets www redirected to it.",
+          "description": "DNS record (Terraform) and Caddy site. \"@\" is the root domain, and also gets www redirected to it. Without one, the project is internal: no DNS record, no Caddy site, and only a backend.",
           "oneOf": [
             { "const": "@" },
             {
@@ -69,6 +69,28 @@
       },
       "allOf": [
         {
+          "description": "Without a subdomain, nothing is public: no site, and a backend Caddy does not reach, so it has no port, health path or paths (the image's own HEALTHCHECK says whether it is healthy).",
+          "if": { "not": { "required": ["subdomain"] } },
+          "then": {
+            "required": ["backend"],
+            "properties": {
+              "site": { "const": false },
+              "backend": {
+                "allOf": [
+                  { "not": { "required": ["port"] } },
+                  { "not": { "required": ["health"] } },
+                  { "not": { "required": ["paths"] } }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "description": "With a subdomain, Caddy reaches the backend on its port and checks its health path.",
+          "if": { "required": ["subdomain", "backend"] },
+          "then": { "properties": { "backend": { "required": ["port", "health"] } } }
+        },
+        {
           "description": "At least one component: a site or a backend.",
           "if": { "properties": { "site": { "const": false } } },
           "then": { "required": ["backend"] }
@@ -103,7 +125,7 @@
     },
     "backend": {
       "type": "object",
-      "required": ["image", "port", "health"],
+      "required": ["image"],
       "additionalProperties": false,
       "properties": {
         "image": {
@@ -111,9 +133,14 @@
           "type": "string",
           "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$"
         },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "port": {
+          "description": "Port it listens on, for Caddy. Only with a subdomain.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
         "health": {
-          "description": "Health check path, with the prefix: Caddy does not strip it. Checked from Caddy's container after each deploy; any 2xx answer is healthy.",
+          "description": "Health check path, with the prefix: Caddy does not strip it. Checked from Caddy's container after each deploy; any 2xx answer is healthy. Only with a subdomain.",
           "type": "string",
           "pattern": "^/[A-Za-z0-9._~/-]*$"
         },
