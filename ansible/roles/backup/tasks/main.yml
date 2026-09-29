@@ -36,7 +36,11 @@
   loop:
     # The R2 credentials (backup-credentials).
     - { path: "{{ infra_secrets_dir }}/backup", mode: "0700" }
-    # The last run's result, public: the login warning reads it.
+    # Also created by roles/base. Listed before its subdirectory: Ansible
+    # would give a missing parent the subdirectory's mode.
+    - { path: /var/lib/infra, mode: "0755" }
+    # The last run's result, public: the login warning reads it, so it and
+    # every directory above it must be readable by everyone.
     - { path: /var/lib/infra/backup, mode: "0755" }
     # Also created by roles/projects; this role must not depend on it.
     - { path: /usr/local/lib/infra, mode: "0755" }
