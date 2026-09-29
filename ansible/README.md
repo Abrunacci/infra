@@ -98,7 +98,24 @@ Every run asks for the admin user's sudo password (`-K`; `ansible.cfg` also sets
 
 Every run is also logged outside the repo, in `~/notas/infra/corridas/`:
 - `./play` writes each run to its own file (mode 0600), named after its UTC start time (`20260924T201500Z-ansible-playbook.log`). It creates the directory (mode 0700) if needed. It runs from `ansible/`, so relative paths in its arguments are relative to `ansible/`.
-- `ansible-playbook` run directly appends to `ansible.log` in the same directory. If the directory does not exist, Ansible only warns and logs nothing.
+- `ansible-playbook` run directly appends to `ansible.log` in the same directory, with no summary and with the color codes of `--diff`. If the directory does not exist, Ansible only warns and logs nothing.
+- Each `./play` log opens with a summary, so what a run did can be read without scrolling through diffs:
+
+  ```text
+  Command:  ./play site.yml -K --diff
+  Date:     2026-09-29 22:41:24 UTC (6s)
+  Result:   FAILED (exit code 2)
+
+  Tasks that changed or failed:
+    changed  server.abrunacci.dev  caddy : Write the Caddyfile
+    failed   server.abrunacci.dev  deploy : Write the deploy keys
+    changed  server.abrunacci.dev  caddy : Reload Caddy (handler)
+
+  PLAY RECAP
+  server.abrunacci.dev       : ok=41   changed=2    unreachable=0    failed=1    skipped=3    rescued=0    ignored=0
+  ```
+
+  Below it comes the whole run, diffs included, as Ansible logged it. The terminal keeps its colors; the file has none, so it reads fine in any editor. `format-run-log` builds the file from Ansible's raw log once the run ends, also when it fails or is stopped with Ctrl-C. If that step fails, `./play` keeps the raw log (with colors) under the same name and says so.
 - The log holds what the screen shows. Tasks with `no_log` are left out; the only one is the task that generates the PostgreSQL superuser password, whose value never appears in any argument or output anyway. The sudo password (`-K`) is never logged.
 - `--diff` output is logged too. No template holds a secret today; a task that renders one must use `no_log: true` and `diff: false`, so it never reaches the screen or the log.
 - `*.log` and `corridas/` are git-ignored, in case a log is ever pointed at the repo.
