@@ -6,7 +6,10 @@
 #   name       directories, registry entry and, with a database, the database
 #              and user (with - turned into _)
 #   subdomain  DNS record and Caddy site. "@" (quoted) is the root domain;
-#              www then redirects to it. server, status and www are reserved
+#              www then redirects to it. server, status and www are reserved.
+#              Optional: without it the project is internal (no DNS record,
+#              no Caddy site), has no site, and its backend has no port,
+#              health or paths
 #   title      shown on the placeholder page (optional, defaults to name)
 #   repo       linked from the placeholder page (optional: leave it out for
 #              private repositories)
@@ -22,8 +25,10 @@
 #              ansible/README.md, "Deploying a project".
 #   backend    optional container, deployed by CI with deploy-backend:
 #                image    repository without tag (CI sends the digest)
-#                port     port it listens on
+#                port     port it listens on (only with a subdomain)
 #                health   health check path, with its prefix; any 2xx is healthy
+#                         (only with a subdomain; without one, the image's own
+#                         HEALTHCHECK must report healthy)
 #                paths    paths Caddy sends to it; required with a site, and
 #                         left out without one (it then gets every path)
 #                env      non-secret variables, public: quoted strings
@@ -75,3 +80,13 @@ projects:
         SETUP_TOKEN: generated
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
+
+  # Internal: a scheduler that runs data jobs, with no public route. Its
+  # image's HEALTHCHECK says whether it is alive.
+  - name: data-pipeline
+    repo: https://github.com/Abrunacci/data-pipeline
+    site: false
+    database: false
+    backend:
+      image: ghcr.io/abrunacci/data-pipeline
+      memory: 256m

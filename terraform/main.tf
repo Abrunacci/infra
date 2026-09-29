@@ -2,12 +2,13 @@ locals {
   # No try() here on purpose: a missing or broken projects.yml, or one without a
   # top-level "projects" key, must stop the plan. Falling back to an empty list
   # would plan the deletion of every project's DNS records.
-  projects   = yamldecode(file("${path.module}/../projects.yml")).projects
-  subdomains = [for p in local.projects : p.subdomain]
+  projects = yamldecode(file("${path.module}/../projects.yml")).projects
+  # Internal projects have no subdomain, and no DNS record.
+  subdomains = [for p in local.projects : p.subdomain if lookup(p, "subdomain", null) != null]
   reserved   = ["server", "status", "www"]
   # "@" is the root domain. www exists only when a site is served there: its
   # redirect lives in that site's Caddy file.
-  has_root_site = contains([for p in local.projects : p.subdomain if p.site], "@")
+  has_root_site = contains([for p in local.projects : lookup(p, "subdomain", null) if p.site], "@")
 
   # Every hostname that points at the Droplet, keyed by its label ("@" for the
   # root domain):

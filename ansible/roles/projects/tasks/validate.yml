@@ -33,7 +33,9 @@
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
-    projects_subdomains: "{{ projects_registry.projects | map(attribute='subdomain') | list }}"
+    # Internal projects have none.
+    projects_subdomains: >-
+      {{ projects_registry.projects | selectattr('subdomain', 'defined') | map(attribute='subdomain') | list }}
     projects_db_names: >-
       {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database', 'true')
          | map(attribute='name') | select('string') | map('replace', '-', '_') | list }}
@@ -50,9 +52,12 @@
       - item.name is string and item.name is match(projects_label)
       # restore-drill: its database would be backup-restore's scratch one.
       - item.name not in ['postgres', 'template0', 'template1', 'restore-drill']
-      # "@" is the root domain; www is reserved for its redirect.
-      - item.subdomain is string and (item.subdomain == '@' or item.subdomain is match(projects_label))
-      - item.subdomain not in ['server', 'status', 'www']
+      # "@" is the root domain; www is reserved for its redirect. Without a
+      # subdomain the project is internal.
+      - >-
+        item.subdomain is not defined
+        or (item.subdomain is string and (item.subdomain == '@' or item.subdomain is match(projects_label))
+            and item.subdomain not in ['server', 'status', 'www'])
       - item.site is boolean
       - item.database is boolean
       - item.title is not defined or (item.title is string and item.title | length > 0 and item.title | length <= 80)
@@ -65,10 +70,11 @@
                               'database_url_scheme']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
-            and item.backend.port is integer and item.backend.port is not boolean
-            and item.backend.port >= 1 and item.backend.port <= 65535
-            and item.backend.health is defined and item.backend.health is string
-            and item.backend.health is match('^/[A-Za-z0-9._~/-]*\Z')
+            and (item.backend.port is not defined
+                 or (item.backend.port is integer and item.backend.port is not boolean
+                     and item.backend.port >= 1 and item.backend.port <= 65535))
+            and (item.backend.health is not defined
+                 or (item.backend.health is string and item.backend.health is match('^/[A-Za-z0-9._~/-]*\Z')))
             and (item.backend.paths is not defined
                  or (item.backend.paths is sequence and item.backend.paths is not string
                      and item.backend.paths is not mapping
@@ -80,6 +86,17 @@
       - >-
         item.deploy_key is not defined
         or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
+      # Without a subdomain nothing is public: no site, and a backend Caddy
+      # does not reach (no port, health or paths; the image's HEALTHCHECK
+      # says whether it is healthy). With one, Caddy needs both.
+      - >-
+        item.subdomain is defined
+        or (not item.site and item.backend is defined and item.backend is mapping
+            and item.backend.port is not defined and item.backend.health is not defined
+            and item.backend.paths is not defined)
+      - >-
+        item.subdomain is not defined or item.backend is not defined
+        or (item.backend.port is defined and item.backend.health is defined)
       # At least one component; only a backend can use a database.
       - item.site or item.backend is defined
       - not item.database or item.backend is defined

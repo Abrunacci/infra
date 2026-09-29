@@ -32,11 +32,18 @@ services:
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
         format: raw
 {% endif %}
+{% if item.subdomain is defined %}
     # No published port: Caddy reaches it on the edge network by this alias.
     networks:
       edge:
         aliases:
           - {{ item.name }}-backend
+{% else %}
+    # Internal (no subdomain): not on edge, so neither Caddy nor the other
+    # backends reach it. Its own network, only for its route out to the internet.
+    networks:
+      outbound: {}
+{% endif %}
 {% if item.database %}
       # PostgreSQL, at its fixed address. Internal: no route out.
       db: {}
@@ -82,8 +89,13 @@ services:
 {% endif %}
 
 networks:
+{% if item.subdomain is defined %}
   edge:
     external: true
+{% else %}
+  # Created and removed by Compose with the backend (backend-{{ item.name }}_outbound).
+  outbound: {}
+{% endif %}
 {% if item.database %}
   db:
     external: true

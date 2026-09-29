@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shows a project's backend: the deployed release, its container and whether
-# its health path answers (from Caddy's container, like requests).
+# its health path answers (from Caddy's container, like requests), or, for an
+# internal backend, whether Docker reports it healthy (the image's HEALTHCHECK).
 #
 #   sudo backend-status PROJECT           check once
 #   sudo backend-status PROJECT --wait    keep checking for up to 60 s (the playbook
@@ -36,9 +37,9 @@ echo "container: $(backend_compose "$project" ps -a --format '{{.Name}} {{.State
 seconds=0
 [[ "${2:-}" == --wait ]] && seconds="$HEALTH_SECONDS"
 if backend_healthy "$project" "$seconds"; then
-  echo "health:    ok (http://$project-backend:$BACKEND_PORT$BACKEND_HEALTH)"
+  echo "health:    ok ($(backend_health_target "$project"))"
   exit 0
 fi
-echo "health:    NOT OK (http://$project-backend:$BACKEND_PORT$BACKEND_HEALTH)"
+echo "health:    NOT OK ($(backend_health_target "$project"))"
 echo "log:       sudo docker compose --project-directory $BACKENDS_DIR/$project --env-file $STATE_DIR/$project/release.env logs --tail 50"
 exit 1

@@ -1,5 +1,6 @@
 ---
-# One Caddy site per project: its static site, its backend or both.
+# One Caddy site per public project (one with a subdomain): its static site,
+# its backend or both. Internal projects get none.
 
 # Checked with the rest of Caddy's config before it replaces the current file,
 # so an invalid site can never stop Caddy at its next restart.
@@ -13,13 +14,14 @@
     validate: >-
       /usr/local/sbin/caddy-validate-site {{ caddy_image }} {{ caddy_uid }}
       {{ caddy_dir }}/conf %s {{ item.name }}
-  loop: "{{ projects_registry.projects }}"
+  loop: "{{ projects_registry.projects | selectattr('subdomain', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
   notify: Reload Caddy
 
-# A project that is no longer in projects.yml stops being served. Only the
-# Caddy site goes: its files in /srv/sites stay until removed by hand.
+# A project that is no longer in projects.yml, or no longer has a subdomain,
+# stops being served. Only the Caddy site goes: its files in /srv/sites stay
+# until removed by hand.
 - name: Find the Caddy sites
   ansible.builtin.find:
     paths: "{{ projects_caddy_sites_dir }}"
@@ -35,6 +37,6 @@
     label: "{{ item.path | basename }}"
   vars:
     projects_expected_sites: >-
-      {{ projects_registry.projects | map(attribute='name')
+      {{ projects_registry.projects | selectattr('subdomain', 'defined') | map(attribute='name')
          | map('regex_replace', '^(.*)$', projects_caddy_sites_dir ~ '/\1.caddy') | list }}
   notify: Reload Caddy
