@@ -17,9 +17,11 @@ Pull requests that Dependabot opened may also carry Dependabot's commits
 the commits, so a commit that only claims to be Dependabot's fails anywhere
 else. Their messages are still checked.
 
-It checks commits only. The pull request's description is not checked here:
-CI does not run again when the description is edited, so a result about it
-would go stale.
+## What it does not cover
+
+It checks commits only; the PR description is not checked. CI does not run
+again when the description is edited, so a result about it would go stale.
+The description is reviewed by hand before merging.
 
 ## Use
 
