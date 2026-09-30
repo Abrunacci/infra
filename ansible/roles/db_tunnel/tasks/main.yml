@@ -56,3 +56,12 @@
     owner: root
     group: root
     mode: "0644"
+
+# After db-tunnel.conf names the new image: before that, a bridge opened now
+# would still ask for the old one (with --pull never). An open bridge keeps
+# its image until a later run.
+- name: Remove older bridge images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ db_tunnel_image }}"]
+  register: db_tunnel_prune
+  changed_when: db_tunnel_prune.stdout | length > 0
