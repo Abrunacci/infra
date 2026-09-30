@@ -70,3 +70,6 @@ backups/
 # --- Claude Code -----------------------------------------------------------
 # .claude/settings.json (shared deny rules) is versioned; personal overrides are not.
 .claude/settings.local.json
+
+# Python bytecode left by the tests.
+__pycache__/
