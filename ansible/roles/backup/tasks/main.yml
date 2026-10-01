@@ -100,3 +100,12 @@
     name: backup.timer
     enabled: true
     state: started
+
+# After backup.conf names the new image: before that, a backup starting now
+# would still ask for the old one (with --pull never). A backup running now
+# keeps its image until a later run.
+- name: Remove older rclone images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ backup_rclone_image }}"]
+  register: backup_prune
+  changed_when: backup_prune.stdout | length > 0

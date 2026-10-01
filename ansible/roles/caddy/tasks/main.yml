@@ -106,3 +106,11 @@
 # next run would see no change to trigger it.
 - name: Apply Caddyfile changes now
   ansible.builtin.meta: flush_handlers
+
+# Only here, with Caddy healthy on the new image: if it had not started, the
+# play would have stopped above, and the old image would still be here.
+- name: Remove older Caddy images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ caddy_image }}"]
+  register: caddy_prune
+  changed_when: caddy_prune.stdout | length > 0

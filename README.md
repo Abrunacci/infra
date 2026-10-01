@@ -6,6 +6,7 @@ Infrastructure for my portfolio projects: one DigitalOcean Droplet, Docker Compo
 |---|---|
 | [`terraform/`](terraform/README.md) | The Droplet, cloud firewall, DNS records and mail forwarding. The backups bucket is a configuration of its own, in [`terraform/backup-bucket/`](terraform/backup-bucket/README.md) |
 | [`ansible/`](ansible/README.md) | Server configuration: hardening, Docker, Caddy and PostgreSQL |
+| [`.github/actions/check-commit-metadata/`](.github/actions/check-commit-metadata/README.md) | The "Check commit metadata" step every repository's CI runs: who may author the commits of a pull request and what their messages may carry |
 | `projects.yml` | Registry of deployed projects: what each one has (a static site, a backend, a database). Checked against `projects.schema.json` |
 
 Work in progress.

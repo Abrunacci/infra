@@ -1,0 +1,6 @@
+# What the tests and the type check of .github/actions/check-commit-metadata
+# need. The action itself needs none of it: it runs on the standard library.
+mypy==2.3.1
+pytest==9.1.1
+pyyaml==6.0.3
+types-pyyaml==6.0.12.20260906

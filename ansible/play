@@ -2,8 +2,10 @@
 # ansible-playbook with this run's output saved in a file of its own:
 #   ./play site.yml -K --diff
 # Logs go to $ANSIBLE_RUNS_DIR (default ~/notas/infra/corridas), outside the
-# repo, one file per run named after its UTC start time. Tasks with no_log are
-# not written.
+# repo, one file per run named after its UTC start time. Each log opens with a
+# summary (command, date, result, the tasks that changed or failed, the recap)
+# and then holds the whole run, diffs included, without color codes. Tasks
+# with no_log are not written.
 set -euo pipefail
 
 runs_dir="${ANSIBLE_RUNS_DIR:-$HOME/notas/infra/corridas}"
@@ -14,11 +16,38 @@ runs_dir="$(cd "$runs_dir" && pwd)"
 # Logs readable only by their owner.
 umask 077
 
-log="$runs_dir/$(date -u +%Y%m%dT%H%M%SZ)-ansible-playbook.log"
-export ANSIBLE_LOG_PATH="$log"
+started="$(date -u +%s)"
+name="$(date -u -d "@$started" +%Y%m%dT%H%M%SZ)-ansible-playbook.log"
+log="$runs_dir/$name"
+# Ansible writes here as the run goes; the log above is built from it at the
+# end. The terminal keeps its colors either way.
+raw="$runs_dir/.$name.raw"
+export ANSIBLE_LOG_PATH="$raw"
 echo "Logging this run to $log" >&2
 
 # ansible.cfg is only read from the current directory. Relative paths in the
 # arguments (the playbook, -e @file) are therefore relative to ansible/.
 cd "$(dirname "$0")"
-exec ansible-playbook "$@"
+
+# Ctrl-C stops ansible-playbook, not this script, so an interrupted run is
+# still written to its log. (A handler, not '': an ignored signal would be
+# ignored by ansible-playbook too.)
+trap ':' INT
+status=0
+ansible-playbook "$@" || status=$?
+trap - INT
+
+duration="$(($(date -u +%s) - started))s"
+if [[ ! -e "$raw" ]]; then
+  echo "ansible-playbook wrote no log; nothing saved" >&2
+elif ./format-run-log "$raw" "$log" "$status" \
+  "$(date -u -d "@$started" '+%Y-%m-%d %H:%M:%S UTC')" "$duration" \
+  -- ./play "$@"; then
+  rm -f "$raw"
+  echo "Run log: $log" >&2
+else
+  # Never lose a run: keep Ansible's own log, colors and all.
+  mv "$raw" "$log"
+  echo "Could not summarize the run; its raw log is at $log" >&2
+fi
+exit "$status"

@@ -27,7 +27,7 @@ The roles run in that order: each one depends on the previous ones, and `project
     3. cloud-init's `/etc/sudoers.d/90-cloud-init-users` is replaced by a rule that requires the password, validated with `visudo`.
     4. The playbook checks that no NOPASSWD rule is left, and that sudo works with the password on a fresh connection.
   - **Rebuilding:** `terraform apply` creates the Droplet with NOPASSWD, the admin sets the password on it, and the playbook, run with `-K`, removes NOPASSWD. The operating procedure (the backup root session and recovery) is kept in private operations documentation.
-- **Pinned versions.** Container images are pinned by digest and the Docker packages by exact version (and held with `dpkg`, so neither `apt upgrade` nor unattended-upgrades changes them). Upgrading is a PR that bumps the value in the role's `defaults/main.yml`.
+- **Pinned versions.** Container images are pinned by digest and the Docker packages by exact version (and held with `dpkg`, so neither `apt upgrade` nor unattended-upgrades changes them). Upgrading is a PR that bumps the value in the role's `defaults/main.yml`. Once the new image is in use (for Caddy and PostgreSQL, once the container is up and healthy), the role removes that service's older images with `prune-images`, unless a container still uses one; if the new one fails to start, the play stops first and the old image stays. Backend images are not touched: `deploy-backend` keeps its own ("Retention and rollbacks", below).
 - **Docker bypasses ufw.** Ports published by a container skip ufw's rules. Only Caddy publishes ports, and only the ones both firewalls already allow. No other container may publish one; PostgreSQL is reached over the `db` network instead.
 - **`db` is an internal network with a fixed subnet.** Containers on it have no route to the internet through it, and PostgreSQL always has the same address on it (`postgres_ipv4_address` in `group_vars`). Projects join `edge` (to be reached by Caddy) and `db` (to reach PostgreSQL); internal ones do not join `edge`.
 - **Secrets are generated on the server.** The PostgreSQL superuser password is created once with `openssl rand` in `/etc/infra/secrets/postgres.password` (mode 0400, owned by the container's `postgres` user). It is never sent to the machine running Ansible, and running the playbook again does not replace it.
@@ -99,7 +99,24 @@ Every run asks for the admin user's sudo password (`-K`; `ansible.cfg` also sets
 
 Every run is also logged outside the repo, in `~/notas/infra/corridas/`:
 - `./play` writes each run to its own file (mode 0600), named after its UTC start time (`20260924T201500Z-ansible-playbook.log`). It creates the directory (mode 0700) if needed. It runs from `ansible/`, so relative paths in its arguments are relative to `ansible/`.
-- `ansible-playbook` run directly appends to `ansible.log` in the same directory. If the directory does not exist, Ansible only warns and logs nothing.
+- `ansible-playbook` run directly appends to `ansible.log` in the same directory, with no summary and with the color codes of `--diff`. If the directory does not exist, Ansible only warns and logs nothing.
+- Each `./play` log opens with a summary, so what a run did can be read without scrolling through diffs:
+
+  ```text
+  Command:  ./play site.yml -K --diff
+  Date:     2026-09-29 22:41:24 UTC (6s)
+  Result:   FAILED (exit code 2)
+
+  Tasks that changed or failed:
+    changed  server.abrunacci.dev  caddy : Write the Caddyfile
+    failed   server.abrunacci.dev  deploy : Write the deploy keys
+    changed  server.abrunacci.dev  caddy : Reload Caddy (handler)
+
+  PLAY RECAP
+  server.abrunacci.dev       : ok=41   changed=2    unreachable=0    failed=1    skipped=3    rescued=0    ignored=0
+  ```
+
+  Below it comes the whole run, diffs included, as Ansible logged it. The terminal keeps its colors; the file has none, so it reads fine in any editor. `format-run-log` builds the file from Ansible's raw log once the run ends, also when it fails or is stopped with Ctrl-C. If that step fails, `./play` keeps the raw log (with colors) under the same name and says so.
 - The log holds what the screen shows. Tasks with `no_log` are left out; the only one is the task that generates the PostgreSQL superuser password, whose value never appears in any argument or output anyway. The sudo password (`-K`) is never logged.
 - `--diff` output is logged too. No template holds a secret today; a task that renders one must use `no_log: true` and `diff: false`, so it never reaches the screen or the log.
 - `*.log` and `corridas/` are git-ignored, in case a log is ever pointed at the repo.

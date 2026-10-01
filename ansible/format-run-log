@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Turn the raw log of an ansible-playbook run into the file kept in corridas/.
+
+    format-run-log RAW_LOG OUT_LOG EXIT_CODE STARTED DURATION -- COMMAND...
+
+./play calls it once ansible-playbook has exited. OUT_LOG gets:
+  1. A short summary: the command, when it ran and whether it failed; one
+     line per task that changed something or failed (task and host, no
+     diff); and the PLAY RECAP.
+  2. Below it, the whole raw log as Ansible wrote it, without the terminal
+     color codes that --diff leaves in it.
+
+The summary is read from the lines of the default callback ("TASK [...]",
+"changed: [host]", "fatal: [host]: FAILED!", "PLAY RECAP"), so the log must
+come from that callback, which is the one ansible.cfg uses.
+"""
+
+import re
+import shlex
+import sys
+
+# \x1b[0;31m and the like: colors and other terminal escape sequences.
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Every record Ansible logs starts with this prefix; the lines that follow
+# without it (a diff, a result, an error's context) belong to that record.
+RECORD = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ p=\d+ u=\S* n=\S+ (?P<level>\w+)\| (?P<msg>.*)$")
+TASK = re.compile(r"^(?P<kind>TASK|RUNNING HANDLER) \[(?P<name>.*)\] \**$")
+# "changed: [web]", "changed: [web -> db] => (item=x)", "fatal: [web]: FAILED! =>",
+# "failed: [web] (item=x) =>", "fatal: [web]: UNREACHABLE! =>".
+RESULT = re.compile(r"^(?P<status>changed|fatal|failed): \[(?P<host>[^\]]+)\](?P<rest>.*)$")
+RECAP = "PLAY RECAP"
+
+
+def read_records(text):
+    """Split the log into (level, first line, whole record) tuples."""
+    records = []
+    for line in text.splitlines():
+        match = RECORD.match(line)
+        if match:
+            records.append([match["level"], match["msg"], [line]])
+        elif records:
+            records[-1][2].append(line)
+        else:
+            # Anything before the first record (nothing, normally).
+            records.append(["", line, [line]])
+    return records
+
+
+def summarize(records):
+    """Return the changed/failed tasks, the recap lines and the errors."""
+    tasks = []  # [status, host, task], in the order they happened
+    seen = set()
+    task = None
+    recap = None
+    errors = []
+    for level, msg, _ in records:
+        if recap is not None:
+            if msg.strip():
+                recap.append(msg.rstrip())
+            continue
+        if msg.startswith(RECAP):
+            recap = []
+            continue
+        match = TASK.match(msg)
+        if match:
+            task = match["name"]
+            if match["kind"] == "RUNNING HANDLER":
+                task += " (handler)"
+            continue
+        if level == "ERROR":
+            errors.append(msg.removeprefix("[ERROR]: ").strip())
+            continue
+        if msg.strip() == "...ignoring":
+            # Ansible prints it right after the failure it ignores.
+            for entry in reversed(tasks):
+                if entry[0] == "failed":
+                    entry[0] = "failed, ignored"
+                    break
+            continue
+        match = RESULT.match(msg)
+        if not match or task is None:
+            continue
+        if match["status"] == "changed":
+            status = "changed"
+        elif "UNREACHABLE!" in match["rest"]:
+            status = "unreachable"
+        else:
+            status = "failed"
+        # A loop reports each item; the summary names the task once per host
+        # and status.
+        key = (task, match["host"], status)
+        if key in seen:
+            continue
+        seen.add(key)
+        tasks.append([status, match["host"], task])
+    return tasks, recap, errors
+
+
+def render(raw, exit_code, started, duration, command):
+    clean = ANSI.sub("", raw)
+    tasks, recap, errors = summarize(read_records(clean))
+
+    if exit_code == 0:
+        result = "ok"
+    elif exit_code == 99:
+        result = "FAILED: interrupted (exit code 99)"
+    else:
+        result = f"FAILED (exit code {exit_code})"
+    out = [
+        f"Command:  {command}",
+        f"Date:     {started} ({duration})",
+        f"Result:   {result}",
+        "",
+        "Tasks that changed or failed:",
+    ]
+    if tasks:
+        status_width = max(len(status) for status, _, _ in tasks)
+        host_width = max(len(host) for _, host, _ in tasks)
+        for status, host, task in tasks:
+            out.append(f"  {status:<{status_width}}  {host:<{host_width}}  {task}")
+    else:
+        out.append("  none")
+    # A run that fails before any task (a syntax error, a missing file) has
+    # nothing above to explain it: show Ansible's error instead.
+    if exit_code != 0 and not any(s != "changed" for s, _, _ in tasks) and errors:
+        out += ["", "Errors:"]
+        out += [f"  {error}" for error in errors]
+    out += ["", RECAP]
+    if recap:
+        out += recap
+    else:
+        out.append("  none: the run stopped before the end")
+    out += ["", "=" * 80, "Full log", "=" * 80, "", clean.rstrip("\n"), ""]
+    return "\n".join(out)
+
+
+def main(argv):
+    if len(argv) < 7 or argv[6] != "--":
+        sys.exit(__doc__.split("\n\n")[1])
+    raw_path, out_path, exit_code, started, duration = argv[1:6]
+    with open(raw_path, encoding="utf-8", errors="replace") as f:
+        raw = f.read()
+    text = render(raw, int(exit_code), started, duration, shlex.join(argv[7:]))
+    with open(out_path, "x", encoding="utf-8") as f:
+        f.write(text)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

@@ -120,3 +120,11 @@
     pull: missing
     wait: true
     wait_timeout: 180
+
+# Only here, with PostgreSQL healthy on the new image: if it had not started,
+# the play would have stopped above, and the old image would still be here.
+- name: Remove older PostgreSQL images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ postgres_image }}"]
+  register: postgres_prune
+  changed_when: postgres_prune.stdout | length > 0
