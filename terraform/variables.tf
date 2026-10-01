@@ -116,3 +116,35 @@ variable "resend_record_ids" {
     error_message = "resend_record_ids keys must be send, rsend or dkim, and each value a 32-character hex record ID."
   }
 }
+
+variable "alert_email" {
+  description = "Address DigitalOcean sends the resource alerts to (monitoring.tf). It must be the address of a verified user of the DigitalOcean team. Kept out of the repo (it is public): set it in .env. It is stored in the state."
+  type        = string
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", lower(var.alert_email)))
+    error_message = "alert_email must be an email address."
+  }
+}
+
+variable "alert_thresholds" {
+  description = "Usage, in percent, above which each resource alert fires (monitoring.tf). Lowered only to test that the email arrives, with -var for that run (never in .env)."
+  type = object({
+    cpu    = number
+    memory = number
+    disk   = number
+  })
+  default = {
+    cpu    = 80
+    memory = 80
+    disk   = 80
+  }
+  nullable = false
+
+  validation {
+    condition     = alltrue([for v in values(var.alert_thresholds) : v >= 1 && v <= 99])
+    error_message = "Every alert threshold must be between 1 and 99 (percent)."
+  }
+}
