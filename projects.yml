@@ -87,6 +87,8 @@ projects:
     repo: https://github.com/Abrunacci/data-pipeline
     site: false
     database: false
+    # CI key: it can only run deploy-backend for this project (no site).
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIQIv0wZsZBIrRSCcfa9Sjtqc4LBabBWAkrJ6BydVnYf data-pipeline-deploy
     backend:
       image: ghcr.io/abrunacci/data-pipeline
       memory: 256m
