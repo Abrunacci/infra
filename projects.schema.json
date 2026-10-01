@@ -69,7 +69,7 @@
       },
       "allOf": [
         {
-          "description": "Without a subdomain, nothing is public: no site, and a backend Caddy does not reach, so it has no port, health path or paths (the image's own HEALTHCHECK says whether it is healthy).",
+          "description": "Without a subdomain, nothing is public: no site, and a backend Caddy does not reach, so it has no port, health path, paths or private paths (the image's own HEALTHCHECK says whether it is healthy).",
           "if": { "not": { "required": ["subdomain"] } },
           "then": {
             "required": ["backend"],
@@ -79,7 +79,8 @@
                 "allOf": [
                   { "not": { "required": ["port"] } },
                   { "not": { "required": ["health"] } },
-                  { "not": { "required": ["paths"] } }
+                  { "not": { "required": ["paths"] } },
+                  { "not": { "required": ["private_paths"] } }
                 ]
               }
             }
@@ -146,6 +147,13 @@
         },
         "paths": {
           "description": "Caddy path matchers sent to the backend, such as /api/*.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^/[A-Za-z0-9._~/-]*\\*?$" }
+        },
+        "private_paths": {
+          "description": "Caddy path matchers of the backend that the internet must never reach, such as /api/ingest: Caddy answers them 404, even inside paths. Only other containers on the server may call them. Only with a subdomain.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

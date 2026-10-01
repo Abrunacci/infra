@@ -16,6 +16,12 @@
 	}
 {% if item.backend is defined %}
 {%   set backend %}
+{%     if item.backend.private_paths is defined %}
+		# Only other containers on the server may call these: from the
+		# internet they do not exist.
+		@private path {{ item.backend.private_paths | join(' ') }}
+		respond @private 404
+{%     endif %}
 		request_body {
 			max_size 10MB
 		}

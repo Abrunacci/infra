@@ -66,8 +66,8 @@
         item.backend is not defined
         or (item.backend is mapping
             and item.backend.keys()
-                | difference(['image', 'port', 'health', 'paths', 'env', 'secrets', 'memory', 'migrate',
-                              'database_url_scheme']) | length == 0
+                | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
+                              'migrate', 'database_url_scheme']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and (item.backend.port is not defined
@@ -81,19 +81,27 @@
                      and item.backend.paths | length > 0
                      and item.backend.paths | unique | length == item.backend.paths | length
                      and item.backend.paths | reject('string') | list | length == 0
-                     and item.backend.paths | reject('match', '^/[A-Za-z0-9._~/-]*[*]?\Z') | list | length == 0)))
+                     and item.backend.paths | reject('match', '^/[A-Za-z0-9._~/-]*[*]?\Z') | list | length == 0))
+            and (item.backend.private_paths is not defined
+                 or (item.backend.private_paths is sequence and item.backend.private_paths is not string
+                     and item.backend.private_paths is not mapping
+                     and item.backend.private_paths | length > 0
+                     and item.backend.private_paths | unique | length == item.backend.private_paths | length
+                     and item.backend.private_paths | reject('string') | list | length == 0
+                     and item.backend.private_paths | reject('match', '^/[A-Za-z0-9._~/-]*[*]?\Z') | list
+                         | length == 0)))
       # Same rule as the schema: a CI key, ed25519, on one line.
       - >-
         item.deploy_key is not defined
         or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
       # Without a subdomain nothing is public: no site, and a backend Caddy
-      # does not reach (no port, health or paths; the image's HEALTHCHECK
-      # says whether it is healthy). With one, Caddy needs both.
+      # does not reach (no port, health, paths or private paths; the image's
+      # HEALTHCHECK says whether it is healthy). With one, Caddy needs both.
       - >-
         item.subdomain is defined
         or (not item.site and item.backend is defined and item.backend is mapping
             and item.backend.port is not defined and item.backend.health is not defined
-            and item.backend.paths is not defined)
+            and item.backend.paths is not defined and item.backend.private_paths is not defined)
       - >-
         item.subdomain is not defined or item.backend is not defined
         or (item.backend.port is defined and item.backend.health is defined)
