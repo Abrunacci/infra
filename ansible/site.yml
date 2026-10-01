@@ -17,6 +17,8 @@
       tags: [base]
     - role: hardening
       tags: [hardening]
+    - role: monitoring
+      tags: [monitoring]
     - role: docker
       tags: [docker]
     - role: caddy

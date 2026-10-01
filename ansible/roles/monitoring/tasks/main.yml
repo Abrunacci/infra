@@ -1,0 +1,40 @@
+---
+- name: Download the DigitalOcean agent's apt signing key
+  ansible.builtin.get_url:
+    url: "{{ monitoring_do_agent_key_url }}"
+    dest: /etc/apt/keyrings/digitalocean-agent.asc
+    checksum: "{{ monitoring_do_agent_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# The same file DigitalOcean's installer writes, at the same path: the
+# package's daily upgrade job reads only this file. Two files for the same
+# repository with different keys would make every apt update fail.
+- name: Add the DigitalOcean agent's apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/digitalocean-agent.list
+    content: |
+      # Managed by Ansible (roles/monitoring).
+      deb [signed-by=/etc/apt/keyrings/digitalocean-agent.asc] {{ monitoring_do_agent_repo_url }} main main
+    owner: root
+    group: root
+    mode: "0644"
+
+# Where DigitalOcean's installer put the key. Nothing refers to it any more.
+- name: Remove the key the installer left
+  ansible.builtin.file:
+    path: /usr/share/keyrings/digitalocean-agent-keyring.gpg
+    state: absent
+
+- name: Install the DigitalOcean agent
+  ansible.builtin.apt:
+    name: do-agent
+    state: present
+    update_cache: true
+
+- name: Start the DigitalOcean agent at boot
+  ansible.builtin.systemd_service:
+    name: do-agent
+    enabled: true
+    state: started

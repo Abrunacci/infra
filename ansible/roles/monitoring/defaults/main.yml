@@ -1,0 +1,15 @@
+---
+# DigitalOcean's monitoring agent (do-agent). It sends the Droplet's memory
+# and disk usage to DigitalOcean, which the resource alerts in
+# terraform/monitoring.tf fire on. Terraform's `monitoring = true` installs it
+# only when the Droplet is created; this role keeps it installed and running.
+#
+# Not pinned to a version: the package's own daily job (/etc/cron.daily/do-agent)
+# upgrades it from this repository, as DigitalOcean intends.
+monitoring_do_agent_repo_url: https://repos.insights.digitalocean.com/apt/do-agent
+
+# The repository's signing key (the one DigitalOcean's install.sh uses). If
+# DigitalOcean ever replaces the key, the checksum no longer matches and the
+# run stops.
+monitoring_do_agent_key_url: https://repos.insights.digitalocean.com/sonar-agent.asc
+monitoring_do_agent_key_checksum: sha256:3512dfaff8deece256701d67a2bb0ebdba24c5b4bb760427d345c384f46e99ae

@@ -7,6 +7,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Droplet (`s-1vcpu-2gb`, `nyc3`, Ubuntu 24.04, IPv6, minimal cloud-init) | `main.tf` |
 | Admin SSH key, tags and a DigitalOcean project that groups the resources | `main.tf` |
 | Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
+| Resource alerts by email: CPU, memory or disk above 80 % for 5 minutes | `monitoring.tf` |
 | A/AAAA records for `server`, `status` and each project in `../projects.yml`: the root domain for a project on `"@"`, plus `www` | `dns.tf` |
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
@@ -20,11 +21,12 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 
 | Variable | What it is | Minimum scope | Expires |
 |---|---|---|---|
-| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet | ~2026-11-23 (to confirm in the panel) |
+| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet | ~2027-10-01 (to confirm in the panel) |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` | – |
 | `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account | – |
 | `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Not a credential, but kept out of the repo, which is public. It is stored in the state | – |
+| `TF_VAR_alert_email` | The address DigitalOcean sends the resource alerts to. It must belong to a verified user of the DigitalOcean team | Same as above | – |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only | set when created |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – | – |
@@ -84,6 +86,13 @@ Check that ICMPv6 passes the cloud firewall. DigitalOcean's docs do not state it
 ping -6 -c3 server.abrunacci.dev
 tracepath -6 server.abrunacci.dev   # should report the path MTU without stalling
 ```
+
+## Resource alerts
+
+The Droplet runs every project, PostgreSQL and Caddy, so one of them taking the machine takes them all down. DigitalOcean emails `TF_VAR_alert_email` when, averaged over 5 minutes, CPU, memory or disk usage goes above 80 % (`monitoring.tf`), and again when it is back below. The daily backup and a deploy last seconds to a couple of minutes, so they do not trigger it.
+
+- **Memory and disk come from the monitoring agent** (`do-agent`), which the `monitoring` Ansible role keeps installed and running. If the agent stops, those two alerts go quiet instead of firing. CPU is measured by the hypervisor and does not depend on it.
+- **Testing that the email arrives:** lower one threshold for a single run, `terraform plan -out=tfplan -var='alert_thresholds={cpu=80,memory=80,disk=1}'`, apply it, wait for the email, then plan and apply without the flag to put it back. Never put `alert_thresholds` in `.env`: the lowered value would stay without anyone noticing.
 
 ## Backups bucket
 

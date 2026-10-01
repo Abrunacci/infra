@@ -24,6 +24,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The same step every repository runs; here from this checkout, so a
+      # pull request that changes the action is checked by its own version.
+      - name: Check commit metadata
+        uses: ./.github/actions/check-commit-metadata
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -62,3 +66,26 @@ jobs:
           echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" gitleaks
       - run: ./gitleaks git --redact --verbose .
+
+  commit-metadata-action:
+    name: Test (check-commit-metadata)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's own Python, the one the action runs with in every
+      # repository; the tools go in a virtualenv, since the system Python
+      # refuses packages installed into it.
+      - name: Install the test tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -r tests/check-commit-metadata/requirements.txt
+      - name: Tests
+        run: '"$RUNNER_TEMP/venv/bin/pytest" -p no:cacheprovider tests/check-commit-metadata'
+      - name: Type check
+        run: >-
+          "$RUNNER_TEMP/venv/bin/mypy" --strict
+          .github/actions/check-commit-metadata/check_authorship.py
+          tests/check-commit-metadata

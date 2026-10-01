@@ -1,0 +1,79 @@
+---
+name: Check commit metadata
+description: >-
+  Fails when a commit of the pull request is not the maintainer's, or carries a
+  co-author or an attribution line. See README.md next to this file.
+
+# Every repository calls it as one step of the CI job it already has, pinned to
+# a commit of this repository:
+#
+#   - name: Check commit metadata
+#     uses: Abrunacci/infra/.github/actions/check-commit-metadata@<sha> # main
+#
+# The defaults below are the policy for all of them, so changing it is a pull
+# request here. It needs no checkout of its own and no extra permission:
+# contents: read, which every CI job already has, is enough.
+
+inputs:
+  name:
+    description: The only accepted author name.
+    default: Alejandro Brunacci
+  emails:
+    description: >-
+      Accepted author emails, one per line. The noreply address is the one
+      GitHub uses for commits made on github.com when the email is private.
+    default: |
+      abrunacci87@gmail.com
+      14948775+Abrunacci@users.noreply.github.com
+  blocked-domains:
+    description: >-
+      Domains no commit message may link to, one per line. Their subdomains
+      are blocked too.
+    default: |
+      claude.ai
+      claude.com
+  allow-dependabot:
+    description: >-
+      "true" accepts Dependabot's commits in pull requests Dependabot opened.
+    default: "true"
+  token:
+    description: Reads the repository's commits. The job's own token is enough.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check commit metadata
+      shell: bash
+      # Everything from the event and the inputs goes through the environment,
+      # never into the script itself, so no value can inject shell.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        NAME: ${{ inputs.name }}
+        EMAILS: ${{ inputs.emails }}
+        BLOCKED_DOMAINS: ${{ inputs.blocked-domains }}
+        ALLOW_DEPENDABOT: ${{ inputs.allow-dependabot }}
+        FETCH_TOKEN: ${{ inputs.token }}
+      run: |
+        # The same CI job also runs on pushes to main, where there is no pull
+        # request: what lands there was already checked as a pull request.
+        if [[ -z "$PR_BASE" || -z "$PR_HEAD" ]]; then
+          echo "Nothing to check: '$EVENT_NAME' is not a pull request event."
+          exit 0
+        fi
+        args=(--base "$PR_BASE" --head "$PR_HEAD" --name "$NAME"
+              --pr-author "$PR_AUTHOR" --fetch-from "$REPO_URL")
+        while read -r email; do
+          if [[ -n "$email" ]]; then args+=(--email "$email"); fi
+        done <<< "$EMAILS"
+        while read -r domain; do
+          if [[ -n "$domain" ]]; then args+=(--blocked-domain "$domain"); fi
+        done <<< "$BLOCKED_DOMAINS"
+        if [[ "$ALLOW_DEPENDABOT" == true ]]; then
+          args+=(--allow-dependabot)
+        fi
+        python3 "$GITHUB_ACTION_PATH/check_authorship.py" "${args[@]}"
