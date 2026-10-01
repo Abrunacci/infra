@@ -33,3 +33,5 @@
       tags: [deploy]
     - role: backup
       tags: [backup]
+    - role: gatus
+      tags: [gatus]

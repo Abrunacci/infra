@@ -1,0 +1,43 @@
+---
+# Gatus: the status page (status.<domain>) and the alerts when a check fails.
+# What it checks is generated from projects.yml (templates/config.yaml.j2).
+
+# Pinned by digest, like every other image. The same digest is published on
+# Docker Hub as twinproduction/gatus.
+gatus_image: ghcr.io/twin/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e
+gatus_dir: "{{ infra_opt_dir }}/gatus"
+# The check history (SQLite). Not backed up: losing it only empties the
+# status page's history.
+gatus_data_dir: /var/lib/infra/gatus
+# The alert settings: alerts.env (written here) and the channel's credentials
+# (written on the server by gatus-credentials). Root only.
+gatus_secrets_dir: "{{ infra_secrets_dir }}/gatus"
+gatus_memory_limit: 128m
+# Fixed, like caddy (10001) through backends (10005).
+gatus_uid: 10006
+
+# How often each site is checked, and how long a check may take.
+gatus_check_interval: 1m
+gatus_check_timeout: 10s
+# A site's certificate must be valid for at least this long. Caddy renews
+# well before; this fires only if renewing keeps failing.
+gatus_certificate_min_validity: 168h
+
+# Where the alerts go. Each channel is one file, templates/alerting-<channel>.yaml.j2,
+# plus its credentials (<channel>.env). Changing channels: ansible/README.md,
+# "Status page and alerts".
+gatus_alert_channel: email
+# Failures in a row before an alert (one per check interval), and successes in
+# a row before it is resolved. Every channel uses them.
+gatus_alert_failure_threshold: 3
+gatus_alert_success_threshold: 2
+
+# The email channel: Resend's SMTP server. Port 2587 (STARTTLS): DigitalOcean
+# blocks outgoing SMTP on 25, 465 and 587.
+gatus_smtp_host: smtp.resend.com
+gatus_smtp_port: 2587
+gatus_smtp_username: resend
+# On the domain verified in Resend (terraform/email.tf).
+gatus_email_from: "Status <status@mail.{{ domain }}>"
+# The same address DigitalOcean's resource alerts go to (terraform/.env).
+gatus_alert_email: "{{ lookup('ansible.builtin.env', 'TF_VAR_alert_email') | trim }}"
