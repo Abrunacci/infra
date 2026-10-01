@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Removes the older images of a service the playbook runs, keeping the one it
+# runs now. Run by the playbook, after the new image is pulled and, for Caddy
+# and PostgreSQL, after its container is up and healthy (a failed start stops
+# the play before this runs, so the old image is still there to go back to):
+#
+#   prune-images IMAGE
+#
+# IMAGE is the reference the role uses, for example
+# postgres:17.11-trixie@sha256:<digest>. Every other image of the same
+# repository (postgres) goes, unless a container, running or stopped, still
+# uses it. Images of other repositories are never touched, so a backend's
+# releases (deploy-backend keeps them for backend-rollback) stay. Prints one
+# line per image removed and nothing else, so the playbook can tell whether
+# anything changed. Exits 1 without removing anything if IMAGE is not here.
+# Installed by Ansible (roles/docker) as /usr/local/sbin/prune-images.
+set -euo pipefail
+export LC_ALL=C
+
+fail() {
+  echo "prune-images: $*" >&2
+  exit 1
+}
+
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+[[ $# -eq 1 ]] || fail "usage: prune-images IMAGE"
+ref="$1"
+[[ "$ref" =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]{1,128})?(@sha256:[0-9a-f]{64})?$ ]] \
+  || fail "invalid image reference: $ref"
+
+# The repository: the reference without its digest and tag. A registry with a
+# port (host:5000/name) is not supported, and the pattern above rejects it.
+repo="${ref%%@*}"
+repo="${repo%%:*}"
+# Docker lists Docker Hub images by their short name.
+repo="${repo#docker.io/}"
+repo="${repo#library/}"
+
+# Nothing goes unless the image to keep is here: a typo in the role must not
+# remove the one that runs.
+keep="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" \
+  || fail "$ref is not on this server; nothing was removed"
+
+# Every image, filtered here: with some image stores, an image pulled by
+# digest only (no tag) is left out of "docker image ls REPO", and of
+# "docker image ls" without --all.
+repo_ids() {
+  docker image ls --all --no-trunc --format '{{.ID}} {{.Repository}}' \
+    | awk -v repo="$repo" '$2 == repo { print $1 }' | sort -u
+}
+
+mapfile -t ids < <(repo_ids)
+for id in "${ids[@]}"; do
+  [[ "$id" == "$keep" ]] && continue
+  # Used by a container, even a stopped one: kept, and removed by a later run
+  # once nothing uses it.
+  if [[ -n "$(docker ps --all --quiet --filter "ancestor=$id")" ]]; then
+    echo "prune-images: $id is used by a container; kept" >&2
+    continue
+  fi
+  # By name, not by ID: an image also named in another repository keeps that
+  # name and stays. Removing its last name removes the image. One at a time:
+  # depending on Docker's image store, removing the tag may already remove
+  # the digest name, and removing that one then fails.
+  mapfile -t names < <(docker image inspect \
+    --format '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$id" \
+    | awk -v repo="$repo" 'index($0, repo ":") == 1 || index($0, repo "@") == 1')
+  ((${#names[@]})) || continue
+  for name in "${names[@]}"; do
+    docker image rm "$name" >/dev/null 2>&1 || true
+  done
+  if repo_ids | grep -qxF "$id"; then
+    echo "prune-images: could not remove ${names[0]}; kept" >&2
+  else
+    echo "removed ${names[0]} (${id#sha256:})"
+  fi
+done

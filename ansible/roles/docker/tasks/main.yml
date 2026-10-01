@@ -99,3 +99,13 @@
   loop: "{{ docker_networks }}"
   loop_control:
     label: "{{ item.name }}"
+
+# Run by the caddy, postgres, db_tunnel and backup roles once their new image
+# is in use, to remove that service's older images.
+- name: Install the image cleanup command
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/prune-images"
+    dest: /usr/local/sbin/prune-images
+    owner: root
+    group: root
+    mode: "0755"
