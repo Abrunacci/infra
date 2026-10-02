@@ -147,7 +147,7 @@ Host server.abrunacci.dev
 
 ## Deploying a project
 
-A project can be deployed once it has `site: true` and a `deploy_key` in `projects.yml`, and the playbook has run. Its repository needs an environment, two secrets and a workflow step. The steps below use cuanto-cuesta.
+A project can be deployed once it has a `deploy_key` in `projects.yml` and the playbook has run: its static site if it has `site: true`, its backend if it has one (see "Deploying a backend"). A project without a site, such as `data-pipeline`, only ever uses `deploy-backend`. Its repository needs an environment, two secrets and a workflow step. The steps below use cuanto-cuesta.
 
 ### 1. The deploy key
 
