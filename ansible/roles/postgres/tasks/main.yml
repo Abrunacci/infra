@@ -105,6 +105,18 @@
     group: "{{ postgres_container_uid }}"
     mode: "0400"
 
+# One per project with a database (database_networks): PostgreSQL joins them
+# all, each backend only its own. Labelled, so roles/projects can find and
+# remove the ones whose project is gone. Internal: no route out.
+- name: Create the database networks
+  community.docker.docker_network:
+    name: "{{ item }}"
+    internal: true
+    labels:
+      infra.network: database
+    state: present
+  loop: "{{ database_networks }}"
+
 - name: Write the PostgreSQL compose file
   ansible.builtin.template:
     src: compose.yml.j2
@@ -113,6 +125,9 @@
     group: root
     mode: "0644"
 
+# Recreates the container when compose.yml or the image changes. Adding or
+# removing a project with a database changes its networks, so PostgreSQL is
+# recreated then: a few seconds without any database.
 - name: Start PostgreSQL
   community.docker.docker_compose_v2:
     project_src: "{{ postgres_dir }}"
