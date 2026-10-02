@@ -9,3 +9,11 @@ base_swappiness: 10
 # reboot happens the same night. Containers come back through their restart policy.
 base_auto_reboot: true
 base_auto_reboot_time: "07:30"  # UTC (04:30 in Argentina)
+
+# The systemd journal is kept on disk (/var/log/journal), so it survives
+# reboots and container recreation; the backends log to it (driver journald,
+# roles/projects). It holds personal data: the backends' logs can carry what
+# visitors send (ansible/README.md, "Backend logs"). journald deletes the oldest
+# entries once the journal reaches this size; nothing else bounds how long
+# they stay. 1G is 2 % of the Droplet's 50 GB disk.
+base_journal_max_use: 1G

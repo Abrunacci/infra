@@ -1,0 +1,29 @@
+---
+# Also used by roles/caddy for the project networks (edge-<name>) and by
+# roles/postgres for the database networks (db-<name>).
+#
+# When a network's settings change, docker_network removes it, creates it
+# again and reconnects the containers that were on it, but without their
+# Compose settings: no aliases (Caddy finds Gatus as `gatus` and each backend
+# as `<name>-backend`; backends find PostgreSQL as `postgres`), no fixed
+# address (PostgreSQL's). Compose then sees them connected and leaves them as
+# they are. Taking them off instead makes the compose up that runs later
+# (roles caddy, postgres, gatus, and projects for the backends) recreate each
+# container with its own settings.
+#
+# docker_recreated_networks: names of the networks docker_network changed.
+- name: Take the containers off the recreated networks
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for container in $(docker network inspect -f "$FORMAT" "$NETWORK"); do
+        docker network disconnect "$NETWORK" "$container"
+        echo "$container"
+      done
+    executable: /bin/bash
+  environment:
+    NETWORK: "{{ item }}"
+    FORMAT: "{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}"
+  loop: "{{ docker_recreated_networks }}"
+  register: docker_detached
+  changed_when: docker_detached.stdout | length > 0
