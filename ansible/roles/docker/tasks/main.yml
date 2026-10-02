@@ -94,7 +94,11 @@
   community.docker.docker_network:
     name: "{{ item.name }}"
     internal: "{{ item.internal }}"
-    ipam_config: "{{ [{'subnet': item.subnet, 'iprange': item.iprange}] if item.subnet is defined else omit }}"
+    enable_ipv6: "{{ item.ipv6_subnet is defined }}"
+    # Only the subnets set here: Docker picks edge's IPv4 subnet itself.
+    ipam_config: >-
+      {{ (([{'subnet': item.subnet, 'iprange': item.iprange}] if item.subnet is defined else [])
+          + ([{'subnet': item.ipv6_subnet}] if item.ipv6_subnet is defined else [])) or omit }}
     state: present
   loop: "{{ docker_networks }}"
   loop_control:

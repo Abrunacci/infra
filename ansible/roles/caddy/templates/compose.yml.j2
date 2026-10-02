@@ -33,10 +33,15 @@ services:
       - ./config:/config
     # edge for Gatus; one network per public backend, which only that backend
     # shares with Caddy (edge_project_networks).
+    # The published ports go through the network that is Caddy's default
+    # gateway. edge is the only one with IPv6 (docker_edge_ipv6_subnet in
+    # roles/docker): the highest gw_priority makes it the gateway for both IPv4
+    # and IPv6, so visitors' addresses reach Caddy unchanged over either.
     networks:
-      - edge
+      edge:
+        gw_priority: 1
 {% for network in edge_project_networks %}
-      - {{ network }}
+      {{ network }}: {}
 {% endfor %}
     mem_limit: {{ caddy_memory_limit }}
     # The admin API listens on localhost inside the container only.
