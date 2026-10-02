@@ -21,7 +21,7 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 
 | Variable | What it is | Minimum scope | Expires |
 |---|---|---|---|
-| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project. The control panel adds read-only dependencies (actions, regions, sizes, image, vpc); keep them, the provider needs them while creating the Droplet | ~2027-10-01 (to confirm in the panel) |
+| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project and monitoring, each at the levels in [DigitalOcean token scopes](#digitalocean-token-scopes) | ~2027-10-01 (to confirm in the panel) |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` | – |
 | `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account | – |
@@ -37,6 +37,23 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 When you create a token, replace "set when created" with its expiration date (not a secret), and put a reminder in your calendar a week before it: an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running.
 
 The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. It has no R2 permission on purpose: see [`backup-bucket/`](backup-bucket/README.md). The R2 credentials (the state's and the server's) are separate tokens: a leak of one does not expose the others.
+
+### DigitalOcean token scopes
+
+DigitalOcean does not let you edit a token's scopes: rotating it, or adding a scope, means creating a new token with every scope below and deleting the old one. Each level maps to what Terraform does with that resource:
+
+| Scope | Levels | Why Terraform needs each level |
+|---|---|---|
+| `droplet` | create, read, update, delete | read: every plan. create: the first apply, or a rebuild. update: resizing (which powers the Droplet off and on), renaming, attaching tags. delete: only a deliberate rebuild, after `prevent_destroy` is removed in a reviewed PR |
+| `firewall` | create, read, update, delete | read: every plan. update: changing a rule or the Droplets it applies to. create and delete: a rebuild, or replacing the firewall |
+| `ssh_key` | create, read, update, delete | read: every plan. update: renaming the key. create and delete: changing `TF_VAR_admin_ssh_public_key` replaces the key |
+| `tag` | create, read, delete | read: every plan. create: creating the `infra` and `portfolio` tags and attaching them to the Droplet (DigitalOcean asks for `tag:create` plus `droplet:update` to tag a Droplet). delete: removing a tag from `local.tags`. Tags have no update level |
+| `project` | create, read, update, delete, assign_resource | read: every plan. assign_resource: putting the Droplet in the project (it needs `droplet:read` too). update: changing the project's name, description, purpose or environment. create and delete: a rebuild |
+| `monitoring` | create, read, update, delete | The resource alerts (`monitoring.tf`). update: changing a threshold, including the one-run test in [Resource alerts](#resource-alerts). Added on 2026-10-01 |
+
+When you pick those scopes, the control panel also adds read-only dependencies (read on actions, regions, sizes, image, snapshot and vpc; 30 scopes in total with the ones above). Keep them: the provider reads them while creating or resizing the Droplet.
+
+Nothing else is needed: DNS is in Cloudflare, and the backups go to R2, so the token has no `domain`, `spaces` or `volume` scope. If a plan or apply fails with `403` on a DigitalOcean resource, the token is missing a level of that resource's scope.
 
 ## State
 
