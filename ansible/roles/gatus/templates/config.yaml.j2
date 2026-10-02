@@ -1,0 +1,48 @@
+# Managed by Ansible (roles/gatus), from projects.yml. Local changes are overwritten.
+# ${...} come from the container's environment: the env files in
+# {{ gatus_secrets_dir }} (root only), never this file.
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+ui:
+  title: "Status | {{ domain }}"
+  header: "{{ domain }}"
+  dashboard-heading: "Status"
+  dashboard-subheading: "Everything hosted on {{ domain }}, checked every {{ gatus_check_interval }} from the server itself"
+  link: "https://{{ domain }}"
+
+{% include 'alerting-' ~ gatus_alert_channel ~ '.yaml.j2' %}
+
+
+# One group per public project (one with a subdomain): its site, its
+# backend's health path, or both. The certificate is checked on the first.
+endpoints:
+{% for p in projects_registry.projects if p.subdomain is defined %}
+{%   set host = domain if p.subdomain == '@' else p.subdomain ~ '.' ~ domain %}
+{%   set checks = [] %}
+{%   if p.site %}
+{%     set _ = checks.append({'name': 'Site', 'path': '/', 'conditions': ['[STATUS] == 200']}) %}
+{%   endif %}
+{%   if p.backend is defined %}
+{%     set _ = checks.append({'name': 'API', 'path': p.backend.health, 'conditions': ['[STATUS] >= 200', '[STATUS] < 300']}) %}
+{%   endif %}
+{%   for c in checks %}
+  - name: {{ c.name }}
+    group: {{ (p.title | default(p.name)) | replace('$', '$$') | to_json(ensure_ascii=False) }}
+    url: {{ ('https://' ~ host ~ c.path) | to_json }}
+    interval: {{ gatus_check_interval }}
+    client:
+      timeout: {{ gatus_check_timeout }}
+    conditions:
+{%     for condition in c.conditions %}
+      - "{{ condition }}"
+{%     endfor %}
+{%     if loop.first %}
+      - "[CERTIFICATE_EXPIRATION] > {{ gatus_certificate_min_validity }}"
+{%     endif %}
+    alerts:
+      - type: {{ gatus_alert_channel }}
+{%   endfor %}
+{% endfor %}

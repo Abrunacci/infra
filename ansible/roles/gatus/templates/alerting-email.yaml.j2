@@ -1,0 +1,14 @@
+# The email channel (gatus_alert_channel: email), through Resend's SMTP server.
+# Its password is a Resend API key, stored by gatus-credentials in email.env.
+alerting:
+  email:
+    from: {{ gatus_email_from | to_json }}
+    username: {{ gatus_smtp_username | to_json }}
+    password: "${SMTP_PASSWORD}"
+    host: {{ gatus_smtp_host | to_json }}
+    port: {{ gatus_smtp_port }}
+    to: "${ALERT_EMAIL_TO}"
+    default-alert:
+      failure-threshold: {{ gatus_alert_failure_threshold }}
+      success-threshold: {{ gatus_alert_success_threshold }}
+      send-on-resolved: true

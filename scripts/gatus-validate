@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Checks a candidate Gatus config before it replaces the current one. Used by
+# Ansible's `validate`:
+#   gatus-validate IMAGE UID CANDIDATE CHANNEL ENV_FILE...
+# Gatus starts in a throwaway container with the candidate, the same env files
+# and the same restrictions it runs with, but no network. The config is valid
+# when Gatus starts listening and has the alert channel CHANNEL configured.
+# Both matter: Gatus exits on a broken config, so the live one would never
+# start again; and it starts anyway when a channel's settings are incomplete
+# (an empty password or recipient), only without that channel, so every alert
+# would be silently dropped.
+# Installed by Ansible (roles/gatus) as /usr/local/sbin/gatus-validate.
+set -euo pipefail
+export LC_ALL=C
+
+fail() {
+  echo "gatus-validate: $*" >&2
+  exit 1
+}
+
+[[ $# -ge 4 ]] || { echo "usage: gatus-validate IMAGE UID CANDIDATE CHANNEL ENV_FILE..." >&2; exit 2; }
+image=$1 uid=$2 candidate=$3 channel=$4
+shift 4
+[[ "$uid" =~ ^[0-9]+$ ]] || fail "invalid uid: $uid"
+[[ "$channel" =~ ^[a-z0-9-]+$ ]] || fail "invalid channel: $channel"
+env_args=()
+for f in "$@"; do
+  [[ -f "$f" ]] || fail "$f is missing"
+  env_args+=(--env-file "$f")
+done
+
+tmp="$(mktemp -d)"
+name="gatus-validate-$$"
+trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
+cp "$candidate" "$tmp/config.yaml"
+# Gatus runs as $uid in the container: let it read the copy.
+chmod 0755 "$tmp"
+chmod 0644 "$tmp/config.yaml"
+
+docker run -d --name "$name" --network none --read-only --user "$uid:$uid" \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs "/data:uid=$uid,gid=$uid,mode=0700" \
+  -e GATUS_CONFIG_PATH=/config/config.yaml "${env_args[@]}" \
+  -v "$tmp:/config:ro" "$image" >/dev/null
+
+# Gatus logs "Listening on" once the config is loaded, in well under a second.
+logs=""
+for _ in $(seq 1 100); do
+  logs="$(docker logs "$name" 2>&1)"
+  grep -q 'Listening on' <<<"$logs" && break
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ]]; then
+    printf '%s\n' "$logs" | grep -v '^ *[│┌└]' | tail -n 15 >&2
+    fail "Gatus refused the config (its log is above)"
+  fi
+  sleep 0.1
+done
+grep -q 'Listening on' <<<"$logs" || fail "Gatus did not start within 10 seconds"
+
+# The line lists the channels in use: configuredProviders=[email].
+if ! grep -Eq "configuredProviders=\[([^]]* )?$channel( [^]]*)?\]" <<<"$logs"; then
+  grep -E 'Ignoring provider=|configuredProviders=' <<<"$logs" | sed 's/; ignoredProviders=.*//' >&2 || true
+  fail "the $channel alert channel is not configured: its alerts would never be sent"
+fi
+echo "Gatus accepts the config, with the $channel alert channel."

@@ -1,0 +1,156 @@
+---
+# The alert address comes from terraform/.env, like the resource alerts', and
+# never from the repo (it is public).
+- name: Check the alert settings
+  ansible.builtin.assert:
+    that:
+      - gatus_alert_email is match('^[^@\s]+@[^@\s]+\.[a-z]{2,}\Z')
+      - gatus_alert_channel is match('^[a-z0-9-]+\Z')
+    fail_msg: >-
+      The alerts need TF_VAR_alert_email from terraform/.env loaded in this shell (see ansible/README.md,
+      "Usage").
+    quiet: true
+
+# Gatus runs as this unprivileged user inside the container. It owns the
+# check history, and nothing else.
+- name: Create the gatus system group
+  ansible.builtin.group:
+    name: gatus
+    gid: "{{ gatus_uid }}"
+    system: true
+
+- name: Create the gatus system user
+  ansible.builtin.user:
+    name: gatus
+    uid: "{{ gatus_uid }}"
+    group: gatus
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create the Gatus directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ gatus_dir }}", owner: root, mode: "0755" }
+    - { path: "{{ gatus_dir }}/config", owner: root, mode: "0755" }
+    - { path: "{{ gatus_secrets_dir }}", owner: root, mode: "0700" }
+    # Also created by roles/base. Listed before its subdirectory: Ansible
+    # would give a missing parent the subdirectory's mode.
+    - { path: /var/lib/infra, owner: root, mode: "0755" }
+    - { path: "{{ gatus_data_dir }}", owner: gatus, mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the Gatus commands
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - gatus-validate
+    - gatus-credentials
+
+- name: Write the settings gatus-credentials reads
+  ansible.builtin.template:
+    src: gatus.conf.j2
+    dest: /etc/infra/gatus.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# Not shown in --diff or the run's log: the address is kept out of the repo.
+# A change recreates the container at "Start Gatus" (Compose compares the
+# environment it gives it).
+- name: Write the alert address
+  ansible.builtin.template:
+    src: alerts.env.j2
+    dest: "{{ gatus_secrets_dir }}/alerts.env"
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false
+
+# Pulled before the config is validated with it.
+- name: Pull the Gatus image
+  community.docker.docker_image_pull:
+    name: "{{ gatus_image }}"
+    pull: not_present
+
+# Written by gatus-credentials on the server; never passes through Ansible.
+- name: Look for the alert channel's credentials
+  ansible.builtin.stat:
+    path: "{{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env"
+  register: gatus_credentials
+
+# Only on the first run: the command it names was installed above. Gatus is
+# not started without them, since every alert would be dropped.
+- name: Require the alert channel's credentials
+  ansible.builtin.assert:
+    that: gatus_credentials.stat.exists
+    fail_msg: >-
+      Gatus has no credentials to send alerts with. On the server, run: sudo gatus-credentials
+      (see ansible/README.md, "Status page and alerts"), then run the playbook again.
+    quiet: true
+
+# Checked in a throwaway container, with the same env files, before it
+# replaces the current file: Gatus reloads it by itself, and exits on a broken
+# one.
+- name: Write the Gatus config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ gatus_dir }}/config/config.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: >-
+      /usr/local/sbin/gatus-validate {{ gatus_image }} {{ gatus_uid }} %s {{ gatus_alert_channel }}
+      {{ gatus_secrets_dir }}/alerts.env {{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env
+  notify: Restart Gatus
+
+- name: Write the Gatus compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ gatus_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/bin/env docker compose --file %s config --quiet
+
+# Recreates the container when compose.yml, an env file or the image changes;
+# otherwise leaves it running.
+- name: Start Gatus
+  community.docker.docker_compose_v2:
+    project_src: "{{ gatus_dir }}"
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 120
+
+- name: Apply Gatus config changes now
+  ansible.builtin.meta: flush_handlers
+
+# The image has no healthcheck. This asks Gatus from Caddy's container, the
+# way the status page reaches it.
+- name: Check that Caddy reaches Gatus
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ caddy_dir }}"
+    service: caddy
+    command: wget -q -O /dev/null http://gatus:8080/health
+  register: gatus_health
+  until: gatus_health.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false
+
+- name: Remove older Gatus images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ gatus_image }}"]
+  register: gatus_prune
+  changed_when: gatus_prune.stdout | length > 0

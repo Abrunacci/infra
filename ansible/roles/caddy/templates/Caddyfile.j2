@@ -11,5 +11,29 @@ server.{{ domain }} {
 	respond 404
 }
 
+# The status page (roles/gatus). Read-only from outside: only GET and HEAD
+# reach Gatus, so nothing on the internet can push a result to it.
+status.{{ domain }} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "frame-ancestors 'none'"
+		-Server
+	}
+
+	@write not method GET HEAD
+	respond @write 405
+
+	# Gatus' alias on the edge network. While it restarts, requests wait for
+	# it instead of failing.
+	reverse_proxy gatus:8080 {
+		lb_try_duration 15s
+		lb_try_interval 250ms
+	}
+}
+
 # One file per project, written by Ansible. An empty directory is not an error.
 import sites/*.caddy

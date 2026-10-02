@@ -1,0 +1,41 @@
+# Managed by Ansible (roles/gatus). Local changes are overwritten.
+name: gatus
+
+services:
+  gatus:
+    image: {{ gatus_image }}
+    restart: unless-stopped
+    user: "{{ gatus_uid }}:{{ gatus_uid }}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      GATUS_CONFIG_PATH: /config/config.yaml
+    # Taken literally (format: raw): no quotes, escapes or comments.
+    env_file:
+      - path: {{ gatus_secrets_dir }}/alerts.env
+        format: raw
+      - path: {{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env
+        format: raw
+    volumes:
+      # The directory, not the file: templating replaces the file.
+      - ./config:/config:ro
+      - {{ gatus_data_dir }}:/data
+    # On edge for Caddy, which serves the status page, and for its route out:
+    # it checks the sites at their public addresses, as a visitor would. No
+    # published port.
+    networks:
+      edge:
+        aliases:
+          - gatus
+    mem_limit: {{ gatus_memory_limit }}
+    memswap_limit: {{ gatus_memory_limit }}
+    pids_limit: 256
+    # No Docker healthcheck: the image has nothing but Gatus (no shell, no
+    # HTTP client). The playbook checks /health through Caddy instead.
+
+networks:
+  edge:
+    external: true

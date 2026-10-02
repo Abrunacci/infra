@@ -1,0 +1,9 @@
+# Managed by Ansible (roles/gatus). Read by gatus-credentials, which sends a
+# test email with the same settings Gatus uses.
+GATUS_ALERT_CHANNEL={{ gatus_alert_channel }}
+GATUS_DIR={{ gatus_dir }}
+GATUS_SECRETS_DIR={{ gatus_secrets_dir }}
+SMTP_HOST={{ gatus_smtp_host }}
+SMTP_PORT={{ gatus_smtp_port }}
+SMTP_USERNAME={{ gatus_smtp_username }}
+SMTP_FROM={{ gatus_email_from | regex_replace('^.*<(.*)>$', '\\1') }}

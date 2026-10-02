@@ -1,0 +1,7 @@
+---
+# Gatus also reloads its config by itself when the file changes; the restart
+# makes the change certain. The history is kept (SQLite).
+- name: Restart Gatus
+  community.docker.docker_compose_v2:
+    project_src: "{{ gatus_dir }}"
+    state: restarted
