@@ -107,7 +107,9 @@
 
 # One per project with a database (database_networks): PostgreSQL joins them
 # all, each backend only its own. Labelled, so roles/projects can find and
-# remove the ones whose project is gone. Internal: no route out.
+# remove the ones whose project is gone. Internal: no route out. If one of
+# them has to change, the module deletes and recreates it and reconnects
+# PostgreSQL without its alias, so "Start PostgreSQL" then recreates it.
 - name: Create the database networks
   community.docker.docker_network:
     name: "{{ item }}"
@@ -116,6 +118,7 @@
       infra.network: database
     state: present
   loop: "{{ database_networks }}"
+  register: postgres_database_networks
 
 - name: Write the PostgreSQL compose file
   ansible.builtin.template:
@@ -127,11 +130,14 @@
 
 # Recreates the container when compose.yml or the image changes. Adding or
 # removing a project with a database changes its networks, so PostgreSQL is
-# recreated then: a few seconds without any database.
+# recreated then: a few seconds without any database. Also recreated when a
+# database network was created or recreated: Compose does not notice that
+# PostgreSQL lost its alias (postgres_host) on a recreated network.
 - name: Start PostgreSQL
   community.docker.docker_compose_v2:
     project_src: "{{ postgres_dir }}"
     state: present
+    recreate: "{{ 'always' if postgres_database_networks is changed else 'auto' }}"
     pull: missing
     wait: true
     wait_timeout: 180
