@@ -48,10 +48,10 @@ DigitalOcean does not let you edit a token's scopes: rotating it, or adding a sc
 | `firewall` | create, read, update, delete | read: every plan. update: changing a rule or the Droplets it applies to. create and delete: a rebuild, or replacing the firewall |
 | `ssh_key` | create, read, update, delete | read: every plan. update: renaming the key. create and delete: changing `TF_VAR_admin_ssh_public_key` replaces the key |
 | `tag` | create, read, delete | read: every plan. create: creating the `infra` and `portfolio` tags and attaching them to the Droplet (DigitalOcean asks for `tag:create` plus `droplet:update` to tag a Droplet). delete: removing a tag from `local.tags`. Tags have no update level |
-| `project` | create, read, update, delete | read: every plan. update: assigning the Droplet to the project (it needs `droplet:read` too). create and delete: a rebuild |
+| `project` | create, read, update, delete, assign_resource | read: every plan. assign_resource: putting the Droplet in the project (it needs `droplet:read` too). update: changing the project's name, description, purpose or environment. create and delete: a rebuild |
 | `monitoring` | create, read, update, delete | The resource alerts (`monitoring.tf`). update: changing a threshold, including the one-run test in [Resource alerts](#resource-alerts). Added on 2026-10-01 |
 
-When you pick those scopes, the control panel also adds read-only dependencies (actions, regions, sizes, image, vpc). Keep them: the provider reads them while creating or resizing the Droplet.
+When you pick those scopes, the control panel also adds read-only dependencies (read on actions, regions, sizes, image, snapshot and vpc; 30 scopes in total with the ones above). Keep them: the provider reads them while creating or resizing the Droplet.
 
 Nothing else is needed: DNS is in Cloudflare, and the backups go to R2, so the token has no `domain`, `spaces` or `volume` scope. If a plan or apply fails with `403` on a DigitalOcean resource, the token is missing a level of that resource's scope.
 
