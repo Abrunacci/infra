@@ -84,6 +84,19 @@
       {{ caddy_image }} caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
   notify: Reload Caddy
 
+# One per public backend (edge_project_networks): Caddy joins them all, each
+# backend only its own. Labelled, so roles/projects can find and remove the
+# ones whose project is gone. They exist before Caddy starts, and before the
+# first deploy of their backend.
+- name: Create the project networks
+  community.docker.docker_network:
+    name: "{{ item }}"
+    internal: false
+    labels:
+      infra.network: project
+    state: present
+  loop: "{{ edge_project_networks }}"
+
 - name: Write the Caddy compose file
   ansible.builtin.template:
     src: compose.yml.j2
@@ -93,7 +106,8 @@
     mode: "0644"
 
 # Recreates the container when compose.yml or the image changes; otherwise
-# leaves it running.
+# leaves it running. Adding or removing a public backend changes its networks,
+# so Caddy is recreated then: a few seconds without any site.
 - name: Start Caddy
   community.docker.docker_compose_v2:
     project_src: "{{ caddy_dir }}"

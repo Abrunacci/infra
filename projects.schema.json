@@ -153,7 +153,7 @@
           "items": { "type": "string", "pattern": "^/[A-Za-z0-9._~/-]*\\*?$" }
         },
         "private_paths": {
-          "description": "Caddy path matchers of the backend that the internet must never reach, such as /api/ingest: Caddy answers them 404, even inside paths. Only other containers on the server may call them. Only with a subdomain.",
+          "description": "Caddy path matchers of the backend that the internet must never reach, such as /api/ingest: Caddy answers them 404, even inside paths. Only containers that share a network with the backend may call them. Only with a subdomain.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

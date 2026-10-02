@@ -33,14 +33,16 @@ services:
         format: raw
 {% endif %}
 {% if item.subdomain is defined %}
-    # No published port: Caddy reaches it on the edge network by this alias.
+    # No published port: Caddy reaches it by this alias on the project's own
+    # network (edge-{{ item.name }}), which no other backend joins. It is also
+    # its route out to the internet.
     networks:
       edge:
         aliases:
           - {{ item.name }}-backend
 {% else %}
-    # Internal (no subdomain): not on edge, so neither Caddy nor the other
-    # backends reach it. Its own network, only for its route out to the internet.
+    # Internal (no subdomain): on no edge network, so neither Caddy nor the
+    # other backends reach it. Its own network, only for its route out to the internet.
     networks:
       outbound: {}
 {% endif %}
@@ -90,7 +92,9 @@ services:
 
 networks:
 {% if item.subdomain is defined %}
+  # Created by roles/caddy.
   edge:
+    name: edge-{{ item.name }}
     external: true
 {% else %}
   # Created and removed by Compose with the backend (backend-{{ item.name }}_outbound).

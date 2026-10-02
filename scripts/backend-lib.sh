@@ -151,9 +151,10 @@ backend_health_target() {
 }
 
 # Checks the health path from Caddy's container, the way requests get there
-# (the container's alias on the edge network), for up to SECONDS. Any 2xx
-# answer is healthy. An internal backend has no health path: Docker's own
-# health status, from the image's HEALTHCHECK, must be healthy instead.
+# (the container's alias on its project's network, edge-PROJECT), for up to
+# SECONDS. Any 2xx answer is healthy. An internal backend has no health path:
+# Docker's own health status, from the image's HEALTHCHECK, must be healthy
+# instead.
 #
 # A container that already stopped or restarted will not get better by
 # waiting: that fails at once, so a broken image costs seconds of errors
