@@ -18,8 +18,9 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
-    # The only published ports on the server. Docker's published ports bypass
-    # ufw, so nothing else may be published (PostgreSQL is not).
+    # The only public ports on the server. Docker's published ports bypass
+    # ufw, so nothing else may be published to the outside (PostgreSQL is not;
+    # Gatus publishes one on 127.0.0.1 only, for the server's own heartbeats).
     ports:
       - "80:80"
       - "443:443"

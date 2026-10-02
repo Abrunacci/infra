@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Pushes the server's own checks to the status page (Gatus) as heartbeats:
+# what Gatus cannot check from its container. The list is
+# /etc/infra/gatus-heartbeats.conf, one "<key> <check> <target>" per line.
+#
+#   gatus-heartbeats
+#       Every check; run every 5 minutes by gatus-heartbeats.timer:
+#       service    the systemd unit <target> is active (do-agent)
+#       container  the backend of the project <target> is running and its
+#                  image's HEALTHCHECK says healthy (internal backends)
+#       backup     only when the last successful backup is older than
+#                  <target> hours: a failure, so a backup that stopped
+#                  running alerts on time. backup-run pushes its own results.
+#   gatus-heartbeats backup ok|failed [SECONDS]
+#       backup-run's result, as it finishes.
+#
+# What a failure says is shown on the public status page, so it stays
+# generic: a backup's own reason is only on the server (last-run, journal).
+#
+# Gatus alerts on failures, and on a heartbeat that gets no push for its
+# interval: if this timer stops, its heartbeats go red by themselves.
+# Pushes go to Gatus' loopback port with the token in push.env; the token is
+# passed to curl on stdin, never as an argument. Exits non-zero only when a
+# push did not reach Gatus; a failing check is pushed, not an error.
+# Installed by Ansible (roles/gatus) as /usr/local/sbin/gatus-heartbeats.
+set -euo pipefail
+export LC_ALL=C
+cd /
+
+readonly CONF=/etc/infra/gatus.conf
+readonly LIST=/etc/infra/gatus-heartbeats.conf
+readonly BACKUP_STATE=/var/lib/infra/backup
+
+fail() {
+  echo "gatus-heartbeats: $*" >&2
+  exit 1
+}
+
+[[ "$EUID" -eq 0 ]] || fail "run it with sudo"
+[[ -r "$CONF" && -r "$LIST" ]] || fail "$CONF or $LIST is missing (run the playbook)"
+# shellcheck source=/dev/null
+. "$CONF"
+token="$(sed -n 's/^GATUS_PUSH_TOKEN=//p' "$GATUS_SECRETS_DIR/push.env" 2>/dev/null || true)"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "$GATUS_SECRETS_DIR/push.env has no token (run the playbook)"
+
+# push KEY ok|failed DETAIL [SECONDS]
+push() {
+  local key="$1" success=true out code
+  local -a query
+  [[ "$2" == ok ]] || success=false
+  query=(--url-query "success=$success")
+  [[ "$success" == false ]] && query+=(--url-query "error=${3:-failed}")
+  [[ -n "${4:-}" ]] && query+=(--url-query "duration=${4}s")
+  if ! out="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+    | curl --silent --show-error --max-time 30 --config - --request POST \
+      --write-out '\n%{http_code}' "${query[@]}" \
+      "$GATUS_PUSH_URL/api/v1/endpoints/$key/external" 2>&1)"; then
+    echo "$key: Gatus did not answer: ${out%$'\n'*}" >&2
+    return 1
+  fi
+  code="${out##*$'\n'}"
+  if [[ "$code" != 200 ]]; then
+    echo "$key: Gatus answered $code: ${out%$'\n'*}" >&2
+    return 1
+  fi
+  echo "$key: $2${3:+ ($3)}"
+}
+
+check_service() {
+  local state
+  state="$(systemctl is-active "$1" 2>/dev/null)" || true
+  if [[ "$state" == active ]]; then
+    echo ok "$1 is active"
+  else
+    echo failed "$1 is ${state:-unknown}"
+  fi
+}
+
+check_container() {
+  local ids status health
+  ids="$(docker ps -a -q --filter "label=com.docker.compose.project=backend-$1" \
+    --filter label=com.docker.compose.service=backend 2>/dev/null)" \
+    || { echo failed "cannot ask Docker about $1"; return; }
+  if [[ -z "$ids" ]]; then
+    echo failed "$1 has no backend container"
+    return
+  fi
+  read -r status health < <(docker inspect \
+    -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+    "${ids%%$'\n'*}" 2>/dev/null) || { echo failed "cannot inspect $1's container"; return; }
+  if [[ "$status" == running && "$health" == healthy ]]; then
+    echo ok "$1 is healthy"
+  else
+    echo failed "$1's container is $status, health $health"
+  fi
+}
+
+# Prints nothing while the last success is recent enough.
+check_backup_age() {
+  local max_hours="$1" last="" age detail
+  [[ -r "$BACKUP_STATE/last-success" ]] && last="$(<"$BACKUP_STATE/last-success")"
+  if [[ "$last" =~ ^[0-9]+$ ]]; then
+    age=$(($(date -u +%s) - last))
+    ((age <= max_hours * 3600)) && return 0
+    detail="no successful backup for $((age / 3600)) hours"
+  else
+    detail="no successful backup on record"
+  fi
+  echo failed "$detail"
+}
+
+if [[ $# -gt 0 ]]; then
+  [[ "$1" == backup && ( "${2:-}" == ok || "${2:-}" == failed ) && $# -le 3 ]] \
+    || { echo "usage: gatus-heartbeats [backup ok|failed [SECONDS]]" >&2; exit 2; }
+  [[ -z "${3:-}" || "$3" =~ ^[0-9]+$ ]] || fail "SECONDS must be a number"
+  key="$(awk '$2 == "backup" { print $1; exit }' "$LIST")"
+  [[ -n "$key" ]] || fail "$LIST has no backup heartbeat"
+  detail=""
+  [[ "$2" == ok ]] || detail="the backup failed"
+  push "$key" "$2" "$detail" "${3:-}"
+  exit
+fi
+
+status=0
+while read -r key check target; do
+  [[ -n "$key" && "$key" != \#* ]] || continue
+  case "$check" in
+    service) result="$(check_service "$target")" ;;
+    container) result="$(check_container "$target")" ;;
+    backup) result="$(check_backup_age "$target")" ;;
+    *) echo "$key: unknown check $check" >&2; status=1; continue ;;
+  esac
+  [[ -n "$result" ]] || continue
+  push "$key" "${result%% *}" "${result#* }" || status=1
+done <"$LIST"
+exit "$status"

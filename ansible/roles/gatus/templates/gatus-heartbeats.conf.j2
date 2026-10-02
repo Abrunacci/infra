@@ -1,0 +1,5 @@
+# Managed by Ansible (roles/gatus), from templates/heartbeats.yaml.j2. Read by
+# gatus-heartbeats: one heartbeat per line, "<key> <check> <target>".
+{% for h in gatus_heartbeats %}
+{{ h.key }} {{ h.check }} {{ h.target }}
+{% endfor %}

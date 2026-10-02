@@ -5,3 +5,8 @@
   community.docker.docker_compose_v2:
     project_src: "{{ gatus_dir }}"
     state: restarted
+
+# Named apart from roles/backup's "Reload systemd": handler names are global.
+- name: Reload systemd for the heartbeats
+  ansible.builtin.systemd_service:
+    daemon_reload: true

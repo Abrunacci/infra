@@ -14,7 +14,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 | `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
-| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with. See "Status page and alerts" |
+| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent` and the internal backends. See "Status page and alerts" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
 
@@ -410,6 +410,8 @@ Left out on purpose: the PostgreSQL superuser password, which a new server gener
 - the last run failed;
 - or the status cannot be read (a permissions problem on `/var/lib/infra`).
 
+The status page also gets each result, and emails on the first failed run, or once no run has succeeded for 26 hours (see "Status page and alerts").
+
 This warning matters: a server that stops uploading, for whatever reason, sees its daily copies expire after about a week.
 
 ### A backup is not trusted blindly
@@ -527,13 +529,27 @@ It changes nothing else. Do it once a month (put it in your calendar), and every
 - `API`, with a `backend`: its `health` path answers with a 2xx, through Caddy, as the site's visitors reach it;
 - on the first of them, the certificate is valid for at least 7 more days (`gatus_certificate_min_validity`). Caddy renews well before that; this only fires if renewing keeps failing.
 
-Every check uses the public address, from the server itself: DNS, the certificate, Caddy and the backend are all on the way. Internal projects (no `subdomain`) are not checked yet.
+Every check uses the public address, from the server itself: DNS, the certificate, Caddy and the backend are all on the way.
+
+**Heartbeats** cover what has no URL. The server pushes their results to Gatus, and Gatus alerts on a failure, and also when a heartbeat gets no push for its interval, so a check that stopped running is caught too. The list is `roles/gatus/templates/heartbeats.yaml.j2`, read by both sides:
+
+| On the page | Pushed by | Fails when | Alerts |
+|---|---|---|---|
+| Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
+| Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
+| `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
+
+- **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
+- **Generic on the page.** A failure shows only a short, generic reason (the page is public); the backup's own reason stays on the server, in `/var/lib/infra/backup/last-run` and `journalctl -t backup`. The emails carry each heartbeat's description, which says where to look.
+- **How a push gets in.** Gatus publishes its port on `127.0.0.1:18080` only, so nothing outside the server reaches it, and every push must carry a token: `/etc/infra/secrets/gatus/push.env`, generated on the server by the playbook (root only, not backed up: a rebuilt server makes a new one). `gatus-heartbeats` passes it to curl on stdin, never as an argument.
+- **The backup never depends on it.** If the push fails, `backup-run` only notes it in the journal.
+- **Limit of the agent check.** `systemctl is-active` says the agent runs, not that DigitalOcean receives its data.
 
 **How it is set up.**
-- **Locked down like the other containers:** the `gatus` user (uid 10006), a read-only filesystem, no capabilities, no published port, 128 MB of memory. It is on `edge`, where Caddy reaches it as `gatus` and from where it reaches the internet.
+- **Locked down like the other containers:** the `gatus` user (uid 10006), a read-only filesystem, no capabilities, 128 MB of memory, and its port published on `127.0.0.1` only, for the heartbeats. It is on `edge`, where Caddy reaches it as `gatus` and from where it reaches the internet.
 - **Read-only from outside.** Caddy passes only `GET` and `HEAD` to Gatus; anything else gets 405.
 - **History** is a SQLite file in `/var/lib/infra/gatus`, kept across restarts and reboots. It is not backed up: losing it only empties the page's history.
-- **No secret in the config.** `config.yaml` refers to `${SMTP_PASSWORD}` and `${ALERT_EMAIL_TO}`, which Gatus reads from its env files in `/etc/infra/secrets/gatus/` (root only): `alerts.env`, written by the playbook from `TF_VAR_alert_email`, and `email.env`, written by `gatus-credentials`. Neither is backed up: both are typed in again.
+- **No secret in the config.** `config.yaml` refers to `${SMTP_PASSWORD}`, `${ALERT_EMAIL_TO}` and `${GATUS_PUSH_TOKEN}`, which Gatus reads from its env files in `/etc/infra/secrets/gatus/` (root only): `alerts.env`, written by the playbook from `TF_VAR_alert_email`, `email.env`, written by `gatus-credentials`, and `push.env`, generated by the playbook. None is backed up: the first two are typed in again, the token is generated again.
 - **Checked before it is written.** Gatus reloads its config by itself, and exits if it is broken. So the playbook first starts it in a throwaway container with the new config (`gatus-validate`), and keeps the current one unless Gatus starts and has the alert channel configured. The second check matters: with an incomplete channel (an empty recipient, say), Gatus starts anyway and drops every alert.
 - **Health.** The image holds nothing but Gatus, so it has no Docker healthcheck; the playbook asks `/health` from Caddy's container after every run.
 
@@ -556,6 +572,9 @@ Resend's SMTP server is used on port 2587 (STARTTLS): DigitalOcean blocks outgoi
 ```sh
 sudo gatus-credentials                                  # store or replace the alerts' key (sends a test email)
 sudo docker logs --since 1h gatus-gatus-1               # what Gatus checked and sent
+sudo gatus-heartbeats                                   # push the server's checks now, and print them
+systemctl list-timers gatus-heartbeats.timer            # when they run next
+sudo journalctl -u gatus-heartbeats --since -1h         # what they pushed
 curl -s https://status.abrunacci.dev/api/v1/endpoints/statuses | head -c 300   # the page's data
 ```
 

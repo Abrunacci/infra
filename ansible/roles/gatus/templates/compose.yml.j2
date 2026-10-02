@@ -19,17 +19,23 @@ services:
         format: raw
       - path: {{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env
         format: raw
+      # GATUS_PUSH_TOKEN, which every heartbeat push must carry.
+      - path: {{ gatus_secrets_dir }}/push.env
+        format: raw
     volumes:
       # The directory, not the file: templating replaces the file.
       - ./config:/config:ro
       - {{ gatus_data_dir }}:/data
     # On edge for Caddy, which serves the status page, and for its route out:
-    # it checks the sites at their public addresses, as a visitor would. No
-    # published port.
+    # it checks the sites at their public addresses, as a visitor would.
     networks:
       edge:
         aliases:
           - gatus
+    # For gatus-heartbeats, on the host. Loopback only: nothing outside the
+    # server reaches it (Caddy's ports are the only public ones).
+    ports:
+      - "127.0.0.1:{{ gatus_push_port }}:8080"
     mem_limit: {{ gatus_memory_limit }}
     memswap_limit: {{ gatus_memory_limit }}
     pids_limit: 256

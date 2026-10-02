@@ -1,5 +1,5 @@
 # Managed by Ansible (roles/gatus). Read by gatus-credentials, which sends a
-# test email with the same settings Gatus uses.
+# test email with the same settings Gatus uses, and by gatus-heartbeats.
 GATUS_ALERT_CHANNEL={{ gatus_alert_channel }}
 GATUS_DIR={{ gatus_dir }}
 GATUS_SECRETS_DIR={{ gatus_secrets_dir }}
@@ -7,3 +7,5 @@ SMTP_HOST={{ gatus_smtp_host }}
 SMTP_PORT={{ gatus_smtp_port }}
 SMTP_USERNAME={{ gatus_smtp_username }}
 SMTP_FROM={{ gatus_email_from | regex_replace('^.*<(.*)>$', '\\1') }}
+# Where gatus-heartbeats pushes (published on loopback only).
+GATUS_PUSH_URL=http://127.0.0.1:{{ gatus_push_port }}

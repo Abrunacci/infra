@@ -1,0 +1,11 @@
+# Managed by Ansible (roles/gatus). If it stops, Gatus notices: its heartbeats
+# get no push for {{ gatus_host_heartbeat }} and alert by themselves.
+[Unit]
+Description=Push the server's checks to the status page ({{ gatus_host_check_calendar }})
+
+[Timer]
+OnCalendar={{ gatus_host_check_calendar }}
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
