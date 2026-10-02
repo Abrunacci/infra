@@ -36,6 +36,17 @@ db_network_subnet: 172.30.0.0/24
 db_network_dynamic_range: 172.30.0.128/25
 postgres_ipv4_address: 172.30.0.10
 
+# One internal network per project with a database, named db-<name>: only
+# that project's backend (and its migrations) and PostgreSQL are on it, so
+# backends cannot reach each other through it (#46). PostgreSQL answers on
+# each one as postgres_host, the host in DATABASE_URL; Docker picks the
+# subnets. The db network above stays for the database bridge (db_tunnel).
+# Created by roles/postgres, which joins them all; removed by roles/projects.
+database_networks: >-
+  {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database')
+     | map(attribute='name') | map('regex_replace', '^', 'db-') | list }}
+postgres_host: postgres
+
 # One network per public backend (a project with a subdomain and a backend),
 # named edge-<name>. Only that backend and Caddy are on it, so backends cannot
 # reach each other (#32). Ordinary bridges, not internal: they are also the

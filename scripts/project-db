@@ -189,7 +189,7 @@ REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
 SQL
   [[ -f "$marker" && -n "$db_owner" ]] || date -u '+%F %H:%M UTC' >"$marker"
 
-  local base="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_ADDRESS:$POSTGRES_PORT/$DB_NAME"
+  local base="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_HOST:$POSTGRES_PORT/$DB_NAME"
   # shellcheck disable=SC2059
   write_if_changed "$secrets/database-app.env" "DATABASE_URL=$(printf "$base" "$DB_APP" "$app_pw")" && changed=1
   # shellcheck disable=SC2059

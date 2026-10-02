@@ -15,17 +15,36 @@ docker_apt_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11
 
 # Shared networks, created here so any stack can join them:
 #   edge -> Caddy and Gatus (the status page). Backends are not on it: each
-#           one has its own network with Caddy (edge_project_networks)
-#   db   -> PostgreSQL and the projects that use it. Internal: no route to
-#           the internet, and nothing on it can be published. Fixed subnet
-#           and dynamic range, so PostgreSQL keeps a fixed address (group_vars).
-# Changing a network's subnet or range recreates it and disconnects its
-# containers. The roles that run after this one reconnect them: docker compose
-# up reattaches a running container to a network it has lost, at its fixed
-# address, even when its compose file did not change.
+#           one has its own network with Caddy (edge_project_networks).
+#           Dual stack, so Caddy sees the real address of IPv6 visitors
+#           (docker_edge_ipv6_subnet below)
+#   db   -> PostgreSQL and the database bridge (db_tunnel). Internal: no
+#           route to the internet, and nothing on it can be published. Fixed
+#           subnet and dynamic range, so PostgreSQL keeps a fixed address
+#           (group_vars). Backends are not on it: each one reaches PostgreSQL
+#           on its own network (database_networks)
+# Changing a network's settings (subnet, range, IPv6) recreates it, and the
+# docker role leaves its containers off the new one (tasks/main.yml). The
+# roles that run after it put them back: docker compose up recreates a
+# container that has lost a network, with its aliases and fixed address. So
+# such a change needs a full playbook run, not --tags docker alone.
 docker_networks:
-  - { name: edge, internal: false }
+  - name: edge
+    internal: false
+    ipv6_subnet: "{{ docker_edge_ipv6_subnet }}"
   - name: db
     internal: true
     subnet: "{{ db_network_subnet }}"
     iprange: "{{ db_network_dynamic_range }}"
+
+# IPv6 subnet of edge. Caddy publishes 80 and 443 through this network
+# (gw_priority in its compose file). Without IPv6 on it, Docker can only hand
+# an IPv6 connection to Caddy through its userland proxy, which opens a new
+# connection from the bridge gateway: Caddy, and every backend behind it
+# (X-Forwarded-For), would see that gateway instead of the visitor. With an
+# IPv6 address, Docker forwards the connection in the kernel (ip6tables DNAT)
+# and the source address is kept, as it already is for IPv4.
+# A unique local (ULA, RFC 4193) /64 with a random global ID: never routed on
+# the internet, and unlikely to clash with any other private network.
+# Outgoing IPv6 from the network is masqueraded to the Droplet's address.
+docker_edge_ipv6_subnet: fd9a:315f:da32:1::/64

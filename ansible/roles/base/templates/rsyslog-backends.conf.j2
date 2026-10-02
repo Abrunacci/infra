@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/base).
+# journald forwards every entry to rsyslog, which would copy it to
+# /var/log/syslog, rotated by logrotate rather than by the journal's size cap.
+# The backends' logs (backend.<name>) and the last lines of a container that
+# failed its health check (backend-log) may hold personal data: they stay in
+# the journal only. Read before 50-default.conf, which writes /var/log/syslog.
+if $programname startswith "backend." or $programname == "backend-log" then stop

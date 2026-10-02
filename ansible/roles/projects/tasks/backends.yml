@@ -89,7 +89,7 @@
   loop_control:
     label: "{{ item.dest }}"
 
-- name: Write PostgreSQL's address for the backend commands
+- name: Write PostgreSQL's host for the backend commands
   ansible.builtin.template:
     src: database.conf.j2
     dest: /etc/infra/database.conf
@@ -207,6 +207,17 @@
       infra.network: link
     state: present
   loop: "{{ link_networks }}"
+  register: projects_link_networks
+
+# The backends are applied just below, with their aliases (the receiver is
+# <name>-backend on its link network).
+- name: Take the containers off the recreated link networks
+  ansible.builtin.import_role:
+    name: docker
+    tasks_from: detach-recreated
+  vars:
+    docker_recreated_networks: >-
+      {{ projects_link_networks.results | selectattr('changed') | map(attribute='item') | list }}
 
 # From here on, only backends that were deployed: the others have no image
 # yet, and deploy-backend starts them.
@@ -278,12 +289,13 @@
     projects_expected_backends: *projects_expected_backends
 
 # The network of a project that no longer has a public backend (roles/caddy
-# created it), or that no backend links to any more (link-PROJECT). By now
-# nothing is on it: Caddy left it when roles/caddy recreated it, and the
-# backends were stopped or moved above. docker network rm refuses a network
-# that still has a container on it, and the run stops then.
+# created it), a database (roles/postgres), or that no backend links to any
+# more (link-PROJECT). By now nothing is on it: Caddy and PostgreSQL left it
+# when their roles recreated them, and the backends were stopped or moved
+# above. docker network rm refuses a network that still has a container on
+# it, and the run stops then.
 # Not docker_network: with state absent it disconnects the containers first.
-- name: Find the project and link networks
+- name: Find the project, database and link networks
   ansible.builtin.command:
     argv: [docker, network, ls, --filter, label=infra.network, --format, "{{ '{{.Name}}' }}"]
   register: projects_networks_found
@@ -294,4 +306,4 @@
   ansible.builtin.command:
     argv: [docker, network, rm, "{{ item }}"]
   changed_when: true
-  loop: "{{ projects_networks_found.stdout_lines | difference(edge_project_networks + link_networks) }}"
+  loop: "{{ projects_networks_found.stdout_lines | difference(edge_project_networks + database_networks + link_networks) }}"

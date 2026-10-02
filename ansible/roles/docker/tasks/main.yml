@@ -94,11 +94,23 @@
   community.docker.docker_network:
     name: "{{ item.name }}"
     internal: "{{ item.internal }}"
-    ipam_config: "{{ [{'subnet': item.subnet, 'iprange': item.iprange}] if item.subnet is defined else omit }}"
+    enable_ipv6: "{{ item.ipv6_subnet is defined }}"
+    # Only the subnets set here: Docker picks edge's IPv4 subnet itself.
+    ipam_config: >-
+      {{ (([{'subnet': item.subnet, 'iprange': item.iprange}] if item.subnet is defined else [])
+          + ([{'subnet': item.ipv6_subnet}] if item.ipv6_subnet is defined else [])) or omit }}
     state: present
   loop: "{{ docker_networks }}"
   loop_control:
     label: "{{ item.name }}"
+  register: docker_networks_result
+
+# docker_network reconnects them without their aliases or fixed address.
+- name: Take the containers off the recreated shared networks
+  ansible.builtin.import_tasks: detach-recreated.yml
+  vars:
+    docker_recreated_networks: >-
+      {{ docker_networks_result.results | selectattr('changed') | map(attribute='item.name') | list }}
 
 # Run by the caddy, postgres, db_tunnel and backup roles once their new image
 # is in use, to remove that service's older images.

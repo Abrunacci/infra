@@ -52,7 +52,8 @@ services:
       outbound: {}
 {% endif %}
 {% if item.database %}
-      # PostgreSQL, at its fixed address. Internal: no route out.
+      # PostgreSQL, as {{ postgres_host }}, on this project's own network
+      # (db-{{ item.name }}), which no other backend joins. Internal: no route out.
       db: {}
 {% endif %}
 {% if item.name in link_receivers %}
@@ -72,12 +73,21 @@ services:
     stop_grace_period: 20s
     labels:
       infra.release: ${BACKEND_RELEASE:-}
+    # To the systemd journal, which outlives the container: a deploy or a
+    # restart no longer loses the previous log. Read it with
+    # `sudo journalctl -t backend.{{ item.name }}`, or `sudo docker logs` (only
+    # the current container). May hold personal data; the journal's size cap
+    # bounds how long it stays (roles/base, ansible/README.md "Backend logs").
+    logging:
+      driver: journald
+      options:
+        tag: backend.{{ item.name }}
 {% if item.backend.migrate is defined %}
 
   # Run once per deploy by deploy-backend (docker compose run --rm migrate),
   # with the new image, before the backend switches to it. Only the public
   # env and the owner's connection: none of the app's secrets, and no route
-  # out of the db network.
+  # out of the project's db-<name> network.
   migrate:
     image: ${BACKEND_IMAGE:?no image given}
     profiles:
@@ -117,7 +127,9 @@ networks:
   outbound: {}
 {% endif %}
 {% if item.database %}
+  # Created by roles/postgres.
   db:
+    name: db-{{ item.name }}
     external: true
 {% endif %}
 {% if item.name in link_receivers %}

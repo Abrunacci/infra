@@ -36,11 +36,17 @@ services:
       - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # No published port: reachable only from containers on the internal db
-    # network, always at the same address.
+    # No published port. On the internal db network at a fixed address, for
+    # the database bridge (db_tunnel), and on each project's db-<name>, where
+    # only that project's backend finds it, as {{ postgres_host }}.
     networks:
       db:
         ipv4_address: {{ postgres_ipv4_address }}
+{% for network in database_networks %}
+      {{ network }}:
+        aliases:
+          - {{ postgres_host }}
+{% endfor %}
     mem_limit: {{ postgres_memory_limit }}
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
@@ -61,3 +67,7 @@ volumes:
 networks:
   db:
     external: true
+{% for network in database_networks %}
+  {{ network }}:
+    external: true
+{% endfor %}

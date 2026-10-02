@@ -1,0 +1,7 @@
+# Managed by Ansible (roles/base).
+[Journal]
+# On disk, whether or not /var/log/journal exists yet.
+Storage=persistent
+# The oldest entries are deleted past this size. It bounds how long personal
+# data in the backends' logs stays on the server (ansible/README.md, "Backend logs").
+SystemMaxUse={{ base_journal_max_use }}
