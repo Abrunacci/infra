@@ -306,4 +306,6 @@
   ansible.builtin.command:
     argv: [docker, network, rm, "{{ item }}"]
   changed_when: true
-  loop: "{{ projects_networks_found.stdout_lines | difference(edge_project_networks + database_networks + link_networks) }}"
+  loop: "{{ projects_networks_found.stdout_lines | difference(projects_kept_networks) }}"
+  vars:
+    projects_kept_networks: "{{ edge_project_networks + database_networks + link_networks }}"
