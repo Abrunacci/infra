@@ -51,3 +51,28 @@ projects_backend_default_memory: 256m
 # Env names the infrastructure sets itself (per-project databases): a project
 # cannot set them in env or secrets.
 projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]
+
+# Linked secrets ({from: PROJECT, key: KEY}), one item per secret:
+# {project, key, link}. Checked in validate.yml.
+projects_links: >-
+  {%- set links = [] -%}
+  {%- for p in projects_registry.projects if p.backend is defined and p.backend is mapping -%}
+  {%-   for key, kind in (p.backend.secrets | default({})).items() if kind is mapping -%}
+  {%-     set _ = links.append({'project': p.name, 'key': key, 'link': kind}) -%}
+  {%-   endfor -%}
+  {%- endfor -%}
+  {{ links }}
+# Env values that name another backend on the server
+# (http://PROJECT-backend[:PORT]/...), one item per value:
+# {project, key, value, host, port}. Checked in validate.yml.
+projects_backend_url: '^https?://([a-z0-9-]+)-backend(?::([0-9]*))?(?:[/?#]|$)'
+projects_backend_urls: >-
+  {%- set urls = [] -%}
+  {%- for p in projects_registry.projects if p.backend is defined and p.backend is mapping -%}
+  {%-   for key, value in (p.backend.env | default({})).items()
+          if value is string and value is match(projects_backend_url) -%}
+  {%-     set m = value | regex_search(projects_backend_url, '\\1', '\\2') -%}
+  {%-     set _ = urls.append({'project': p.name, 'key': key, 'value': value, 'host': m[0], 'port': m[1] or ''}) -%}
+  {%-   endfor -%}
+  {%- endfor -%}
+  {{ urls }}

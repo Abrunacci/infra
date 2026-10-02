@@ -8,6 +8,8 @@
 #   /opt/infra/projects/NAME/compose.yml          Compose project backend-NAME
 #   /opt/infra/projects/NAME/app.env              env from projects.yml
 #   /etc/infra/secrets/projects/NAME/secrets.env  secrets (root only)
+#   /etc/infra/secrets/projects/NAME/links.env    copies of other projects'
+#                                                 secrets (project-secret sync)
 #   /var/lib/infra/backends/NAME/release.env      what is deployed:
 #                                                 BACKEND_IMAGE, BACKEND_RELEASE
 #   /var/lib/infra/backends/NAME/releases         history, oldest first:
@@ -48,7 +50,9 @@ BACKEND_SHOW_LOGS=0
 
 # Reads PROJECT's backend from the server's registry into BACKEND_REPO,
 # BACKEND_PORT, BACKEND_HEALTH, BACKEND_DATABASE and BACKEND_MIGRATE (true or
-# false), BACKEND_URL_SCHEME and BACKEND_SECRETS (an array of "KEY kind").
+# false), BACKEND_URL_SCHEME, BACKEND_SECRETS (an array of "KEY kind") and
+# BACKEND_LINKS (an array of "KEY SOURCE SOURCE_KEY": its secret KEY is a copy
+# of project SOURCE's SOURCE_KEY).
 # An internal backend (a project without a subdomain) has no port or health
 # path: both are empty, and the image's own HEALTHCHECK is its health.
 # The registry is written by Ansible from a checked projects.yml; every value
@@ -74,6 +78,9 @@ for p in json.load(open(registry))["projects"]:
         print(b.get("database_url_scheme") or "postgresql")
         for key, kind in sorted((b.get("secrets") or {}).items()):
             print(f"{key} {kind}")
+        print("--")
+        for key, link in sorted((b.get("links") or {}).items()):
+            print(f"{key} {link['from']} {link['key']}")
         break
 PY
 )" || fail "cannot read the project registry"
@@ -82,7 +89,14 @@ PY
   [[ "${lines[0]}" == backend ]] || fail "$1 has no backend"
   BACKEND_REPO="${lines[1]}" BACKEND_PORT="${lines[2]}" BACKEND_HEALTH="${lines[3]}"
   BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
-  BACKEND_SECRETS=("${lines[@]:7}")
+  BACKEND_SECRETS=() BACKEND_LINKS=()
+  local i=7
+  while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
+    BACKEND_SECRETS+=("${lines[i]}")
+    ((i += 1))
+  done
+  [[ "${lines[i]:-}" == -- ]] || fail "invalid secrets in the registry"
+  BACKEND_LINKS=("${lines[@]:i+1}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
   if [[ -n "$BACKEND_PORT$BACKEND_HEALTH" ]]; then
     [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
@@ -94,6 +108,74 @@ PY
   for s in "${BACKEND_SECRETS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual)$ ]] || fail "invalid secret in the registry"
   done
+  for s in "${BACKEND_LINKS[@]}"; do
+    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
+      || fail "invalid linked secret in the registry"
+  done
+}
+
+# The backends that link to PROJECT's secret KEY, one "CONSUMER CONSUMER_KEY"
+# per line (secrets {from: PROJECT, key: KEY} in projects.yml).
+backend_consumers() {
+  local out line
+  out="$(python3 -I - "$REGISTRY" "$1" "$2" <<'PY'
+import json, sys
+registry, name, key = sys.argv[1], sys.argv[2], sys.argv[3]
+for p in json.load(open(registry))["projects"]:
+    for k, link in sorted(((p.get("backend") or {}).get("links") or {}).items()):
+        if link["from"] == name and link["key"] == key:
+            print(f"{p['name']} {k}")
+PY
+)" || fail "cannot read the project registry"
+  [[ -n "$out" ]] || return 0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
+      || fail "invalid linked secret in the registry"
+    echo "$line"
+  done <<<"$out"
+}
+
+# KEY's value in FILE (KEY=VALUE lines), or nothing. Fails if FILE is missing.
+backend_env_value() {
+  local line
+  [[ -f "$1" && ! -L "$1" ]] || fail "$1 is missing (run the playbook)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$2="* ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <"$1"
+}
+
+# What PROJECT's links.env must hold: one KEY=VALUE line per linked secret
+# (BACKEND_LINKS, from backend_read), with the source's current value. A
+# source without a value yet leaves its line out.
+backend_links_wanted() {
+  local line key source source_key value
+  for line in "${BACKEND_LINKS[@]}"; do
+    read -r key source source_key <<<"$line"
+    value="$(backend_env_value "$SECRETS_DIR/$source/secrets.env" "$source_key")"
+    [[ -n "$value" ]] && printf '%s=%s\n' "$key" "$value"
+  done
+  return 0
+}
+
+# Rewrites PROJECT's links.env from the sources, in one rename, if anything
+# differs. Prints changed or unchanged. Needs backend_read first.
+backend_sync_links() {
+  local file="$SECRETS_DIR/$1/links.env" wanted current tmp
+  [[ -f "$file" && ! -L "$file" ]] || fail "$file is missing (run the playbook)"
+  wanted="$(backend_links_wanted)"
+  current="$(cat "$file")"
+  if [[ "$wanted" == "$current" ]]; then
+    echo unchanged
+    return 0
+  fi
+  tmp="$(mktemp "$SECRETS_DIR/$1/.links.XXXXXX")"
+  [[ -z "$wanted" ]] || printf '%s\n' "$wanted" >"$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$file"
+  echo changed
 }
 
 # backend_read, and the backend's files must be there (the playbook ran).
@@ -311,6 +393,26 @@ backend_secret_problems() {
       echo "$key is set but not declared in projects.yml: sudo project-secret $project unset $key"
     fi
   done
+  # Linked secrets: links.env must hold exactly the sources' current values.
+  local source source_key wanted
+  file="$SECRETS_DIR/$project/links.env"
+  [[ -f "$file" && ! -L "$file" ]] || fail "$file is missing (run the playbook)"
+  for line in "${BACKEND_LINKS[@]}"; do
+    read -r key source source_key <<<"$line"
+    wanted="$(backend_env_value "$SECRETS_DIR/$source/secrets.env" "$source_key")"
+    if [[ -z "$wanted" ]]; then
+      bad=1
+      echo "$key copies $source's $source_key, which has no value yet: see sudo project-secret $source list"
+    elif [[ "$(backend_env_value "$file" "$key")" != "$wanted" ]]; then
+      bad=1
+      echo "$key is not a current copy of $source's $source_key: sudo project-secret $project sync"
+    fi
+  done
+  # Every linked key is current: anything else in the file is a leftover.
+  if ((bad == 0)) && [[ "$(backend_links_wanted)" != "$(cat "$file")" ]]; then
+    bad=1
+    echo "links.env holds something projects.yml does not link: sudo project-secret $project sync"
+  fi
   return "$bad"
 }
 

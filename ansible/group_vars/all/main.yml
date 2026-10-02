@@ -45,6 +45,20 @@ edge_project_networks: >-
   {{ projects_registry.projects | selectattr('subdomain', 'defined') | selectattr('backend', 'defined')
      | map(attribute='name') | map('regex_replace', '^', 'edge-') | list }}
 
+# Projects whose backend another one reaches directly: some backend has a
+# secret {from: <name>, key: ...}. Each gets an internal network, link-<name>
+# (no route out), shared by its backend (as <name>-backend) and the backends
+# that link to it, and nobody else. Created and removed by roles/projects.
+link_receivers: >-
+  {%- set receivers = [] -%}
+  {%- for p in projects_registry.projects if p.backend is defined -%}
+  {%-   for kind in (p.backend.secrets | default({})).values() if kind is mapping -%}
+  {%-     set _ = receivers.append(kind.from) -%}
+  {%-   endfor -%}
+  {%- endfor -%}
+  {{ receivers | unique | sort | list }}
+link_networks: "{{ link_receivers | map('regex_replace', '^', 'link-') | list }}"
+
 # Loopback port of the temporary PostgreSQL bridge (roles/db_tunnel), and the
 # only destination admin_user may forward to over SSH (roles/hardening).
 db_tunnel_port: 15432

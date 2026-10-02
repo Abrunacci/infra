@@ -14,7 +14,10 @@
           'image': p.backend.image,
           'port': p.backend.port | default(none),
           'health': p.backend.health | default(none),
-          'secrets': p.backend.secrets | default({}),
+          'secrets': p.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping')
+                     | items2dict,
+          'links': p.backend.secrets | default({}) | dict2items | selectattr('value', 'mapping')
+                   | items2dict,
           'migrate': p.backend.migrate is defined,
           'database_url_scheme': p.backend.database_url_scheme | default('postgresql'),
         } if p.backend is defined else none,
