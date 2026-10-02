@@ -1,0 +1,18 @@
+---
+# systemd holds journald's sockets, so what is logged during the restart waits
+# there. The flush moves anything still in /run/log/journal to disk.
+- name: Restart journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted
+  notify: Flush the journal to disk
+
+- name: Flush the journal to disk
+  ansible.builtin.command:
+    cmd: journalctl --flush
+  changed_when: true
+
+- name: Restart rsyslog
+  ansible.builtin.systemd_service:
+    name: rsyslog
+    state: restarted
