@@ -4,10 +4,10 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 
 | Role | What it does |
 |---|---|
-| `base` | Requires a password for the admin user's sudo (see below), manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
+| `base` | Requires a password for the admin user's sudo (see below), manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, a persistent journal capped at 1 GB (the backends' logs, which stay out of `/var/log/syslog`), 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
 | `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH |
 | `monitoring` | DigitalOcean's monitoring agent (`do-agent`) from DigitalOcean's apt repository, running and enabled. It reports the memory and disk usage the resource alerts fire on (`terraform/monitoring.tf`); the package upgrades itself daily |
-| `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation and `no-new-privileges` for every container; the shared `edge` (Caddy and Gatus) and `db` networks |
+| `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation for the containers that are not backends (Caddy, PostgreSQL, Gatus; backends log to the journal) and `no-new-privileges` for every container; the shared `edge` (Caddy and Gatus) and `db` networks |
 | `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability. It creates one network per public backend (`edge-<name>`) and joins them all |
 | `postgres` | PostgreSQL 17 in a container on the internal `db` network, with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server. Refuses an image whose major version is not the data's |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
@@ -51,6 +51,7 @@ The roles run in that order: each one depends on the previous ones, and `project
   - **Configuration.** `env` in `projects.yml` is public (`/opt/infra/projects/<name>/app.env`); `secrets` only names variables, whose values live in `/etc/infra/secrets/projects/<name>/secrets.env` (root only). `generated` values are created on the server by the playbook; `manual` ones are set by the admin with `sudo project-secret`. Neither ever passes through Ansible or the repo. Compose reads both files literally (`format: raw`). A deploy refuses to start while a declared secret has no value, or a value is set that `projects.yml` does not declare.
   - **Changes.** When `env`, `memory` or a secret changes, the next playbook run applies it (`backend-rollback <name> --apply`, under the deploy lock): the container is recreated and its health checked, with no automatic way back, since the image did not change. After `project-secret set`, `sudo backend-rollback <name> --restart` applies it at once. A new `image` takes effect at the next deploy; the history keeps the previous repository's releases, and rolling back to one of them runs that image.
   - **Retention and rollbacks.** The last 5 releases are kept, with their images, plus the one that was running before the latest deploy; the image of a failed deploy is removed. `sudo backend-rollback` moves back to any of them, with the same health check and way back, and shows a failed container's log in the terminal. Without a release name it goes to the one deployed before the current one in the history (`--list` shows the order). Database migrations are never undone.
+  - **Logs.** What the container prints goes to the systemd journal (Docker's `journald` driver), tagged `backend.<name>`: a deploy, rollback or restart creates a new container, and the previous one's log stays. The journal is kept on disk and capped at 1 GB; past that, the oldest entries go. It may hold personal data. See "Backend logs".
   - **Journal.** Every deploy and rollback is logged (`journalctl -t deploy-backend`, `-t backend-rollback`), the log of a container that failed its health check (`-t backend-log`), and every secret change (`-t project-secret`, never the value).
 - **Databases are never dropped by the playbook.** Before any change, it compares `projects.yml` with two sources: the server's registry (`/etc/infra/projects.json`, projects that had `database: true`) and PostgreSQL itself (every database except `postgres` and the templates, including one made by hand). A database whose project is gone from `projects.yml`, or now says `database: false`, stops the play until it is retired by hand. If PostgreSQL's data volume exists but PostgreSQL cannot be asked, the play stops too, instead of trusting the registry alone. A new server, without Docker or the volume, has no databases.
 - **Per-project databases.** A project with `database: true` gets, in the shared PostgreSQL, a database named after it (`my-app` → `my_app`) and two roles, created by `sudo project-db ensure` (the playbook runs it):
@@ -298,6 +299,23 @@ sudo backend-rollback <project> RELEASE     # to that release
 sudo backend-rollback <project> --restart   # recreate the deployed release
 sudo backend-rollback <project> --apply     # apply configuration changes, if any (the playbook runs it)
 ```
+
+### Backend logs
+
+```sh
+sudo journalctl -t backend.<project> -f            # follow it, across deploys
+sudo journalctl -t backend.<project> --since -1h   # the last hour, whichever containers ran
+sudo docker logs -f backend-<project>-backend-1     # the current container only
+sudo journalctl --disk-usage                       # the whole journal, against its 1 GB cap
+```
+
+Each backend logs to the systemd journal (Docker's `journald` driver), tagged `backend.<project>`. `docker logs` and `docker compose logs` still work, and read the same journal, but only for the container that exists now: once a deploy, a rollback or `--restart` replaces it, the earlier lines are only in `journalctl`. A container that fails its health check also leaves its last 30 lines under `-t backend-log`.
+
+- **Kept on disk, capped.** The journal is persistent (`/var/log/journal`) and limited to `base_journal_max_use` (1 GB, `roles/base`). It is one journal for the whole server: past the cap, journald deletes its oldest files, whatever they hold. How far back that reaches depends on how much is logged; `sudo journalctl -o short-iso | head -1` shows the oldest entry left.
+- **It holds personal data.** A backend's log can carry what visitors send. The landing's contact form (`abrunacci-dev`) logs the full text of the messages it holds back or discards: the sender's name, email address and message. Those entries stay on the server until the cap rotates them out; no other limit applies. Backups do not include the journal.
+- **Only root reads it.** Reading the journal takes `sudo` (or the `adm` or `systemd-journal` groups; the admin user is in neither). journald forwards every entry to rsyslog, which writes `/var/log/syslog` and rotates it on its own schedule: `roles/base` keeps `backend.*` and `backend-log` out of it (`/etc/rsyslog.d/10-infra-backends.conf`), so the cap is the only retention for them.
+- **Rate limit.** journald accepts up to 10,000 entries every 30 s from Docker, for all containers together; past that it drops entries until the period ends, and logs that it did. A backend should not log every request at that rate.
+- Caddy, PostgreSQL and Gatus keep Docker's `local` driver (three 10 MB files per container, `roles/docker`), so `docker logs` for them still loses its history when they are recreated.
 
 ### Databases
 

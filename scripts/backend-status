@@ -41,5 +41,5 @@ if backend_healthy "$project" "$seconds"; then
   exit 0
 fi
 echo "health:    NOT OK ($(backend_health_target "$project"))"
-echo "log:       sudo docker compose --project-directory $BACKENDS_DIR/$project --env-file $STATE_DIR/$project/release.env logs --tail 50"
+echo "log:       sudo journalctl -t backend.$project -n 50"
 exit 1

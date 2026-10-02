@@ -56,6 +56,15 @@ services:
     stop_grace_period: 20s
     labels:
       infra.release: ${BACKEND_RELEASE:-}
+    # To the systemd journal, which outlives the container: a deploy or a
+    # restart no longer loses the previous log. Read it with
+    # `sudo journalctl -t backend.{{ item.name }}`, or `sudo docker logs` (only
+    # the current container). May hold personal data; the journal's size cap
+    # bounds how long it stays (roles/base, ansible/README.md "Backend logs").
+    logging:
+      driver: journald
+      options:
+        tag: backend.{{ item.name }}
 {% if item.backend.migrate is defined %}
 
   # Run once per deploy by deploy-backend (docker compose run --rm migrate),

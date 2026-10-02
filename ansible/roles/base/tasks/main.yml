@@ -93,6 +93,44 @@
     group: root
     mode: "0644"
 
+- name: Create journald's drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Persistent, with a size cap: the backends log here (roles/projects).
+- name: Configure the journal
+  ansible.builtin.template:
+    src: journald.conf.j2
+    dest: /etc/systemd/journald.conf.d/60-infra.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+# Ubuntu's server image ships rsyslog; nothing to do on one without it.
+- name: Look for rsyslog
+  ansible.builtin.stat:
+    path: /etc/rsyslog.d
+  register: base_rsyslog_dir
+
+- name: Keep the backends' logs out of /var/log/syslog
+  ansible.builtin.template:
+    src: rsyslog-backends.conf.j2
+    dest: /etc/rsyslog.d/10-infra-backends.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: base_rsyslog_dir.stat.isdir | default(false)
+  notify: Restart rsyslog
+
+# Before roles/projects recreates the backends with the journald driver.
+- name: Apply the journal changes now
+  ansible.builtin.meta: flush_handlers
+
 # One step, so a half-created file is never left behind: if mkswap fails, the
 # file is removed and the next run tries again.
 - name: Create the swap file
