@@ -103,6 +103,30 @@
   loop: "{{ docker_networks }}"
   loop_control:
     label: "{{ item.name }}"
+  register: docker_networks_result
+
+# When a network's settings change, docker_network removes it, creates it
+# again and reconnects the containers that were on it, but without their
+# Compose settings: no aliases (Caddy finds Gatus as `gatus`), no fixed
+# address (PostgreSQL's). Compose then sees them connected and leaves them
+# as they are. Taking them off instead makes the compose up of the roles
+# that run after this one recreate each container with its own settings.
+- name: Take the containers off the recreated networks
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for container in $(docker network inspect -f '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' "$NETWORK"); do
+        docker network disconnect "$NETWORK" "$container"
+        echo "$container"
+      done
+    executable: /bin/bash
+  environment:
+    NETWORK: "{{ item.item.name }}"
+  loop: "{{ docker_networks_result.results | selectattr('changed') | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: docker_networks_detached
+  changed_when: docker_networks_detached.stdout | length > 0
 
 # Run by the caddy, postgres, db_tunnel and backup roles once their new image
 # is in use, to remove that service's older images.
