@@ -25,8 +25,10 @@
     # adding or removing a project changes Caddy too.
     - role: caddy
       tags: [caddy, projects]
+    # Also with --tags projects: PostgreSQL joins each database's network, so
+    # adding a project with a database changes PostgreSQL too.
     - role: postgres
-      tags: [postgres]
+      tags: [postgres, projects]
     - role: db_tunnel
       tags: [db_tunnel]
     - role: projects

@@ -14,9 +14,9 @@
 # registry (projects.yml), never from the client: CI only chooses which digest
 # of it. The image is pulled by digest. With a database and a migrate command,
 # the database is dumped (the last 3 dumps are kept) and the migrations run in
-# a one-off container of the new image, on the db network only; if they fail,
-# the deploy stops there and the running release is untouched. Then the
-# container is recreated with the new image,
+# a one-off container of the new image, on the project's db-<name> network
+# only; if they fail, the deploy stops there and the running release is
+# untouched. Then the container is recreated with the new image,
 # and its health path is checked from Caddy's container for up to 60 s (for an
 # internal backend, without a subdomain, Docker must report it healthy from
 # the image's HEALTHCHECK instead). If it

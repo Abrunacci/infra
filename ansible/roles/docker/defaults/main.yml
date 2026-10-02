@@ -18,9 +18,11 @@ docker_apt_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11
 #           one has its own network with Caddy (edge_project_networks).
 #           Dual stack, so Caddy sees the real address of IPv6 visitors
 #           (docker_edge_ipv6_subnet below)
-#   db   -> PostgreSQL and the projects that use it. Internal: no route to
-#           the internet, and nothing on it can be published. Fixed subnet
-#           and dynamic range, so PostgreSQL keeps a fixed address (group_vars).
+#   db   -> PostgreSQL and the database bridge (db_tunnel). Internal: no
+#           route to the internet, and nothing on it can be published. Fixed
+#           subnet and dynamic range, so PostgreSQL keeps a fixed address
+#           (group_vars). Backends are not on it: each one reaches PostgreSQL
+#           on its own network (database_networks)
 # Changing a network's settings (subnet, range, IPv6) recreates it, and the
 # docker role leaves its containers off the new one (tasks/main.yml). The
 # roles that run after it put them back: docker compose up recreates a

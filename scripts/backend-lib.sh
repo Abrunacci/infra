@@ -315,12 +315,12 @@ backend_secret_problems() {
 }
 
 # Runs PROJECT's migrations with IMAGE in a one-off container of its migrate
-# service (db network only, the owner's connection, no app secrets), for up
-# to MIGRATE_SECONDS. Named, so it can be removed if it outlives its time:
-# timeout stops the Compose client, not the container. Its output goes to the
-# journal only (tag backend-migrate): it can hold connection details. LABEL
-# names the run in the journal. Returns 1 on failure, with MIGRATE_RESULT
-# saying why.
+# service (its db-<name> network only, the owner's connection, no app
+# secrets), for up to MIGRATE_SECONDS. Named, so it can be removed if it
+# outlives its time: timeout stops the Compose client, not the container. Its
+# output goes to the journal only (tag backend-migrate): it can hold
+# connection details. LABEL names the run in the journal. Returns 1 on
+# failure, with MIGRATE_RESULT saying why.
 backend_migrate() {
   local project="$1" image="$2" label="$3" container rc=0 out
   container="backend-$project-migrate"
@@ -348,12 +348,12 @@ db_names() {
   DB_APP="${DB_NAME}_app"
 }
 
-# Loads PostgreSQL's address and finds its container into PG_CONTAINER.
+# Loads PostgreSQL's host and port and finds its container into PG_CONTAINER.
 db_container() {
   [[ -r "$DATABASE_CONF" ]] || fail "missing $DATABASE_CONF (run the playbook)"
   # shellcheck source=/dev/null
   . "$DATABASE_CONF"
-  : "${POSTGRES_ADDRESS:?}" "${POSTGRES_PORT:?}" "${POSTGRES_COMPOSE_PROJECT:?}" "${POSTGRES_COMPOSE_SERVICE:?}"
+  : "${POSTGRES_HOST:?}" "${POSTGRES_PORT:?}" "${POSTGRES_COMPOSE_PROJECT:?}" "${POSTGRES_COMPOSE_SERVICE:?}"
   PG_CONTAINER="$(docker ps -q --filter "label=com.docker.compose.project=$POSTGRES_COMPOSE_PROJECT" \
     --filter "label=com.docker.compose.service=$POSTGRES_COMPOSE_SERVICE" \
     --filter label=com.docker.compose.oneoff=False 9>&-)"
