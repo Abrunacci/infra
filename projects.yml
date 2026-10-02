@@ -37,7 +37,11 @@
 #                         subdomain; optional)
 #                env      non-secret variables, public: quoted strings
 #                secrets  names only, each generated or manual; the values
-#                         live on the server (sudo project-secret)
+#                         live on the server (sudo project-secret). Or
+#                         {from: PROJECT, key: KEY}: another project's secret,
+#                         copied by the server, plus a private network to that
+#                         project's backend (link-PROJECT), reached as
+#                         http://PROJECT-backend:PORT
 #                memory   64m to 512m (optional, defaults to 256m)
 #                migrate  with a database: the migrations' command, run before
 #                         each deploy switches, such as [alembic, upgrade, head]
@@ -57,8 +61,8 @@ projects:
       port: 8000
       health: /api/health
       paths: ["/api/*"]
-      # The ingest endpoint is never public: data-pipeline will reach it on
-      # an internal network, not through Caddy.
+      # The ingest endpoint is never public: data-pipeline reaches it on
+      # link-cuanto-cuesta (its secret links here), not through Caddy.
       private_paths: ["/api/ingest", "/api/ingest/*"]
       secrets:
         INGEST_TOKEN: generated
@@ -108,4 +112,12 @@ projects:
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIQIv0wZsZBIrRSCcfa9Sjtqc4LBabBWAkrJ6BydVnYf data-pipeline-deploy
     backend:
       image: ghcr.io/abrunacci/data-pipeline
+      env:
+        # Checked by the playbook: the host and port must be cuanto-cuesta's,
+        # which a secret below links to.
+        CUANTO_CUESTA_INGEST_URL: "http://cuanto-cuesta-backend:8000/api/ingest"
+      secrets:
+        # The same value as cuanto-cuesta's INGEST_TOKEN, which stays its only
+        # source: rotate it there (sudo project-secret cuanto-cuesta rotate INGEST_TOKEN).
+        CUANTO_CUESTA_INGEST_TOKEN: {from: cuanto-cuesta, key: INGEST_TOKEN}
       memory: 256m

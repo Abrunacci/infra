@@ -164,13 +164,14 @@
       - projects_env.values() | reject('string') | list | length == 0
       - projects_env.values() | select('match', '.*[\n\r]') | list | length == 0
       - projects_env.values() | map('length') | select('gt', 1024) | list | length == 0
-      - projects_secrets.values() | difference(['generated', 'manual']) | length == 0
+      - projects_secrets.values() | select('string') | difference(['generated', 'manual']) | length == 0
+      - projects_secrets.values() | reject('string') | reject('mapping') | list | length == 0
       - projects_memory is string and projects_memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
     fail_msg: >-
       projects.yml: invalid backend env, secrets or memory for {{ item.name }}. Names are uppercase
       (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
-      in secrets but not both; env values are quoted strings on one line; secrets are generated or manual;
-      memory goes from 64m to 512m. See projects.schema.json.
+      in secrets but not both; env values are quoted strings on one line; secrets are generated, manual or
+      {from: PROJECT, key: KEY}; memory goes from 64m to 512m. See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
   loop_control:
@@ -180,6 +181,55 @@
     projects_secrets: "{{ item.backend.secrets | default({}) }}"
     projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
     projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
+
+# A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
+# and a private network to that project's backend (link-PROJECT). The source
+# must be another project's backend with a port, which declares KEY as
+# generated or manual: a copy of a copy is not allowed.
+- name: Check each linked secret
+  ansible.builtin.assert:
+    that:
+      - item.link.keys() | sort == ['from', 'key']
+      - item.link.from is string and item.link.key is string
+      - item.link.from != item.project
+      - projects_source | length == 1
+      - projects_source[0].backend is defined and projects_source[0].backend is mapping
+      - projects_source[0].backend.port is defined
+      - (projects_source[0].backend.secrets | default({})).get(item.link.key) in ['generated', 'manual']
+    fail_msg: >-
+      projects.yml: {{ item.project }}'s secret {{ item.key }} links to {{ item.link.from | default('?') }}'s
+      {{ item.link.key | default('?') }}. It must be another project, with a backend that has a port, and that
+      declares that key as a generated or manual secret.
+    quiet: true
+  loop: "{{ projects_links }}"
+  loop_control:
+    label: "{{ item.project }} {{ item.key }}"
+  vars:
+    projects_source: >-
+      {{ projects_registry.projects | selectattr('name', 'equalto', item.link.from | default('')) | list }}
+
+# An env value that names another project's backend (http://PROJECT-backend:PORT/...)
+# only works over link-PROJECT: this backend must link to it with a secret,
+# and the port must be that backend's. Typos fail here, not at the first call.
+- name: Check each backend's addresses of other backends
+  ansible.builtin.assert:
+    that:
+      - item.host in projects_targets
+      - item.port | length > 0
+      - (item.port | int) == projects_target.backend.port
+    fail_msg: >-
+      projects.yml: {{ item.project }}'s {{ item.key }} ({{ item.value }}) names {{ item.host }}-backend.
+      {{ item.project }} needs a secret {from: {{ item.host }}, key: ...} to reach it, and the URL must give
+      {{ item.host }}'s port explicitly.
+    quiet: true
+  loop: "{{ projects_backend_urls }}"
+  loop_control:
+    label: "{{ item.project }} {{ item.key }}"
+  vars:
+    projects_target: "{{ projects_registry.projects | selectattr('name', 'equalto', item.host) | first }}"
+    projects_targets: >-
+      {{ (projects_registry.projects | selectattr('name', 'equalto', item.project) | first).backend.secrets
+         | default({}) | dict2items | map(attribute='value') | select('mapping') | map(attribute='from') | list }}
 
 # Databases. The playbook never drops one, and a projects.yml that would leave
 # one without its project stops the play here, before any change: taking a

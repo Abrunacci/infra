@@ -111,6 +111,20 @@
   loop_control:
     label: "{{ item.name }}"
 
+# Linked secrets ({from: PROJECT, key: KEY}): copies of another project's
+# secrets, written only by project-secret (sync, below). Never edited by hand.
+- name: Create each backend's linked secrets file
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ projects_backends_secrets_dir }}/{{ item.name }}/links.env"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 # Creates the database and roles of each project that has one, or checks
 # them; writes database-app.env and database-migrate.env, which the compose
 # file below needs. Never creates an empty database where one existed (see
@@ -168,6 +182,42 @@
       {%-   endfor -%}
       {%- endfor -%}
       {{ out }}
+
+# After the generated secrets, which may be the sources. Rewrites links.env
+# from the sources only when a value differs; the value never appears in the
+# output. Not run in check mode.
+- name: Copy each backend's linked secrets
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/project-secret, "{{ item.name }}", sync]
+  register: projects_links_sync
+  changed_when: projects_links_sync.stdout == 'changed'
+  loop: "{{ projects_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# One per project another backend links to (link_receivers in group_vars).
+# Internal: no route out, and nothing on it but that project's backend and
+# the backends that link to it. Before the backends are applied below, which
+# attaches them.
+- name: Create the link networks
+  community.docker.docker_network:
+    name: "{{ item }}"
+    internal: true
+    labels:
+      infra.network: link
+    state: present
+  loop: "{{ link_networks }}"
+  register: projects_link_networks
+
+# The backends are applied just below, with their aliases (the receiver is
+# <name>-backend on its link network).
+- name: Take the containers off the recreated link networks
+  ansible.builtin.import_role:
+    name: docker
+    tasks_from: detach-recreated
+  vars:
+    docker_recreated_networks: >-
+      {{ projects_link_networks.results | selectattr('changed') | map(attribute='item') | list }}
 
 # From here on, only backends that were deployed: the others have no image
 # yet, and deploy-backend starts them.
@@ -239,12 +289,13 @@
     projects_expected_backends: *projects_expected_backends
 
 # The network of a project that no longer has a public backend (roles/caddy
-# created it) or a database (roles/postgres). By now nothing is on it: Caddy
-# and PostgreSQL left it when their roles recreated them, and the backend was
-# stopped or moved above. docker network rm
-# refuses a network that still has a container on it, and the run stops then.
+# created it), a database (roles/postgres), or that no backend links to any
+# more (link-PROJECT). By now nothing is on it: Caddy and PostgreSQL left it
+# when their roles recreated them, and the backends were stopped or moved
+# above. docker network rm refuses a network that still has a container on
+# it, and the run stops then.
 # Not docker_network: with state absent it disconnects the containers first.
-- name: Find the project and database networks
+- name: Find the project, database and link networks
   ansible.builtin.command:
     argv: [docker, network, ls, --filter, label=infra.network, --format, "{{ '{{.Name}}' }}"]
   register: projects_networks_found
@@ -255,4 +306,6 @@
   ansible.builtin.command:
     argv: [docker, network, rm, "{{ item }}"]
   changed_when: true
-  loop: "{{ projects_networks_found.stdout_lines | difference(edge_project_networks + database_networks) }}"
+  loop: "{{ projects_networks_found.stdout_lines | difference(projects_kept_networks) }}"
+  vars:
+    projects_kept_networks: "{{ edge_project_networks + database_networks + link_networks }}"

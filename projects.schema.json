@@ -166,10 +166,15 @@
           "additionalProperties": { "type": "string", "maxLength": 1024, "pattern": "^[^\\n\\r]*$" }
         },
         "secrets": {
-          "description": "Secret environment variables: only their names are here, the values live on the server. generated: created once on the server (64 hex characters). manual: set by the admin with project-secret.",
+          "description": "Secret environment variables: only their names are here, the values live on the server. generated: created once on the server (64 hex characters). manual: set by the admin with project-secret. {from: PROJECT, key: KEY}: the value of another project's secret, copied by the server, which also gives this backend a private network to that project's backend (link-PROJECT).",
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/env_name" },
-          "additionalProperties": { "enum": ["generated", "manual"] }
+          "additionalProperties": {
+            "oneOf": [
+              { "enum": ["generated", "manual"] },
+              { "$ref": "#/$defs/secret_link" }
+            ]
+          }
         },
         "migrate": {
           "description": "Command that applies the migrations, run in a one-off container of the new image before each deploy switches to it, such as [alembic, upgrade, head]. It gets MIGRATION_DATABASE_URL and APP_DB_USER.",
@@ -188,6 +193,16 @@
           "type": "string",
           "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
         }
+      }
+    },
+    "secret_link": {
+      "description": "Another project's secret, by project name and key. That project must have a backend with a port, and declare the key as generated or manual: checked by the playbook.",
+      "type": "object",
+      "required": ["from", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/label" },
+        "key": { "$ref": "#/$defs/env_name" }
       }
     },
     "env_name": {

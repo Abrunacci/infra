@@ -4,6 +4,8 @@
 #     --env-file {{ projects_backends_state_dir }}/{{ item.name }}/release.env ...
 # deploy-backend, backend-rollback and the playbook always pass that file.
 name: backend-{{ item.name }}
+{# The projects this backend links to (secrets {from: PROJECT, ...}). #}
+{% set link_targets = (item.backend.secrets | default({})).values() | select('mapping') | map(attribute='from') | unique | sort | list %}
 
 services:
   backend:
@@ -26,6 +28,9 @@ services:
       - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
         format: raw
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets.env
+        format: raw
+      # Copies of other projects' secrets ({from: ...}), written by project-secret.
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/links.env
         format: raw
 {% if item.database %}
       # DATABASE_URL, as the app's role (project-db).
@@ -51,6 +56,17 @@ services:
       # (db-{{ item.name }}), which no other backend joins. Internal: no route out.
       db: {}
 {% endif %}
+{% if item.name in link_receivers %}
+      # Backends that link to this one reach it here, by the same alias.
+      # Internal, and shared only with them.
+      link-self:
+        aliases:
+          - {{ item.name }}-backend
+{% endif %}
+{% for target in link_targets %}
+      # {{ target }}'s backend, as {{ target }}-backend: a secret links to it.
+      link-{{ target }}: {}
+{% endfor %}
     mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     pids_limit: 256
@@ -116,3 +132,13 @@ networks:
     name: db-{{ item.name }}
     external: true
 {% endif %}
+{% if item.name in link_receivers %}
+  # Created by roles/projects.
+  link-self:
+    name: link-{{ item.name }}
+    external: true
+{% endif %}
+{% for target in link_targets %}
+  link-{{ target }}:
+    external: true
+{% endfor %}

@@ -1,6 +1,7 @@
 ---
-# Also used by roles/caddy for the project networks (edge-<name>) and by
-# roles/postgres for the database networks (db-<name>).
+# Also used by roles/caddy for the project networks (edge-<name>), by
+# roles/postgres for the database networks (db-<name>) and by roles/projects
+# for the link networks (link-<name>).
 #
 # When a network's settings change, docker_network removes it, creates it
 # again and reconnects the containers that were on it, but without their
