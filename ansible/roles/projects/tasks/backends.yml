@@ -237,3 +237,21 @@
   vars:
     projects_gone_backends: *projects_gone_backends
     projects_expected_backends: *projects_expected_backends
+
+# The network of a project that no longer has a public backend (roles/caddy
+# created it). By now nothing is on it: Caddy left it when roles/caddy
+# recreated it, and the backend was stopped or moved above. docker network rm
+# refuses a network that still has a container on it, and the run stops then.
+# Not docker_network: with state absent it disconnects the containers first.
+- name: Find the project networks
+  ansible.builtin.command:
+    argv: [docker, network, ls, --filter, label=infra.network=project, --format, "{{ '{{.Name}}' }}"]
+  register: projects_networks_found
+  changed_when: false
+  check_mode: false
+
+- name: Remove the networks of projects that are gone
+  ansible.builtin.command:
+    argv: [docker, network, rm, "{{ item }}"]
+  changed_when: true
+  loop: "{{ projects_networks_found.stdout_lines | difference(edge_project_networks) }}"

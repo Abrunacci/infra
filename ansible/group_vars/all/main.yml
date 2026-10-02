@@ -36,6 +36,15 @@ db_network_subnet: 172.30.0.0/24
 db_network_dynamic_range: 172.30.0.128/25
 postgres_ipv4_address: 172.30.0.10
 
+# One network per public backend (a project with a subdomain and a backend),
+# named edge-<name>. Only that backend and Caddy are on it, so backends cannot
+# reach each other (#32). Ordinary bridges, not internal: they are also the
+# backends' route out to the internet. Created by roles/caddy, which joins
+# them all; removed by roles/projects once their project is gone.
+edge_project_networks: >-
+  {{ projects_registry.projects | selectattr('subdomain', 'defined') | selectattr('backend', 'defined')
+     | map(attribute='name') | map('regex_replace', '^', 'edge-') | list }}
+
 # Loopback port of the temporary PostgreSQL bridge (roles/db_tunnel), and the
 # only destination admin_user may forward to over SSH (roles/hardening).
 db_tunnel_port: 15432

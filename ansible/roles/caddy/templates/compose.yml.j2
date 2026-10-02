@@ -31,8 +31,13 @@ services:
       - /srv/sites:/srv/sites:ro
       - ./data:/data
       - ./config:/config
+    # edge for Gatus; one network per public backend, which only that backend
+    # shares with Caddy (edge_project_networks).
     networks:
       - edge
+{% for network in edge_project_networks %}
+      - {{ network }}
+{% endfor %}
     mem_limit: {{ caddy_memory_limit }}
     # The admin API listens on localhost inside the container only.
     healthcheck:
@@ -45,3 +50,7 @@ services:
 networks:
   edge:
     external: true
+{% for network in edge_project_networks %}
+  {{ network }}:
+    external: true
+{% endfor %}

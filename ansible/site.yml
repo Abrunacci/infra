@@ -21,8 +21,10 @@
       tags: [monitoring]
     - role: docker
       tags: [docker]
+    # Also with --tags projects: Caddy joins each public backend's network, so
+    # adding or removing a project changes Caddy too.
     - role: caddy
-      tags: [caddy]
+      tags: [caddy, projects]
     - role: postgres
       tags: [postgres]
     - role: db_tunnel

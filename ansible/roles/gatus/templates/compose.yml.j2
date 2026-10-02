@@ -27,7 +27,9 @@ services:
       - ./config:/config:ro
       - {{ gatus_data_dir }}:/data
     # On edge for Caddy, which serves the status page, and for its route out:
-    # it checks the sites at their public addresses, as a visitor would.
+    # it checks the sites at their public addresses, as a visitor would. No
+    # backend is on edge (each has its own network with Caddy), so Gatus
+    # cannot reach one directly.
     networks:
       edge:
         aliases:
