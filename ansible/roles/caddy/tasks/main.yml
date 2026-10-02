@@ -96,6 +96,17 @@
       infra.network: project
     state: present
   loop: "{{ edge_project_networks }}"
+  register: caddy_project_networks
+
+# Caddy is recreated just below, and each backend by roles/projects
+# (backend-rollback --apply), with their aliases.
+- name: Take the containers off the recreated project networks
+  ansible.builtin.import_role:
+    name: docker
+    tasks_from: detach-recreated
+  vars:
+    docker_recreated_networks: >-
+      {{ caddy_project_networks.results | selectattr('changed') | map(attribute='item') | list }}
 
 - name: Write the Caddy compose file
   ansible.builtin.template:
