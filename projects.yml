@@ -77,6 +77,29 @@ projects:
     site: true
     database: false
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJITKgKgF+4yXbqYGiYVx4Z26x/rf0qn9/gqE2KMu1pJ abrunacci-dev-deploy
+    # The contact form (backend/ in the abrunacci.dev repository). Its log
+    # holds the full text of held and discarded messages (name, email and
+    # message): personal data, kept as long as the backend's logs are.
+    backend:
+      image: ghcr.io/abrunacci/abrunacci-dev-backend
+      port: 8000
+      health: /api/health
+      paths: ["/api/*", "/contact"]
+      env:
+        MAIL_FROM: "Formulario abrunacci.dev <no-reply@mail.abrunacci.dev>"
+        # Caddy's Compose service name: Docker's DNS answers with Caddy's
+        # address on edge-abrunacci-dev, the only network the two share. Only
+        # a connection from it may set X-Forwarded-For (Caddy has no
+        # trusted_proxies, so it always writes the visitor's address there).
+        TRUSTED_PROXY: "caddy"
+      secrets:
+        # A Resend key with sending access only (abrunacci-dev-contact).
+        RESEND_API_KEY: manual
+        # Signs the form's time token. A new value invalidates open forms.
+        FORM_SECRET: generated
+        # The inbox the messages go to. Not in env: this repository is public.
+        MAIL_TO: manual
+      memory: 128m
 
   - name: epb-stock
     subdomain: epb
