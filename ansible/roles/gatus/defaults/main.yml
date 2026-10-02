@@ -23,6 +23,28 @@ gatus_check_timeout: 10s
 # well before; this fires only if renewing keeps failing.
 gatus_certificate_min_validity: 168h
 
+# Heartbeats: results the server itself pushes to Gatus (gatus-heartbeats),
+# for what Gatus cannot check from its container. Gatus alerts when one
+# reports a failure, and when none arrives for its interval. The list is
+# templates/heartbeats.yaml.j2. They reach Gatus on this loopback port only:
+# Caddy passes nothing but GET and HEAD from outside, and every push carries a
+# token generated on the server (push.env, root only).
+gatus_push_port: 18080
+# The server's own checks (gatus-heartbeats.timer): the DigitalOcean agent and
+# the health of each internal backend (no subdomain, so no URL to check).
+# A systemd calendar: every 5 minutes.
+gatus_host_check_calendar: "*:0/5"
+# No push for this long means the checks themselves stopped. Gatus looks once
+# per interval, so it notices between one and two intervals later.
+gatus_host_heartbeat: 15m
+# Failed pushes in a row before an alert: one more than a single check, so a
+# check that lands on a restart (an agent upgrade, a deploy) stays quiet.
+gatus_host_failure_threshold: 2
+# The nightly backup alerts on the first failed run. Without any run, it
+# alerts once the last successful one is older than this (the login warning's
+# limit, roles/backup).
+gatus_backup_max_age_hours: "{{ backup_max_age_hours | default(26) }}"
+
 # Where the alerts go. Each channel is one file, templates/alerting-<channel>.yaml.j2,
 # plus its credentials (<channel>.env). Changing channels: ansible/README.md,
 # "Status page and alerts".

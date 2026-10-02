@@ -1,0 +1,9 @@
+# Managed by Ansible (roles/gatus).
+[Unit]
+Description=Push the server's checks to the status page (gatus-heartbeats)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gatus-heartbeats
+TimeoutStartSec=5min

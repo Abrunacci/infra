@@ -108,7 +108,7 @@ tracepath -6 server.abrunacci.dev   # should report the path MTU without stallin
 
 The Droplet runs every project, PostgreSQL and Caddy, so one of them taking the machine takes them all down. DigitalOcean emails `TF_VAR_alert_email` when, averaged over 5 minutes, CPU, memory or disk usage goes above 80 % (`monitoring.tf`), and again when it is back below. The daily backup and a deploy last seconds to a couple of minutes, so they do not trigger it.
 
-- **Memory and disk come from the monitoring agent** (`do-agent`), which the `monitoring` Ansible role keeps installed and running. If the agent stops, those two alerts go quiet instead of firing. CPU is measured by the hypervisor and does not depend on it.
+- **Memory and disk come from the monitoring agent** (`do-agent`), which the `monitoring` Ansible role keeps installed and running. If the agent stops, those two alerts go quiet instead of firing; the status page notices instead and emails within about 10 minutes (`ansible/README.md`, "Status page and alerts"). CPU is measured by the hypervisor and does not depend on it.
 - **Testing that the email arrives:** lower one threshold for a single run, `terraform plan -out=tfplan -var='alert_thresholds={cpu=80,memory=80,disk=1}'`, apply it, wait for the email, then plan and apply without the flag to put it back. Never put `alert_thresholds` in `.env`: the lowered value would stay without anyone noticing.
 
 ## Backups bucket

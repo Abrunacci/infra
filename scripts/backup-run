@@ -15,7 +15,9 @@
 #   5. On Sundays it is copied inside R2 to weekly/<UTC time>/, on the 1st to
 #      monthly/<UTC time>/, and each copy is checked the same way.
 #   6. The result is written to /var/lib/infra/backup/ (read by the login
-#      warning) and to the journal (tag: backup).
+#      warning), to the journal (tag: backup) and, when roles/gatus has
+#      installed gatus-heartbeats, to the status page, which alerts on a
+#      failure.
 #
 # A project whose database is declared but missing fails the run (after the
 # other projects are backed up), since the backup would silently lack it.
@@ -41,6 +43,14 @@ record() {
     printf '%s\n' "$started" >"$BACKUP_STATE/.last-success.$$"
     chmod 0644 "$BACKUP_STATE/.last-success.$$"
     mv -f "$BACKUP_STATE/.last-success.$$" "$BACKUP_STATE/last-success"
+  fi
+  # And to the status page (roles/gatus), which alerts on a failure; the
+  # reason stays here, since the page is public. The backup's own result never
+  # depends on it: a push that fails is only logged.
+  local out
+  if [[ -x /usr/local/sbin/gatus-heartbeats ]] \
+    && ! out="$(/usr/local/sbin/gatus-heartbeats backup "$1" "$(($(date -u +%s) - started))" 2>&1 </dev/null 8>&- 9>&-)"; then
+    logger -t backup -- "could not send the result to the status page: ${out//$'\n'/; }" 2>/dev/null || true
   fi
 }
 

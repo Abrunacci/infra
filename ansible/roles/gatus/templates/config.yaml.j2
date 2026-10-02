@@ -46,3 +46,20 @@ endpoints:
       - type: {{ gatus_alert_channel }}
 {%   endfor %}
 {% endfor %}
+
+# Heartbeats (templates/heartbeats.yaml.j2): the server pushes their results
+# with gatus-heartbeats, on loopback, with this token. A heartbeat with no
+# push for its interval fails on its own.
+external-endpoints:
+{% for h in gatus_heartbeats %}
+  - name: {{ h.name | to_json }}
+    group: {{ h.group | to_json }}
+    token: "${GATUS_PUSH_TOKEN}"
+    heartbeat:
+      interval: {{ h.interval }}
+    alerts:
+      - type: {{ gatus_alert_channel }}
+        failure-threshold: {{ h.failure_threshold }}
+        success-threshold: {{ h.success_threshold }}
+        description: {{ h.description | to_json }}
+{% endfor %}

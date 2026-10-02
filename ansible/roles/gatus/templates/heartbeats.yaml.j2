@@ -1,0 +1,42 @@
+{# The heartbeats, read by tasks/main.yml into gatus_heartbeats: Gatus' side
+   (templates/config.yaml.j2) and the server's (gatus-heartbeats.conf.j2)
+   come from this one list.
+     key        Gatus' own name for it, from group and name (its
+                config/key/key.go); the server pushes to /api/v1/endpoints/<key>/external
+     check      what gatus-heartbeats runs: backup, service or container
+     target     the backup's maximum age in hours, the systemd unit or the project
+   The groups and names are on the public page: generic, nothing internal. #}
+{% macro key(group, name) -%}
+{{ group | lower | trim | regex_replace('[/_.,# +&]', '-') }}_{{ name | lower | trim | regex_replace('[/_.,# +&]', '-') }}
+{%- endmacro %}
+- group: Server
+  name: Nightly backup
+  key: {{ key('Server', 'Nightly backup') }}
+  check: backup
+  target: "{{ gatus_backup_max_age_hours }}"
+  interval: {{ gatus_backup_max_age_hours }}h
+  failure_threshold: 1
+  success_threshold: 1
+  description: The nightly backup failed, or has not succeeded for {{ gatus_backup_max_age_hours }} hours. On the server, see /var/lib/infra/backup/last-run and journalctl -t backup.
+- group: Server
+  name: Monitoring agent
+  key: {{ key('Server', 'Monitoring agent') }}
+  check: service
+  target: do-agent
+  interval: {{ gatus_host_heartbeat }}
+  failure_threshold: {{ gatus_host_failure_threshold }}
+  success_threshold: 1
+  description: do-agent is not running, so DigitalOcean's memory and disk alerts are blind. On the server, see systemctl status do-agent.
+{% for p in projects_registry.projects if p.subdomain is not defined and p.backend is defined %}
+{#   Grouped by the project's name, not its title: the name is what the key
+     needs (letters, digits and -), and it is already public in the repo. #}
+- group: {{ p.name }}
+  name: Health
+  key: {{ key(p.name, 'Health') }}
+  check: container
+  target: {{ p.name }}
+  interval: {{ gatus_host_heartbeat }}
+  failure_threshold: {{ gatus_host_failure_threshold }}
+  success_threshold: 1
+  description: The backend's container is not running or its HEALTHCHECK fails. On the server, see sudo backend-status {{ p.name }}.
+{% endfor %}

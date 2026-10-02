@@ -11,6 +11,12 @@
       "Usage").
     quiet: true
 
+# The heartbeats Gatus waits for and the server pushes: one list for both
+# sides (the template's header says what each field is).
+- name: List the heartbeats
+  ansible.builtin.set_fact:
+    gatus_heartbeats: "{{ lookup('ansible.builtin.template', 'heartbeats.yaml.j2') | from_yaml }}"
+
 # Gatus runs as this unprivileged user inside the container. It owns the
 # check history, and nothing else.
 - name: Create the gatus system group
@@ -56,6 +62,7 @@
   loop:
     - gatus-validate
     - gatus-credentials
+    - gatus-heartbeats
 
 - name: Write the settings gatus-credentials reads
   ansible.builtin.template:
@@ -64,6 +71,28 @@
     owner: root
     group: root
     mode: "0644"
+
+- name: Write the heartbeats gatus-heartbeats pushes
+  ansible.builtin.template:
+    src: gatus-heartbeats.conf.j2
+    dest: /etc/infra/gatus-heartbeats.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# The token every heartbeat is pushed with. Made once, on the server, and
+# never shown: Gatus reads it from this file, and so does gatus-heartbeats.
+# Not backed up: a rebuilt server makes a new one. Written to a temporary file
+# first, so a failure never leaves an empty one.
+- name: Generate the heartbeats' token
+  ansible.builtin.shell:
+    cmd: >-
+      umask 077 && printf 'GATUS_PUSH_TOKEN=%s\n' "$(openssl rand -hex 32)" > "$f.tmp" && mv "$f.tmp" "$f"
+      || { rm -f "$f.tmp"; exit 1; }
+    creates: "{{ gatus_secrets_dir }}/push.env"
+  environment:
+    f: "{{ gatus_secrets_dir }}/push.env"
+  no_log: true
 
 # Not shown in --diff or the run's log: the address is kept out of the repo.
 # A change recreates the container at "Start Gatus" (Compose compares the
@@ -112,6 +141,7 @@
     validate: >-
       /usr/local/sbin/gatus-validate {{ gatus_image }} {{ gatus_uid }} %s {{ gatus_alert_channel }}
       {{ gatus_secrets_dir }}/alerts.env {{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env
+      {{ gatus_secrets_dir }}/push.env
   notify: Restart Gatus
 
 - name: Write the Gatus compose file
@@ -145,6 +175,38 @@
     command: wget -q -O /dev/null http://gatus:8080/health
   register: gatus_health
   until: gatus_health.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false
+
+- name: Install the heartbeats' service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - gatus-heartbeats.service
+    - gatus-heartbeats.timer
+  notify: Reload systemd for the heartbeats
+
+- name: Apply the heartbeats' systemd changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Start the heartbeats' timer
+  ansible.builtin.systemd_service:
+    name: gatus-heartbeats.timer
+    enabled: true
+    state: started
+
+# Also proves the server reaches Gatus on its loopback port, with the token.
+# Retried: a config change has just restarted Gatus.
+- name: Push the server's checks now
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/gatus-heartbeats]
+  register: gatus_push
+  until: gatus_push.rc == 0
   retries: 15
   delay: 2
   changed_when: false
