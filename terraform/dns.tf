@@ -82,6 +82,22 @@ resource "cloudflare_dns_record" "caa" {
   }
 }
 
+# Proves to Google Search Console that the domain is ours, so it shows how the
+# landing appears in Google Search and lets us ask Google to index it. It sits next to the SPF record
+# Email Routing writes on the root domain (see email.tf); each TXT record is
+# separate, so neither replaces the other. Google checks it again from time to
+# time: removing it unverifies the domain.
+resource "cloudflare_dns_record" "google_site_verification" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.domain
+  type    = "TXT"
+  # Quoted, as Cloudflare stores TXT content (see the DMARC record in email.tf).
+  content = "\"google-site-verification=9etRIHVIkfNP-vuYwCDkogM_Q8NmroSHfTFtHXrCtYI\""
+  ttl     = 3600
+  proxied = false
+  comment = "Managed by Terraform (infra repo)"
+}
+
 # Nothing is proxied, so Cloudflare's edge certificates are never used. With
 # Universal SSL on, Cloudflare also publishes hidden CAA records for its own CAs
 # (including issuewild), which would defeat the records above.

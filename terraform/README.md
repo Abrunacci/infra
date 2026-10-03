@@ -11,6 +11,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | A/AAAA records for `server`, `status` and each project in `../projects.yml`: the root domain for a project on `"@"`, plus `www` | `dns.tf` |
 | CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
+| Google Search Console verification TXT record on the root domain | `dns.tf` |
 | Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
 | DMARC `p=reject`: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
 | Resend's sending records (two CNAMEs and the DKIM key) under `mail.abrunacci.dev` | `email.tf` |
