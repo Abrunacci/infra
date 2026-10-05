@@ -352,7 +352,7 @@ sudo grep -E 'caddy-(auth|flood)' /var/log/fail2ban.log | grep -E 'Ban|Unban' | 
 
 fail2ban reads Caddy's access log with two jails (`roles/caddy`, `/etc/fail2ban/jail.d/caddy.local`), and bans an address from every site, on every port and protocol (HTTP/3 is UDP):
 
-- **`caddy-auth`:** 20 answers 401 or 429 within 10 minutes bans for an hour. That is someone guessing passwords or tokens (a login, `/api/ingest`), or ignoring a backend's own rate limit.
+- **`caddy-auth`:** 20 answers 401 or 429 within 10 minutes bans for an hour. That is someone guessing passwords or tokens at a login or an API, or ignoring a backend's own rate limit.
 - **`caddy-flood`:** 600 requests of any kind within a minute bans for 15 minutes. A page with all its files is a few dozen requests.
 
 The thresholds are `caddy_fail2ban_*` in `roles/caddy/defaults`.
