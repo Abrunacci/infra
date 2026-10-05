@@ -69,6 +69,7 @@ services:
 {% endfor %}
     mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
     stop_grace_period: 20s
     labels:
@@ -113,6 +114,7 @@ services:
       - db
     mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
 {% endif %}
 

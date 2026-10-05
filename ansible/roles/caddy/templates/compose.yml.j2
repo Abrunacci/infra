@@ -44,6 +44,7 @@ services:
       {{ network }}: {}
 {% endfor %}
     mem_limit: {{ caddy_memory_limit }}
+    cpus: {{ caddy_cpus }}
     # The admin API listens on localhost inside the container only.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]

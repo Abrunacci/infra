@@ -43,6 +43,9 @@
 #                         project's backend (link-PROJECT), reached as
 #                         http://PROJECT-backend:PORT
 #                memory   64m to 512m (optional, defaults to 256m)
+#                cpus     share of the Droplet's CPU it may use, 0.1 to 1
+#                         (optional, defaults to 0.5), so one busy backend
+#                         cannot starve the others, Caddy or PostgreSQL
 #                migrate  with a database: the migrations' command, run before
 #                         each deploy switches, such as [alembic, upgrade, head]
 #                database_url_scheme
