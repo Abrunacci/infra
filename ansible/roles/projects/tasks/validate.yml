@@ -67,7 +67,7 @@
         or (item.backend is mapping
             and item.backend.keys()
                 | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
-                              'migrate', 'database_url_scheme', 'log_alerts']) | length == 0
+                              'cpus', 'migrate', 'database_url_scheme', 'log_alerts']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and (item.backend.port is not defined
@@ -167,11 +167,12 @@
       - projects_secrets.values() | select('string') | difference(['generated', 'manual']) | length == 0
       - projects_secrets.values() | reject('string') | reject('mapping') | list | length == 0
       - projects_memory is string and projects_memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
+      - projects_cpus is number and projects_cpus is not boolean and projects_cpus >= 0.1 and projects_cpus <= 1
     fail_msg: >-
-      projects.yml: invalid backend env, secrets or memory for {{ item.name }}. Names are uppercase
+      projects.yml: invalid backend env, secrets, memory or cpus for {{ item.name }}. Names are uppercase
       (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
       in secrets but not both; env values are quoted strings on one line; secrets are generated, manual or
-      {from: PROJECT, key: KEY}; memory goes from 64m to 512m. See projects.schema.json.
+      {from: PROJECT, key: KEY}; memory goes from 64m to 512m; cpus is a number from 0.1 to 1. See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
   loop_control:
@@ -180,6 +181,7 @@
     projects_env: "{{ item.backend.env | default({}) }}"
     projects_secrets: "{{ item.backend.secrets | default({}) }}"
     projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
+    projects_cpus: "{{ item.backend.cpus | default(projects_backend_default_cpus) }}"
     projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,

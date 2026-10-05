@@ -193,6 +193,12 @@
           "type": "string",
           "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
         },
+        "cpus": {
+          "description": "CPU limit of the container, in CPUs, from 0.1 to 1 (the Droplet has one). Defaults to 0.5.",
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1
+        },
         "log_alerts": {
           "description": "Log lines of the backend to be emailed about (log-alerts, every 5 minutes, one email per run). The lines are emailed as they were logged: only match lines without personal data. Rule names are unique within the backend: checked by the playbook.",
           "type": "array",

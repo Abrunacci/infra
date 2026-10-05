@@ -4,6 +4,10 @@
 caddy_image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
 caddy_dir: "{{ infra_opt_dir }}/caddy"
 caddy_memory_limit: 256m
+# Half of the Droplet's one CPU, like each backend (projects.yml, cpus): a
+# flood of requests slows Caddy down instead of starving PostgreSQL and the
+# backends. TLS handshakes are the expensive part.
+caddy_cpus: 0.5
 # Access log: one JSON line per request, for every site, written by Caddy to
 # a file on the host (mounted at the same path). Not the journal: journald
 # takes at most 10,000 entries every 30 s from Docker, all containers
