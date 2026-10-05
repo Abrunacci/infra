@@ -39,3 +39,11 @@
       tags: [backup]
     - role: gatus
       tags: [gatus]
+  post_tasks:
+    # After every role, whatever --tags are given: a warning at the end of the
+    # run (ignored=1 in the recap) while the server has no check from outside.
+    - name: Warn if nothing outside the server watches it
+      ansible.builtin.import_role:
+        name: gatus
+        tasks_from: healthchecks
+      tags: [always]

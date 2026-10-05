@@ -45,6 +45,14 @@ gatus_host_failure_threshold: 2
 # limit, roles/backup).
 gatus_backup_max_age_hours: "{{ backup_max_age_hours | default(26) }}"
 
+# The check from outside the server: gatus-heartbeats pings healthchecks.io
+# at the end of every run (gatus_host_check_calendar), and healthchecks.io
+# alerts if the pings stop, which is what happens when the whole server, or
+# Gatus, is down. The ping URL is stored on the server by
+# `gatus-credentials healthchecks`; until then, every playbook run ends with
+# a warning (tasks/healthchecks.yml).
+gatus_healthchecks_ping_base: https://hc-ping.com
+
 # Where the alerts go. Each channel is one file, templates/alerting-<channel>.yaml.j2,
 # plus its credentials (<channel>.env). Changing channels: ansible/README.md,
 # "Status page and alerts".

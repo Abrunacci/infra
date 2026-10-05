@@ -11,8 +11,11 @@
 #       backup     only when the last successful backup is older than
 #                  <target> hours: a failure, so a backup that stopped
 #                  running alerts on time. backup-run pushes its own results.
+#       Then it pings healthchecks.io, from outside the server: a success if
+#       Gatus took every push, a failure (/fail) if it did not. If the pings
+#       stop (the whole server is down), healthchecks.io alerts by itself.
 #   gatus-heartbeats backup ok|failed [SECONDS]
-#       backup-run's result, as it finishes.
+#       backup-run's result, as it finishes. No ping.
 #
 # What a failure says is shown on the public status page, so it stays
 # generic: a backup's own reason is only on the server (last-run, journal).
@@ -22,6 +25,11 @@
 # Pushes go to Gatus' loopback port with the token in push.env; the token is
 # passed to curl on stdin, never as an argument. Exits non-zero only when a
 # push did not reach Gatus; a failing check is pushed, not an error.
+#
+# The ping URL is in healthchecks.env (stored by gatus-credentials
+# healthchecks). It is passed to curl on stdin too, and never printed. Without
+# it, or if healthchecks.io does not answer, only a warning is printed (to the
+# journal, under the timer): the checks are not held back by it.
 # Installed by Ansible (roles/gatus) as /usr/local/sbin/gatus-heartbeats.
 set -euo pipefail
 export LC_ALL=C
@@ -42,6 +50,7 @@ fail() {
 . "$CONF"
 token="$(sed -n 's/^GATUS_PUSH_TOKEN=//p' "$GATUS_SECRETS_DIR/push.env" 2>/dev/null || true)"
 [[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "$GATUS_SECRETS_DIR/push.env has no token (run the playbook)"
+readonly HEALTHCHECKS_ENV="$GATUS_SECRETS_DIR/healthchecks.env"
 
 # push KEY ok|failed DETAIL [SECONDS]
 push() {
@@ -64,6 +73,42 @@ push() {
     return 1
   fi
   echo "$key: $2${3:+ ($3)}"
+}
+
+# Gatus restarts when its config changes, and starts a little after the
+# server boots: it gets a minute before a run counts it as down.
+wait_for_gatus() {
+  local deadline=$((SECONDS + 60))
+  until curl --silent --fail --max-time 5 --output /dev/null "$GATUS_PUSH_URL/health"; do
+    if ((SECONDS >= deadline)); then
+      echo "Gatus did not answer on $GATUS_PUSH_URL for a minute" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+# ping_healthchecks ok|fail MESSAGE
+ping_healthchecks() {
+  local url out
+  url="$(sed -n 's/^HEALTHCHECKS_PING_URL=//p' "$HEALTHCHECKS_ENV" 2>/dev/null || true)"
+  if [[ -z "$url" ]]; then
+    echo "healthchecks: no ping URL, so nothing outside the server notices if it goes down" \
+      "(run: sudo gatus-credentials healthchecks)" >&2
+    return 0
+  fi
+  [[ "$1" == ok ]] || url+=/fail
+  # The message shows in the check's log on healthchecks.io.
+  if ! out="$(printf 'url = "%s"\n' "$url" \
+    | curl --silent --show-error --max-time 10 --retry 2 --config - --data-raw "$2" 2>&1)"; then
+    echo "healthchecks: not reached: $(tail -n 1 <<<"$out" | tr -cd '[:print:]' | cut -c1-160)" >&2
+    return 0
+  fi
+  if [[ "$out" != OK ]]; then
+    echo "healthchecks: answered: $(tr -cd '[:print:]' <<<"$out" | cut -c1-160)" >&2
+    return 0
+  fi
+  echo "healthchecks: $1"
 }
 
 check_service() {
@@ -122,6 +167,8 @@ if [[ $# -gt 0 ]]; then
 fi
 
 status=0
+gatus_took_all=true
+wait_for_gatus || gatus_took_all=false
 while read -r key check target; do
   [[ -n "$key" && "$key" != \#* ]] || continue
   case "$check" in
@@ -131,6 +178,11 @@ while read -r key check target; do
     *) echo "$key: unknown check $check" >&2; status=1; continue ;;
   esac
   [[ -n "$result" ]] || continue
-  push "$key" "${result%% *}" "${result#* }" || status=1
+  push "$key" "${result%% *}" "${result#* }" || { status=1; gatus_took_all=false; }
 done <"$LIST"
+if [[ "$gatus_took_all" == true ]]; then
+  ping_healthchecks ok "Gatus took the server's checks"
+else
+  ping_healthchecks fail "Gatus did not take the server's checks"
+fi
 exit "$status"

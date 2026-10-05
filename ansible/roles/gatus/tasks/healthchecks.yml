@@ -1,0 +1,23 @@
+---
+# The last task of every run (site.yml, post_tasks), whatever --tags are
+# given. Without the ping URL nothing outside the server notices it going
+# down, and that must not go unseen: the run does not stop, but this task
+# fails, shows as "...ignoring" at the very end, counts as ignored=1 in the
+# PLAY RECAP, and is listed in the run log's summary (./play).
+
+# Written by `gatus-credentials healthchecks` on the server; never passes
+# through Ansible.
+- name: Look for the healthchecks.io ping URL
+  ansible.builtin.stat:
+    path: "{{ gatus_secrets_dir }}/healthchecks.env"
+  register: gatus_healthchecks
+
+- name: "WARNING: no check from outside the server (healthchecks.io)"
+  ansible.builtin.assert:
+    that: gatus_healthchecks.stat.exists
+    fail_msg: >-
+      The server has no check from outside: if it goes down, nobody is told. On the server, run:
+      sudo gatus-credentials healthchecks (see ansible/README.md, "Status page and alerts").
+    quiet: true
+  register: gatus_healthchecks_warning
+  ignore_errors: true

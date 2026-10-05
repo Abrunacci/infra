@@ -9,3 +9,5 @@ SMTP_USERNAME={{ gatus_smtp_username }}
 SMTP_FROM={{ gatus_email_from | regex_replace('^.*<(.*)>$', '\\1') }}
 # Where gatus-heartbeats pushes (published on loopback only).
 GATUS_PUSH_URL=http://127.0.0.1:{{ gatus_push_port }}
+# Where the server's check outside it lives (gatus-credentials healthchecks).
+HEALTHCHECKS_PING_BASE={{ gatus_healthchecks_ping_base }}
