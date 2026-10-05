@@ -14,9 +14,9 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 | `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
-| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent` and the internal backends. See "Status page and alerts" |
+| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent` and the internal backends. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. See "Status page and alerts" |
 
-The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up.
+The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up. After the last role, every run, whatever `--tags` are given, ends with a warning while the server has no check from outside (see "Status page and alerts").
 
 ## Design notes
 
@@ -577,7 +577,12 @@ Every check uses the public address, from the server itself: DNS, the certificat
 - **Checked before it is written.** Gatus reloads its config by itself, and exits if it is broken. So the playbook first starts it in a throwaway container with the new config (`gatus-validate`), and keeps the current one unless Gatus starts and has the alert channel configured. The second check matters: with an incomplete channel (an empty recipient, say), Gatus starts anyway and drops every alert.
 - **Health.** The image holds nothing but Gatus, so it has no Docker healthcheck; the playbook asks `/health` from Caddy's container after every run.
 
-**What it cannot see.** If the whole server is down, Gatus is down with it. A check from outside the server comes in a later change.
+**The check from outside.** If the whole server is down, Gatus is down with it and cannot tell anyone. So [healthchecks.io](https://healthchecks.io) (free plan) watches from outside: at the end of every run (every 5 minutes), `gatus-heartbeats` pings the server's check there, and healthchecks.io emails when the pings stop.
+- **What a ping says.** A success when Gatus took every push. A failure (`/fail`, which alerts at once) when it did not, since then the status page and its alerts are blind too. Gatus gets a minute to answer first: it restarts when its config changes and starts a little after a reboot.
+- **When it alerts.** The check expects a ping every 5 minutes, with 10 minutes of grace: the server going down is reported 10 to 15 minutes later. healthchecks.io emails again when the pings come back.
+- **The ping URL is a secret.** With it, anyone can report the server as up. It is stored on the server by `sudo gatus-credentials healthchecks`, in `/etc/infra/secrets/gatus/healthchecks.env` (root only, not backed up: typed in again), and passed to curl on stdin, never as an argument or in any output.
+- **Never in the way.** Without the URL, or if healthchecks.io does not answer, the pushes to Gatus go on and `gatus-heartbeats` only notes it in the journal. The playbook does not stop either, but every run ends with a failed and ignored task, `WARNING: no check from outside the server (healthchecks.io)`, counted as `ignored=1` in the PLAY RECAP and listed in the run log's summary, until the URL is stored.
+- **What it cannot see.** If Gatus runs but its emails do not go out (a revoked Resend key, say), healthchecks.io does not know: it only hears that Gatus answers.
 
 ### Setting it up
 
@@ -588,6 +593,11 @@ Every check uses the public address, from the server itself: DNS, the certificat
    - Only if Resend accepts it is the key stored, in `/etc/infra/secrets/gatus/email.env`.
    - Run it again to replace the key; a running Gatus is recreated to use the new one.
 4. **The playbook again.** Gatus starts, and `https://status.abrunacci.dev` shows every project.
+5. **The check from outside,** in healthchecks.io: Add Check, name `server.abrunacci.dev`, schedule Simple, period 5 minutes, grace time 10 minutes, with the Email integration on. Copy its ping URL (`https://hc-ping.com/<uuid>`); no API key is needed.
+6. **Its ping URL,** on the server: `sudo gatus-credentials healthchecks`.
+   - It asks for the URL without showing it, and sends one ping with it.
+   - Only if healthchecks.io answers `OK` is the URL stored, in `/etc/infra/secrets/gatus/healthchecks.env`. The check shows as up there.
+   - Run it again to replace the URL. `gatus-heartbeats` reads it on every run, so nothing is restarted.
 
 Resend's SMTP server is used on port 2587 (STARTTLS): DigitalOcean blocks outgoing SMTP on ports 25, 465 and 587.
 
@@ -595,6 +605,7 @@ Resend's SMTP server is used on port 2587 (STARTTLS): DigitalOcean blocks outgoi
 
 ```sh
 sudo gatus-credentials                                  # store or replace the alerts' key (sends a test email)
+sudo gatus-credentials healthchecks                     # store or replace the ping URL of the check from outside (sends a ping)
 sudo docker logs --since 1h gatus-gatus-1               # what Gatus checked and sent
 sudo gatus-heartbeats                                   # push the server's checks now, and print them
 systemctl list-timers gatus-heartbeats.timer            # when they run next
