@@ -67,7 +67,7 @@
         or (item.backend is mapping
             and item.backend.keys()
                 | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
-                              'migrate', 'database_url_scheme']) | length == 0
+                              'migrate', 'database_url_scheme', 'log_alerts']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and (item.backend.port is not defined
@@ -186,6 +186,56 @@
 # and a private network to that project's backend (link-PROJECT). The source
 # must be another project's backend with a port, which declares KEY as
 # generated or manual: a copy of a copy is not allowed.
+# A backend's log alerts (roles/gatus, log-alerts), one rule at a time. The
+# patterns are checked as Python regular expressions when the rules are
+# written (log-alerts --check).
+- name: Check each backend's log alerts
+  ansible.builtin.assert:
+    that:
+      - item.backend.log_alerts is sequence and item.backend.log_alerts is not string
+      - item.backend.log_alerts is not mapping
+      - item.backend.log_alerts | length >= 1 and item.backend.log_alerts | length <= 10
+      - item.backend.log_alerts | reject('mapping') | list | length == 0
+      - projects_rule_names | unique | length == projects_rule_names | length
+      - item.backend.log_alerts | map('dict2items') | map('map', attribute='key') | map('difference', ['subject'])
+        | map('sort') | reject('equalto', ['match', 'name', 'note']) | list | length == 0
+      - projects_rule_names | reject('string') | list | length == 0
+      - projects_rule_names | reject('match', '^[a-z0-9][a-z0-9_.-]{0,39}\Z') | list | length == 0
+      - projects_rule_notes | reject('string') | list | length == 0
+      - projects_rule_notes | reject('match', '^[^\n\r]{1,300}\Z') | list | length == 0
+      - projects_rule_matches | reject('sequence') | list | length == 0
+      - projects_rule_matches | select('string') | list | length == 0
+      - projects_rule_matches | select('mapping') | list | length == 0
+      - projects_rule_matches | map('length') | select('lt', 1) | list | length == 0
+      - projects_rule_matches | map('length') | select('gt', 5) | list | length == 0
+      - projects_rule_matches | flatten(levels=1) | reject('string') | list | length == 0
+      - projects_rule_matches | flatten(levels=1) | reject('match', '^[^\n\r]{1,200}\Z') | list | length == 0
+      # The format's fields are checked against the pattern's groups by
+      # log-alerts --check.
+      - projects_rule_subjects | reject('mapping') | list | length == 0
+      - projects_rule_subjects | map('dict2items') | map('map', attribute='key') | map('sort')
+        | reject('equalto', ['format', 'pattern']) | list | length == 0
+      - projects_rule_subjects | map(attribute='pattern') | reject('string') | list | length == 0
+      - projects_rule_subjects | map(attribute='pattern') | reject('match', '^[^\n\r]{1,300}\Z') | list | length == 0
+      - projects_rule_subjects | map(attribute='format') | reject('string') | list | length == 0
+      - projects_rule_subjects | map(attribute='format') | reject('match', '^[^\n\r]{1,120}\Z') | list | length == 0
+    fail_msg: >-
+      projects.yml: invalid log_alerts for {{ item.name }}. Each rule has a unique name (a-z, 0-9, _ . -), one to
+      five match patterns on one line each, a note of one line, and optionally a subject with a pattern and a
+      format. See projects.schema.json.
+    quiet: true
+  loop: >-
+    {{ projects_registry.projects | selectattr('backend', 'defined') | selectattr('backend', 'mapping')
+       | selectattr('backend.log_alerts', 'defined') | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_rules: "{{ item.backend.log_alerts | select('mapping') | list }}"
+    projects_rule_names: "{{ projects_rules | map(attribute='name', default=none) | list }}"
+    projects_rule_notes: "{{ projects_rules | map(attribute='note', default=none) | list }}"
+    projects_rule_matches: "{{ projects_rules | map(attribute='match', default=none) | list }}"
+    projects_rule_subjects: "{{ projects_rules | selectattr('subject', 'defined') | map(attribute='subject') | list }}"
+
 - name: Check each linked secret
   ansible.builtin.assert:
     that:

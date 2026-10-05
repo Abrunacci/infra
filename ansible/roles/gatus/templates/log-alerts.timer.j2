@@ -1,0 +1,11 @@
+# Managed by Ansible (roles/gatus). If it stops, Gatus notices: the Log alerts
+# heartbeat gets no push for {{ gatus_host_heartbeat }} and alerts by itself.
+[Unit]
+Description=Email the backends' log lines projects.yml asks for ({{ gatus_host_check_calendar }})
+
+[Timer]
+OnCalendar={{ gatus_host_check_calendar }}
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

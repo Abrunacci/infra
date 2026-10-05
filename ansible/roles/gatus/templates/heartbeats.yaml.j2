@@ -3,8 +3,10 @@
    come from this one list.
      key        Gatus' own name for it, from group and name (its
                 config/key/key.go); the server pushes to /api/v1/endpoints/<key>/external
-     check      what gatus-heartbeats runs: backup, service or container
-     target     the backup's maximum age in hours, the systemd unit or the project
+     check      what gatus-heartbeats runs: backup, service or container; or
+                log-alerts, pushed only by log-alerts itself
+     target     the backup's maximum age in hours, the systemd unit or the
+                project (- for log-alerts)
    The groups and names are on the public page: generic, nothing internal. #}
 {% macro key(group, name) -%}
 {{ group | lower | trim | regex_replace('[/_.,# +&]', '-') }}_{{ name | lower | trim | regex_replace('[/_.,# +&]', '-') }}
@@ -27,6 +29,15 @@
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: do-agent is not running, so DigitalOcean's memory and disk alerts are blind. On the server, see systemctl status do-agent.
+- group: Server
+  name: Log alerts
+  key: {{ key('Server', 'Log alerts') }}
+  check: log-alerts
+  target: "-"
+  interval: {{ gatus_host_heartbeat }}
+  failure_threshold: {{ gatus_host_failure_threshold }}
+  success_threshold: 1
+  description: log-alerts could not read the backends' logs or send its email, so the lines projects.yml asks to hear about (log_alerts) are not being emailed. On the server, see journalctl -u log-alerts.
 {% for p in projects_registry.projects if p.subdomain is not defined and p.backend is defined %}
 {#   Grouped by the project's name, not its title: the name is what the key
      needs (letters, digits and -), and it is already public in the repo. #}

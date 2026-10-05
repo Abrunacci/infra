@@ -1,0 +1,8 @@
+# Managed by Ansible (roles/gatus).
+[Unit]
+Description=Email the backends' log lines projects.yml asks for (log-alerts)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/log-alerts
+TimeoutStartSec=5min

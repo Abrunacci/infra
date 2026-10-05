@@ -63,6 +63,7 @@
     - gatus-validate
     - gatus-credentials
     - gatus-heartbeats
+    - log-alerts
 
 - name: Write the settings gatus-credentials reads
   ansible.builtin.template:
@@ -210,6 +211,10 @@
   retries: 15
   delay: 2
   changed_when: false
+
+# After the heartbeats: each run of log-alerts pushes to its own.
+- name: Set up the log alerts
+  ansible.builtin.import_tasks: log-alerts.yml
 
 - name: Remove older Gatus images
   ansible.builtin.command:

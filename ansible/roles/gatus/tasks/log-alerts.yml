@@ -1,0 +1,63 @@
+---
+# log-alerts: emails the backends' log lines that projects.yml asks to hear
+# about (log_alerts). Installed with the other Gatus commands (main.yml); it
+# sends with the alerts' key and address, and pushes to its heartbeat.
+
+# It only knows email: changing the channel needs teaching it the new one.
+- name: Check that log-alerts can use the alert channel
+  ansible.builtin.assert:
+    that: gatus_alert_channel == 'email'
+    fail_msg: >-
+      log-alerts only sends email, and the alert channel is {{ gatus_alert_channel }}. See ansible/README.md,
+      "Changing the alert channel".
+    quiet: true
+
+# Only root reads it: the cursor is where in the journal the last run stopped.
+- name: Create the log alerts' state directory
+  ansible.builtin.file:
+    path: /var/lib/infra/log-alerts
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Checked by log-alerts itself before it replaces the current file: every
+# pattern must be a valid regular expression.
+- name: Write the log alerts' rules
+  ansible.builtin.template:
+    src: log-alerts.json.j2
+    dest: /etc/infra/log-alerts.json
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/sbin/log-alerts --check %s
+
+- name: Install the log alerts' service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - log-alerts.service
+    - log-alerts.timer
+  notify: Reload systemd for the heartbeats
+
+- name: Apply the log alerts' systemd changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Start the log alerts' timer
+  ansible.builtin.systemd_service:
+    name: log-alerts.timer
+    enabled: true
+    state: started
+
+# Proves it reads the journal, the key and the address, and reaches its
+# heartbeat. The first time, it only records where the journal ends; later,
+# it emails what matched since the last run, as the timer would.
+- name: Run the log alerts now
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/log-alerts]
+  register: gatus_log_alerts
+  changed_when: gatus_log_alerts.stdout is search('emailed')

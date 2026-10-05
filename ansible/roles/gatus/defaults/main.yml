@@ -53,6 +53,12 @@ gatus_backup_max_age_hours: "{{ backup_max_age_hours | default(26) }}"
 # a warning (tasks/healthchecks.yml).
 gatus_healthchecks_ping_base: https://hc-ping.com
 
+# Log alerts: the backends' log lines projects.yml asks to hear about
+# (log_alerts), emailed by log-alerts on the same calendar as the heartbeats
+# (gatus_host_check_calendar), which also gives its heartbeat's interval.
+# One email per run, with at most this many lines; the rest are counted.
+gatus_log_alerts_max_lines: 20
+
 # Where the alerts go. Each channel is one file, templates/alerting-<channel>.yaml.j2,
 # plus its credentials (<channel>.env). Changing channels: ansible/README.md,
 # "Status page and alerts".
