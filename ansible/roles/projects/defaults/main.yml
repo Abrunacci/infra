@@ -48,6 +48,10 @@ projects_registry_config_dir: "{{ infra_secrets_dir }}/registry"
 # (10004). No login, no home, owns no file on the host.
 projects_backends_uid: 10005
 projects_backend_default_memory: 256m
+# Half of the Droplet's one CPU: a backend under load (a flood of requests,
+# a hot loop) slows down itself instead of starving the other backends,
+# Caddy and PostgreSQL. PostgreSQL has no limit.
+projects_backend_default_cpus: 0.5
 # Env names the infrastructure sets itself (per-project databases): a project
 # cannot set them in env or secrets.
 projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]
