@@ -31,6 +31,8 @@ services:
       - /srv/sites:/srv/sites:ro
       - ./data:/data
       - ./config:/config
+      # The access log (Caddyfile, access_log), at the same path as on the host.
+      - {{ caddy_log_dir }}:/var/log/caddy
     # edge for Gatus; one network per public backend, which only that backend
     # shares with Caddy (edge_project_networks).
     # The published ports go through the network that is Caddy's default

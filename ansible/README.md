@@ -8,7 +8,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH |
 | `monitoring` | DigitalOcean's monitoring agent (`do-agent`) from DigitalOcean's apt repository, running and enabled. It reports the memory and disk usage the resource alerts fire on (`terraform/monitoring.tf`); the package upgrades itself daily |
 | `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation for the containers that are not backends (Caddy, PostgreSQL, Gatus; backends log to the journal) and `no-new-privileges` for every container; the shared `edge` (Caddy and Gatus) and `db` networks |
-| `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability, and half of the CPU (`caddy_cpus`). It creates one network per public backend (`edge-<name>`) and joins them all |
+| `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability, and half of the CPU (`caddy_cpus`). Its access log goes to `/var/log/caddy` (see "Access log"). It creates one network per public backend (`edge-<name>`) and joins them all |
 | `postgres` | PostgreSQL 17 in a container on the internal `db` network and on one internal network per project with a database (`db-<name>`), with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server. Refuses an image whose major version is not the data's |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
@@ -321,7 +321,24 @@ Each backend logs to the systemd journal (Docker's `journald` driver), tagged `b
 - **It holds personal data.** A backend's log can carry what visitors send. The landing's contact form (`abrunacci-dev`) logs the full text of the messages it holds back or discards: the sender's name, email address and message. Those entries stay on the server until the cap rotates them out; no other limit applies. Backups do not include the journal.
 - **Only root reads it.** Reading the journal takes `sudo` (or the `adm` or `systemd-journal` groups; the admin user is in neither). journald forwards every entry to rsyslog, which writes `/var/log/syslog` and rotates it on its own schedule: `roles/base` keeps `backend.*` and `backend-log` out of it (`/etc/rsyslog.d/10-infra-backends.conf`), so the cap is the only retention for them.
 - **Rate limit.** journald accepts up to 10,000 entries every 30 s from Docker, for all containers together; past that it drops entries until the period ends, and logs that it did. A backend should not log every request at that rate.
-- Caddy, PostgreSQL and Gatus keep Docker's `local` driver (three 10 MB files per container, `roles/docker`), so `docker logs` for them still loses its history when they are recreated.
+- Caddy, PostgreSQL and Gatus keep Docker's `local` driver (three 10 MB files per container, `roles/docker`), so `docker logs` for them still loses its history when they are recreated. Caddy's access log is a file of its own (see "Access log").
+
+### Access log
+
+```sh
+sudo tail -f /var/log/caddy/access.log                      # follow it, one JSON line per request
+sudo grep -h '"host":"epb.abrunacci.dev"' /var/log/caddy/access.log | tail   # one site
+sudo ls -lh /var/log/caddy                                  # current file and rotated ones
+sudo sh -c 'zcat /var/log/caddy/access-*.log.gz' | grep -c '"status":429'   # the rotated ones
+```
+
+Caddy writes every request to every site (`server`, `status`, `www` and each project) to `/var/log/caddy/access.log` on the host, one JSON line each: time, client address, method, host, path, status, size, duration and request headers. It is what shows who asked for what, and what fail2ban reads.
+
+- **A file, not the journal.** journald takes at most 10,000 entries every 30 s from Docker, all containers together: a flood of requests would crowd out the backends' logs and rotate them away. The file is Caddy's alone.
+- **Rotated by Caddy.** At 20 MB the file is renamed with its time and gzipped; the 10 newest old files are kept, and none older than 14 days (`caddy_access_log_*` in `roles/caddy/defaults`). At most 20 MB plus ten compressed files, a few dozen MB.
+- **It holds personal data:** visitors' IP addresses and the paths they asked for. Query strings are cut (`?REDACTED`) from the path and the `Referer`, since they can carry tokens such as a password reset link, and Caddy itself writes `Cookie`, `Set-Cookie` and `Authorization` as `REDACTED`. Bodies are never logged. The 14 days are the only retention, and backups do not include it.
+- **Only root reads it.** The directory belongs to the `caddy` user (0750), and the files are 0600.
+- Gatus checks every site through Caddy each minute, so its requests are in the log too, from the address of Docker's `edge` gateway.
 
 ### Databases
 
