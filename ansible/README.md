@@ -561,6 +561,7 @@ Every check uses the public address, from the server itself: DNS, the certificat
 |---|---|---|---|
 | Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
 | Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
+| Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or send its email (see "Log alerts") | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
 
 - **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
@@ -613,12 +614,39 @@ sudo journalctl -u gatus-heartbeats --since -1h         # what they pushed
 curl -s https://status.abrunacci.dev/api/v1/endpoints/statuses | head -c 300   # the page's data
 ```
 
+### Log alerts
+
+Some log lines are worth an email even though nothing failed, such as cuanto-cuesta's `jump_confirmed`: a price that jumped past its threshold and became the current one. A backend lists them in `projects.yml`, under `log_alerts`:
+
+```yaml
+    backend:
+      log_alerts:
+        - name: jump_confirmed                                     # in the email's subject
+          match: ['cuanto_cuesta\.ingest', '\bjump_confirmed\b']   # all of them must be found in the line
+          note: Informational, nothing to do: ...                  # the email's first line
+```
+
+- **How.** `log-alerts` runs every 5 minutes (`log-alerts.timer`), reads what each backend with rules logged since the last run (`journalctl -t backend.<project>`, from a cursor in `/var/lib/infra/log-alerts`), and keeps the lines that match a rule. The patterns are Python regular expressions; in YAML, single-quote them so backslashes stay as written. The playbook checks them before it writes `/etc/infra/log-alerts.json`.
+- **One email per run,** with every matching line and its time (UTC), up to 20 (`gatus_log_alerts_max_lines`); the rest are only counted, with the `journalctl` command that shows them. Nothing matched, no email.
+- **Never twice, never skipped.** If the email is not sent, the cursor stays and the next run tries again with the same lines. The first run, and any run with no rules, only records where the journal ends: lines logged before a rule existed are not emailed (`--dry-run --since` finds them).
+- **Through the alerts' channel:** the same Resend key (`gatus-credentials`), sender and address as Gatus' emails. It only knows email: changing the channel stops the playbook until `log-alerts` learns the new one.
+- **Watched.** Each run pushes its result to the `Server / Log alerts` heartbeat: Gatus alerts after two failed runs in a row, and when runs stop (15 minutes without a push). A broken key fails both, though: Gatus' email about it goes out with the same key, so it only shows on the status page.
+- **The lines leave the server.** The email carries the matching lines as logged, unlike the rest of the backends' logs ("Backend logs"). A rule must only match lines without personal data.
+
+```sh
+sudo log-alerts --dry-run                  # what the next run would email, without sending it
+sudo log-alerts --dry-run --since -7d      # what the rules match in the last 7 days
+sudo log-alerts                            # run now, as the timer does
+sudo journalctl -u log-alerts --since -1h  # what the runs did
+```
+
 ### Changing the alert channel
 
 Each channel is one template, `roles/gatus/templates/alerting-<channel>.yaml.j2`, plus its credentials in `/etc/infra/secrets/gatus/<channel>.env`. The checks only name the channel (`gatus_alert_channel`), so changing it does not touch them. To move to another one, such as [ntfy](https://docs.ntfy.sh):
 1. Add `alerting-ntfy.yaml.j2`, with Gatus' settings for that channel, its secrets as `${...}` (for ntfy, the topic), and the same `default-alert` as `alerting-email.yaml.j2`.
 2. Teach `gatus-credentials` to store and test that channel's secrets in `ntfy.env`.
-3. Set `gatus_alert_channel: ntfy` in `roles/gatus/defaults/main.yml`, store the secrets, and run the playbook.
+3. Teach `log-alerts` (`scripts/log-alerts`, `send`) to send through it: until then, the playbook stops at "Check that log-alerts can use the alert channel".
+4. Set `gatus_alert_channel: ntfy` in `roles/gatus/defaults/main.yml`, store the secrets, and run the playbook.
 
 ## Rotating the admin SSH key
 

@@ -48,6 +48,14 @@
 #                database_url_scheme
 #                         with a database: the scheme of DATABASE_URL and
 #                         MIGRATION_DATABASE_URL (optional, postgresql)
+#                log_alerts
+#                         log lines to be emailed about, checked every 5
+#                         minutes (optional): each rule has a name, match (Python
+#                         regular expressions, single-quoted; a line matches
+#                         when all are found in it) and a note, what the line
+#                         means. The lines are emailed as logged: never match
+#                         lines with personal data. See ansible/README.md,
+#                         "Log alerts".
 projects:
   - name: cuanto-cuesta
     subdomain: cuanto-cuesta
@@ -69,6 +77,14 @@ projects:
       memory: 256m
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
+      # Prices and sources only, no personal data. The other jump_* events
+      # (held, confirming, discarded) are not emailed.
+      log_alerts:
+        - name: jump_confirmed
+          match: ['cuanto_cuesta\.ingest', '\bjump_confirmed\b']
+          note: >-
+            Informational, nothing to do: a reading that jumped past the threshold confirmed itself and is now the
+            current one (a real market move, or a source that broke for good).
 
   - name: abrunacci-dev
     subdomain: "@"

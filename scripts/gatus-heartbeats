@@ -16,6 +16,8 @@
 #       stop (the whole server is down), healthchecks.io alerts by itself.
 #   gatus-heartbeats backup ok|failed [SECONDS]
 #       backup-run's result, as it finishes. No ping.
+#   gatus-heartbeats log-alerts ok|failed
+#       log-alerts' result, at the end of each run. No ping.
 #
 # What a failure says is shown on the public status page, so it stays
 # generic: a backup's own reason is only on the server (last-run, journal).
@@ -154,14 +156,18 @@ check_backup_age() {
   echo failed "$detail"
 }
 
+# Results pushed by the program that produces them, as it ends.
 if [[ $# -gt 0 ]]; then
-  [[ "$1" == backup && ( "${2:-}" == ok || "${2:-}" == failed ) && $# -le 3 ]] \
-    || { echo "usage: gatus-heartbeats [backup ok|failed [SECONDS]]" >&2; exit 2; }
+  [[ ( "$1" == backup || "$1" == log-alerts ) && ( "${2:-}" == ok || "${2:-}" == failed ) && $# -le 3 ]] \
+    || { echo "usage: gatus-heartbeats [backup|log-alerts ok|failed [SECONDS]]" >&2; exit 2; }
   [[ -z "${3:-}" || "$3" =~ ^[0-9]+$ ]] || fail "SECONDS must be a number"
-  key="$(awk '$2 == "backup" { print $1; exit }' "$LIST")"
-  [[ -n "$key" ]] || fail "$LIST has no backup heartbeat"
-  detail=""
-  [[ "$2" == ok ]] || detail="the backup failed"
+  key="$(awk -v check="$1" '$2 == check { print $1; exit }' "$LIST")"
+  [[ -n "$key" ]] || fail "$LIST has no $1 heartbeat"
+  case "$1 $2" in
+    "backup failed") detail="the backup failed" ;;
+    "log-alerts failed") detail="the log alerts could not be checked or sent" ;;
+    *) detail="" ;;
+  esac
   push "$key" "$2" "$detail" "${3:-}"
   exit
 fi
@@ -175,6 +181,8 @@ while read -r key check target; do
     service) result="$(check_service "$target")" ;;
     container) result="$(check_container "$target")" ;;
     backup) result="$(check_backup_age "$target")" ;;
+    # Pushed by log-alerts itself; no push for its interval fails it.
+    log-alerts) continue ;;
     *) echo "$key: unknown check $check" >&2; status=1; continue ;;
   esac
   [[ -n "$result" ]] || continue

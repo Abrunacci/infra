@@ -192,6 +192,40 @@
           "description": "Memory limit of the container, from 64m to 512m. Defaults to 256m.",
           "type": "string",
           "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
+        },
+        "log_alerts": {
+          "description": "Log lines of the backend to be emailed about (log-alerts, every 5 minutes, one email per run). The lines are emailed as they were logged: only match lines without personal data. Rule names are unique within the backend: checked by the playbook.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/log_alert" }
+        }
+      }
+    },
+    "log_alert": {
+      "description": "A line matches when every pattern in match is found in it.",
+      "type": "object",
+      "required": ["name", "match", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Shown in the email's subject, such as jump_confirmed.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,39}$"
+        },
+        "match": {
+          "description": "Python regular expressions, each searched anywhere in the line. Single-quote them in YAML, so backslashes stay as written.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\n\\r]*$" }
+        },
+        "note": {
+          "description": "What the line means and whether anything must be done: the email's first line.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[^\\n\\r]*$"
         }
       }
     },

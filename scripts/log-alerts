@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Emails the backends' log lines that projects.yml asks to hear about.
+
+    log-alerts                       read what the backends logged since the last
+                                     run and email the lines that match a rule
+    log-alerts --dry-run [--since S] print what the next run would email, without
+                                     sending it or moving on; with --since (any
+                                     journalctl --since, such as -7d), search
+                                     that period instead
+    log-alerts --check FILE          check a rules file (the playbook's validate)
+
+The rules are each backend's log_alerts in projects.yml, written by the
+playbook to /etc/infra/log-alerts.json: a line logged by backend.<project>
+matches a rule when every one of its match patterns (Python regular
+expressions) is found in it. Run every 5 minutes by log-alerts.timer.
+
+Each run reads the journal from where the last one stopped (a cursor in
+/var/lib/infra/log-alerts), so no line is emailed twice or skipped. The first
+run, and any run with no rules, only records where the journal ends: lines
+logged before it are never emailed. All the lines a run finds go in one email,
+up to max_lines of them; the rest are counted. If the email is not sent, the
+cursor stays put and the next run tries again.
+
+Emails go to the alerts' address through the alerts' channel (only email):
+the Resend key gatus-credentials stored, the same sender and recipient as
+Gatus. Every run then pushes its result to the status page's "Log alerts"
+heartbeat (gatus-heartbeats log-alerts), so Gatus alerts when runs fail, and
+when they stop.
+
+The email carries the matching lines as they were logged, so they leave the
+server: a rule must only match lines without personal data.
+Installed by Ansible (roles/gatus) as /usr/local/sbin/log-alerts.
+"""
+
+import json
+import os
+import re
+import smtplib
+import socket
+import ssl
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+
+RULES = "/etc/infra/log-alerts.json"
+GATUS_CONF = "/etc/infra/gatus.conf"
+STATE_DIR = "/var/lib/infra/log-alerts"
+CURSOR = os.path.join(STATE_DIR, "cursor")
+HEARTBEATS = "/usr/local/sbin/gatus-heartbeats"
+# A longer line is cut in the email; the journal keeps all of it.
+MAX_LINE = 1000
+NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}\Z")
+PROJECT = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+class Failed(Exception):
+    pass
+
+
+def load_rules(path):
+    """Returns (rules, max_lines), each rule with its patterns compiled."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise Failed(f"cannot read {path}: {e}") from e
+    if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
+        raise Failed(f"{path}: no rules list")
+    max_lines = data.get("max_lines")
+    if not isinstance(max_lines, int) or isinstance(max_lines, bool) or not 1 <= max_lines <= 200:
+        raise Failed(f"{path}: max_lines must be a number from 1 to 200")
+    rules, seen = [], set()
+    for i, rule in enumerate(data["rules"]):
+        where = f"{path}: rule {i + 1}"
+        if not isinstance(rule, dict) or sorted(rule) != ["match", "name", "note", "project"]:
+            raise Failed(f"{where}: needs exactly project, name, match and note")
+        project, name, match, note = rule["project"], rule["name"], rule["match"], rule["note"]
+        if not isinstance(project, str) or not PROJECT.match(project):
+            raise Failed(f"{where}: invalid project {project!r}")
+        if not isinstance(name, str) or not NAME.match(name):
+            raise Failed(f"{where}: invalid name {name!r}")
+        if (project, name) in seen:
+            raise Failed(f"{where}: {project} has two rules named {name}")
+        seen.add((project, name))
+        if not isinstance(note, str) or not note.strip() or "\n" in note:
+            raise Failed(f"{where}: the note must be one line of text")
+        if not isinstance(match, list) or not match or not all(isinstance(p, str) and p for p in match):
+            raise Failed(f"{where}: match must be a list of patterns")
+        try:
+            patterns = [re.compile(p) for p in match]
+        except re.error as e:
+            raise Failed(f"{where}: invalid pattern: {e}") from e
+        rules.append({"project": project, "name": name, "note": note, "patterns": patterns})
+    return rules, max_lines
+
+
+def read_env(path):
+    """KEY=VALUE lines, as the shell files in /etc/infra hold them."""
+    values = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                key, sep, value = line.rstrip("\n").partition("=")
+                if sep and not key.startswith("#"):
+                    values[key] = value
+    except OSError as e:
+        raise Failed(f"cannot read {path}: {e}") from e
+    return values
+
+
+def journal(args):
+    """Yields the journal's entries for journalctl ARGS, oldest first."""
+    cmd = ["journalctl", "--no-pager", "--output=json", "--output-fields=MESSAGE,SYSLOG_IDENTIFIER", *args]
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+        for line in proc.stdout:
+            yield json.loads(line)
+        err = proc.stderr.read().decode(errors="replace").strip()
+    if proc.returncode != 0:
+        raise Failed(f"journalctl failed: {err[-300:]}")
+
+
+def message(entry):
+    # journalctl gives a message that is not valid UTF-8 as a list of bytes.
+    value = entry.get("MESSAGE", "")
+    if isinstance(value, list):
+        value = bytes(value).decode(errors="replace")
+    return value if isinstance(value, str) else ""
+
+
+def journal_end():
+    """The cursor of the journal's newest entry, whatever logged it."""
+    for entry in journal(["--lines=1"]):
+        return entry["__CURSOR"]
+    raise Failed("the journal is empty")
+
+
+def scan(rules, position):
+    """Returns (matches, last cursor read): position is ["--after-cursor=C"] or ["--since=S"]."""
+    tags = sorted({"backend." + r["project"] for r in rules})
+    by_tag = {}
+    for rule in rules:
+        by_tag.setdefault("backend." + rule["project"], []).append(rule)
+    matches, last = [], None
+    for entry in journal([*position, *(f"--identifier={t}" for t in tags)]):
+        last = entry["__CURSOR"]
+        text = message(entry)
+        for rule in by_tag.get(entry.get("SYSLOG_IDENTIFIER"), []):
+            if all(p.search(text) for p in rule["patterns"]):
+                when = datetime.fromtimestamp(int(entry["__REALTIME_TIMESTAMP"]) / 1e6, tz=timezone.utc)
+                matches.append((rule, when, text))
+                break
+    return matches, last
+
+
+def compose(matches, max_lines):
+    """Returns (subject, body) for one email with every match."""
+    groups = {}
+    for rule, when, text in matches:
+        groups.setdefault((rule["project"], rule["name"]), (rule, []))[1].append((when, text))
+    if len(groups) == 1:
+        (project, name), _ = next(iter(groups.items()))
+        subject = f"{project}: {name}" + (f" ({len(matches)})" if len(matches) > 1 else "")
+    else:
+        subject = f"Log alerts: {len(matches)} lines (" + ", ".join(f"{p} {n}" for p, n in groups) + ")"
+    parts, shown = [], 0
+    for (project, name), (rule, lines) in groups.items():
+        count = f"{len(lines)} line" + ("s" if len(lines) > 1 else "")
+        parts.append(f"{project}: {name}, {count}\n{rule['note']}\n")
+        for when, text in lines:
+            if shown == max_lines:
+                break
+            shown += 1
+            if len(text) > MAX_LINE:
+                text = text[:MAX_LINE] + " [cut]"
+            parts.append(f"{when:%Y-%m-%d %H:%M:%S} UTC  {text}")
+        parts.append("")
+    if shown < len(matches):
+        first = min(when for _, when, _ in matches)
+        tags = " ".join(sorted({f"-t backend.{p}" for p, _ in groups}))
+        parts.append(
+            f"{len(matches) - shown} more not shown. On the server: sudo journalctl {tags} "
+            f"--since '{first:%Y-%m-%d %H:%M:%S} UTC'\n"
+        )
+    parts.append(f"Sent by log-alerts on {socket.gethostname()}. The rules are log_alerts in projects.yml.")
+    return subject, "\n".join(parts) + "\n"
+
+
+def send(subject, body):
+    conf = read_env(GATUS_CONF)
+    if conf.get("GATUS_ALERT_CHANNEL") != "email":
+        raise Failed(f"the alert channel is {conf.get('GATUS_ALERT_CHANNEL')}; log-alerts only knows email")
+    secrets = conf.get("GATUS_SECRETS_DIR", "")
+    password = read_env(os.path.join(secrets, "email.env")).get("SMTP_PASSWORD")
+    to = read_env(os.path.join(secrets, "alerts.env")).get("ALERT_EMAIL_TO")
+    if not password:
+        raise Failed("no Resend key stored (run: sudo gatus-credentials)")
+    if not to:
+        raise Failed("no alert address (run the playbook)")
+    sender = conf["SMTP_FROM"]
+    msg = EmailMessage()
+    msg["From"] = f"Status <{sender}>"
+    msg["To"] = f"<{to}>"
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(usegmt=True)
+    msg["Message-ID"] = make_msgid("log-alerts", domain=sender.partition("@")[2])
+    msg.set_content(body)
+    # STARTTLS is required and the certificate verified, as by gatus-credentials.
+    try:
+        with smtplib.SMTP(conf["SMTP_HOST"], int(conf["SMTP_PORT"]), timeout=30) as smtp:
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.login(conf["SMTP_USERNAME"], password)
+            smtp.send_message(msg)
+    except (OSError, smtplib.SMTPException) as e:
+        raise Failed(f"the email was not sent: {str(e)[:300]}") from e
+
+
+def save_cursor(cursor):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".cursor.")
+    with os.fdopen(fd, "w") as f:
+        f.write(cursor + "\n")
+    os.replace(tmp, CURSOR)
+
+
+def read_cursor():
+    try:
+        with open(CURSOR) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def heartbeat(result):
+    """Pushes the run's result to the status page. Never fails the run."""
+    try:
+        out = subprocess.run(
+            [HEARTBEATS, "log-alerts", result], capture_output=True, text=True, timeout=120, check=False
+        )
+        if out.returncode != 0:
+            print(f"status page: not updated: {(out.stderr or out.stdout).strip()[-300:]}", file=sys.stderr)
+    except OSError as e:
+        print(f"status page: not updated: {e}", file=sys.stderr)
+
+
+def run(rules, max_lines):
+    """One timer run. Returns how many lines were emailed."""
+    cursor = read_cursor()
+    if not rules or cursor is None:
+        # Start from the journal's end: lines logged before are not emailed.
+        save_cursor(journal_end())
+        if rules:
+            print("first run: reading the journal from now on")
+        return 0
+    matches, last = scan(rules, [f"--after-cursor={cursor}"])
+    if matches:
+        send(*compose(matches, max_lines))
+        print(f"emailed {len(matches)} line(s)")
+    if last:
+        save_cursor(last)
+    return len(matches)
+
+
+def dry_run(rules, max_lines, since):
+    if since is not None:
+        position = [f"--since={since}"]
+    else:
+        cursor = read_cursor()
+        if cursor is None:
+            print("no cursor yet: the next run only records where the journal ends")
+            return
+        position = [f"--after-cursor={cursor}"]
+    matches, _ = scan(rules, position) if rules else ([], None)
+    if not matches:
+        print("nothing to email")
+        return
+    subject, body = compose(matches, max_lines)
+    print(f"Subject: {subject}\n\n{body}", end="")
+
+
+def main():
+    args = sys.argv[1:]
+    try:
+        if len(args) == 2 and args[0] == "--check":
+            rules, _ = load_rules(args[1])
+            print(f"{len(rules)} rule(s)")
+            return 0
+        if os.geteuid() != 0:
+            raise Failed("run it with sudo")
+        if args and args[0] == "--dry-run" and (len(args) == 1 or (len(args) == 3 and args[1] == "--since")):
+            dry_run(*load_rules(RULES), args[2] if len(args) == 3 else None)
+            return 0
+        if args:
+            print("usage: log-alerts [--dry-run [--since SINCE] | --check FILE]", file=sys.stderr)
+            return 2
+    except Failed as e:
+        print(f"log-alerts: {e}", file=sys.stderr)
+        return 1
+    try:
+        run(*load_rules(RULES))
+    except Failed as e:
+        print(f"log-alerts: {e}", file=sys.stderr)
+        heartbeat("failed")
+        return 1
+    except Exception:
+        heartbeat("failed")
+        raise
+    heartbeat("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
