@@ -1,0 +1,38 @@
+# Managed by Ansible (roles/caddy). Local changes are overwritten.
+#
+# Both jails read Caddy's access log. Caddy's ports are published by Docker,
+# so its traffic never goes through INPUT, where fail2ban bans by default: the
+# ban goes in DOCKER-USER, the chain Docker keeps for rules of its own,
+# checked before any packet is forwarded to a container. One rule per banned
+# address, for every protocol (HTTP/3 is UDP), with iptables for IPv4 and
+# ip6tables for IPv6.
+#
+# ignoreip: loopback, and Docker's private networks. Gatus checks every site
+# through Caddy from the edge gateway's address, and banning it would take the
+# status page down with the site.
+
+[caddy-auth]
+enabled = true
+filter = caddy-auth
+logpath = {{ caddy_log_dir }}/access.log
+backend = auto
+ignoreip = {{ caddy_fail2ban_ignoreip | join(' ') }}
+banaction = iptables-allports
+chain = DOCKER-USER
+protocol = all
+maxretry = {{ caddy_fail2ban_auth_maxretry }}
+findtime = {{ caddy_fail2ban_auth_findtime }}
+bantime = {{ caddy_fail2ban_auth_bantime }}
+
+[caddy-flood]
+enabled = true
+filter = caddy-flood
+logpath = {{ caddy_log_dir }}/access.log
+backend = auto
+ignoreip = {{ caddy_fail2ban_ignoreip | join(' ') }}
+banaction = iptables-allports
+chain = DOCKER-USER
+protocol = all
+maxretry = {{ caddy_fail2ban_flood_maxretry }}
+findtime = {{ caddy_fail2ban_flood_findtime }}
+bantime = {{ caddy_fail2ban_flood_bantime }}

@@ -43,6 +43,57 @@
     group: caddy
     mode: "0750"
 
+# Before Caddy first writes it: fail2ban will not start a jail whose log file
+# is missing. Caddy appends to it and recreates it, 0600, when it rotates.
+- name: Create the access log file
+  ansible.builtin.file:
+    path: "{{ caddy_log_dir }}/access.log"
+    state: touch
+    owner: caddy
+    group: caddy
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
+# fail2ban itself is installed by roles/hardening.
+- name: Install the fail2ban filters for the access log
+  ansible.builtin.copy:
+    src: fail2ban-{{ item }}.conf
+    dest: /etc/fail2ban/filter.d/{{ item }}.conf
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - caddy-auth
+    - caddy-flood
+  notify: Restart fail2ban for the Caddy jails
+
+- name: Create the fail2ban drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/fail2ban.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Start fail2ban after Docker, with a share of the CPU
+  ansible.builtin.template:
+    src: fail2ban-docker.conf.j2
+    dest: /etc/systemd/system/fail2ban.service.d/10-caddy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban for the Caddy jails
+
+- name: Configure the fail2ban jails for the access log
+  ansible.builtin.template:
+    src: fail2ban-caddy.local.j2
+    dest: /etc/fail2ban/jail.d/caddy.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban for the Caddy jails
+
 # Static sites live here (roles/projects). Caddy mounts it read-only; it
 # exists before Caddy starts, so Docker never creates it itself.
 - name: Create the static sites directory

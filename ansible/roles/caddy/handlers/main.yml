@@ -6,3 +6,12 @@
     project_src: "{{ caddy_dir }}"
     service: caddy
     command: caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+
+# Its own name: roles/hardening has a "Restart fail2ban" too, and a handler
+# name is shared by the whole play. This one also reloads systemd, for the
+# drop-in. A restart reapplies the bans fail2ban keeps in its database.
+- name: Restart fail2ban for the Caddy jails
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: restarted
+    daemon_reload: true

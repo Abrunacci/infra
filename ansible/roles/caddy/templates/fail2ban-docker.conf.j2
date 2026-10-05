@@ -1,0 +1,12 @@
+# Managed by Ansible (roles/caddy). Local changes are overwritten.
+[Unit]
+# The Caddy jails add their rules to DOCKER-USER, which Docker creates when it
+# starts. Ordering only: without Docker, fail2ban still starts and keeps
+# guarding SSH.
+After=docker.service
+
+[Service]
+# fail2ban reads every line Caddy logs. During a flood that is thousands of
+# lines a second for one CPU: past this share, fail2ban falls behind instead
+# of taking the CPU from Caddy, PostgreSQL and the backends.
+CPUQuota={{ caddy_fail2ban_cpu_quota }}

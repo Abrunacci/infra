@@ -22,6 +22,28 @@ caddy_log_dir: /var/log/caddy
 caddy_access_log_roll_size: 20MiB
 caddy_access_log_roll_keep: 10
 caddy_access_log_keep_for: 336h  # 14 days
+# fail2ban reads the access log (/etc/fail2ban/jail.d/caddy.local) and bans
+# an address in DOCKER-USER, for every port and protocol:
+# - caddy-auth: after caddy_fail2ban_auth_maxretry answers 401 or 429 within
+#   caddy_fail2ban_auth_findtime (guessing passwords or tokens, or ignoring a
+#   backend's own rate limit).
+# - caddy-flood: after caddy_fail2ban_flood_maxretry requests of any kind
+#   within caddy_fail2ban_flood_findtime. A page with all its files is a few
+#   dozen requests; this is several a second for a whole minute.
+caddy_fail2ban_auth_maxretry: 20
+caddy_fail2ban_auth_findtime: 10m
+caddy_fail2ban_auth_bantime: 1h
+caddy_fail2ban_flood_maxretry: 600
+caddy_fail2ban_flood_findtime: 1m
+caddy_fail2ban_flood_bantime: 15m
+caddy_fail2ban_ignoreip:
+  - 127.0.0.0/8
+  - ::1
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - fd00::/8
+# Most of one CPU fail2ban may use (systemd CPUQuota), SSH jail included.
+caddy_fail2ban_cpu_quota: 25%
 # uid and gid of the caddy user. Fixed, so it never matches the uid of the postgres container (999) or of a
 # system user created later (system uids are handed out downwards from 999).
 caddy_uid: 10001
