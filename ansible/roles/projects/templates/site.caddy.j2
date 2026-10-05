@@ -1,5 +1,7 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
 {{ domain if item.subdomain == '@' else item.subdomain ~ '.' ~ domain }} {
+	# Defined in the main Caddyfile (roles/caddy).
+	import access_log
 	encode zstd gzip
 
 	# Applied after the response is written (defer), so they replace a
@@ -81,6 +83,7 @@
 # The root domain's project also answers on www, only to send visitors to the
 # root domain, keeping the path and query string.
 www.{{ domain }} {
+	import access_log
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		-Server

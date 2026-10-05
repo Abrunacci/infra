@@ -5,15 +5,42 @@
 }
 
 {% endif %}
+# The access log: every site imports it (including the ones in sites/), so
+# every request lands in one file, one JSON line each. Query strings are cut,
+# from the URI and the Referer: they can carry tokens (a password reset link).
+# Caddy already writes Cookie, Set-Cookie and Authorization as REDACTED.
+# validate (roles/caddy, caddy-validate-site) mounts a tmpfs on
+# /var/log/caddy: Caddy opens the file while it checks the config.
+(access_log) {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size {{ caddy_access_log_roll_size }}
+			roll_keep {{ caddy_access_log_roll_keep }}
+			roll_keep_for {{ caddy_access_log_keep_for }}
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp \?.* ?REDACTED
+				request>headers>Referer regexp \?.* ?REDACTED
+				request>tls delete
+				resp_headers delete
+			}
+		}
+	}
+}
+
 # Serves no application. It gives Caddy a certificate to obtain right after
 # provisioning, which proves DNS, the CAA records and ports 80/443 work.
 server.{{ domain }} {
+	import access_log
 	respond 404
 }
 
 # The status page (roles/gatus). Read-only from outside: only GET and HEAD
 # reach Gatus, so nothing on the internet can push a result to it.
 status.{{ domain }} {
+	import access_log
 	encode zstd gzip
 
 	header {
