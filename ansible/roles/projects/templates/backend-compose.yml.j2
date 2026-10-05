@@ -23,6 +23,14 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+{% if item.subdomain is defined %}
+    # The image's own HEALTHCHECK is turned off: nothing reads it, since the
+    # health path through Caddy is what deploys, rollbacks and Gatus check,
+    # and each run (often a new Python interpreter) costs CPU. An
+    # internal backend keeps it: it is that backend's only health.
+    healthcheck:
+      disable: true
+{% endif %}
     # Taken literally (format: raw): no quotes, escapes or comments.
     env_file:
       - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
