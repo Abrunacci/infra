@@ -624,10 +624,14 @@ Some log lines are worth an email even though nothing failed, such as cuanto-cue
         - name: jump_confirmed                                     # in the email's subject
           match: ['cuanto_cuesta\.ingest', '\bjump_confirmed\b']   # all of them must be found in the line
           note: Informational, nothing to do: ...                  # the email's first line
+          subject:                                                 # optional
+            pattern: '\((?P<quote>\S+)\) jump_confirmed: (?P<old>.+?) replaced by (?P<new>.+?) after'
+            format: '{quote} {old} → {new}'                        # "cuanto-cuesta: bitso_usdt_ars 1452.30 → 1690"
 ```
 
 - **How.** `log-alerts` runs every 5 minutes (`log-alerts.timer`), reads what each backend with rules logged since the last run (`journalctl -t backend.<project>`, from a cursor in `/var/lib/infra/log-alerts`), and keeps the lines that match a rule. The patterns are Python regular expressions; in YAML, single-quote them so backslashes stay as written. The playbook checks them before it writes `/etc/infra/log-alerts.json`.
 - **One email per run,** with every matching line and its time (UTC), up to 20 (`gatus_log_alerts_max_lines`); the rest are only counted, with the `journalctl` command that shows them. Nothing matched, no email.
+- **The subject** says what happened when the rule has a `subject`: its pattern's named groups, put into its format, from the run's first line (`(+N more)` when there are more). If the line does not fit the pattern (its format changed), the subject is the generic `<project>: <name>` and the email goes out all the same. The playbook checks that the format only uses the pattern's groups.
 - **Never twice, never skipped.** If the email is not sent, the cursor stays and the next run tries again with the same lines. The first run, and any run with no rules, only records where the journal ends: lines logged before a rule existed are not emailed (`--dry-run --since` finds them).
 - **Through the alerts' channel:** the same Resend key (`gatus-credentials`), sender and address as Gatus' emails. It only knows email: changing the channel stops the playbook until `log-alerts` learns the new one.
 - **Watched.** Each run pushes its result to the `Server / Log alerts` heartbeat: Gatus alerts after two failed runs in a row, and when runs stop (15 minutes without a push). A broken key fails both, though: Gatus' email about it goes out with the same key, so it only shows on the status page.

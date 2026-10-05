@@ -197,8 +197,8 @@
       - item.backend.log_alerts | length >= 1 and item.backend.log_alerts | length <= 10
       - item.backend.log_alerts | reject('mapping') | list | length == 0
       - projects_rule_names | unique | length == projects_rule_names | length
-      - item.backend.log_alerts | map('dict2items') | map('map', attribute='key') | map('sort')
-        | reject('equalto', ['match', 'name', 'note']) | list | length == 0
+      - item.backend.log_alerts | map('dict2items') | map('map', attribute='key') | map('difference', ['subject'])
+        | map('sort') | reject('equalto', ['match', 'name', 'note']) | list | length == 0
       - projects_rule_names | reject('string') | list | length == 0
       - projects_rule_names | reject('match', '^[a-z0-9][a-z0-9_.-]{0,39}\Z') | list | length == 0
       - projects_rule_notes | reject('string') | list | length == 0
@@ -210,9 +210,19 @@
       - projects_rule_matches | map('length') | select('gt', 5) | list | length == 0
       - projects_rule_matches | flatten(levels=1) | reject('string') | list | length == 0
       - projects_rule_matches | flatten(levels=1) | reject('match', '^[^\n\r]{1,200}\Z') | list | length == 0
+      # The format's fields are checked against the pattern's groups by
+      # log-alerts --check.
+      - projects_rule_subjects | reject('mapping') | list | length == 0
+      - projects_rule_subjects | map('dict2items') | map('map', attribute='key') | map('sort')
+        | reject('equalto', ['format', 'pattern']) | list | length == 0
+      - projects_rule_subjects | map(attribute='pattern') | reject('string') | list | length == 0
+      - projects_rule_subjects | map(attribute='pattern') | reject('match', '^[^\n\r]{1,300}\Z') | list | length == 0
+      - projects_rule_subjects | map(attribute='format') | reject('string') | list | length == 0
+      - projects_rule_subjects | map(attribute='format') | reject('match', '^[^\n\r]{1,120}\Z') | list | length == 0
     fail_msg: >-
       projects.yml: invalid log_alerts for {{ item.name }}. Each rule has a unique name (a-z, 0-9, _ . -), one to
-      five match patterns on one line each, and a note of one line. See projects.schema.json.
+      five match patterns on one line each, a note of one line, and optionally a subject with a pattern and a
+      format. See projects.schema.json.
     quiet: true
   loop: >-
     {{ projects_registry.projects | selectattr('backend', 'defined') | selectattr('backend', 'mapping')
@@ -224,6 +234,7 @@
     projects_rule_names: "{{ projects_rules | map(attribute='name', default=none) | list }}"
     projects_rule_notes: "{{ projects_rules | map(attribute='note', default=none) | list }}"
     projects_rule_matches: "{{ projects_rules | map(attribute='match', default=none) | list }}"
+    projects_rule_subjects: "{{ projects_rules | selectattr('subject', 'defined') | map(attribute='subject') | list }}"
 
 - name: Check each linked secret
   ansible.builtin.assert:

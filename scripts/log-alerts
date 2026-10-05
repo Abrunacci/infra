@@ -14,6 +14,12 @@ playbook to /etc/infra/log-alerts.json: a line logged by backend.<project>
 matches a rule when every one of its match patterns (Python regular
 expressions) is found in it. Run every 5 minutes by log-alerts.timer.
 
+A rule may also say how to build the email's subject from the line: subject
+has a pattern with named groups and a format that uses them, such as
+"{quote} {old} → {new}". A line the pattern does not fit (a format that
+changed) gets the generic subject, "<project>: <name>": the email is never
+held back by it.
+
 Each run reads the journal from where the last one stopped (a cursor in
 /var/lib/infra/log-alerts), so no line is emailed twice or skipped. The first
 run, and any run with no rules, only records where the journal ends: lines
@@ -38,6 +44,7 @@ import re
 import smtplib
 import socket
 import ssl
+import string
 import subprocess
 import sys
 import tempfile
@@ -52,6 +59,8 @@ CURSOR = os.path.join(STATE_DIR, "cursor")
 HEARTBEATS = "/usr/local/sbin/gatus-heartbeats"
 # A longer line is cut in the email; the journal keeps all of it.
 MAX_LINE = 1000
+# A longer subject built from a line is cut.
+MAX_SUBJECT = 150
 NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}\Z")
 PROJECT = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
 
@@ -75,8 +84,8 @@ def load_rules(path):
     rules, seen = [], set()
     for i, rule in enumerate(data["rules"]):
         where = f"{path}: rule {i + 1}"
-        if not isinstance(rule, dict) or sorted(rule) != ["match", "name", "note", "project"]:
-            raise Failed(f"{where}: needs exactly project, name, match and note")
+        if not isinstance(rule, dict) or sorted(set(rule) - {"subject"}) != ["match", "name", "note", "project"]:
+            raise Failed(f"{where}: needs project, name, match and note, and only subject besides")
         project, name, match, note = rule["project"], rule["name"], rule["match"], rule["note"]
         if not isinstance(project, str) or not PROJECT.match(project):
             raise Failed(f"{where}: invalid project {project!r}")
@@ -93,8 +102,53 @@ def load_rules(path):
             patterns = [re.compile(p) for p in match]
         except re.error as e:
             raise Failed(f"{where}: invalid pattern: {e}") from e
-        rules.append({"project": project, "name": name, "note": note, "patterns": patterns})
+        rules.append(
+            {
+                "project": project,
+                "name": name,
+                "note": note,
+                "patterns": patterns,
+                "subject": load_subject(rule.get("subject"), where),
+            }
+        )
     return rules, max_lines
+
+
+def load_subject(subject, where):
+    """Returns (pattern, format) or None. Every field of format must be a group of pattern."""
+    if subject is None:
+        return None
+    if not isinstance(subject, dict) or sorted(subject) != ["format", "pattern"]:
+        raise Failed(f"{where}: subject needs exactly pattern and format")
+    pattern, fmt = subject["pattern"], subject["format"]
+    if not isinstance(pattern, str) or not pattern or not isinstance(fmt, str) or not fmt.strip() or "\n" in fmt:
+        raise Failed(f"{where}: subject's pattern and format must be text on one line")
+    try:
+        compiled = re.compile(pattern)
+        fields = [(f, spec, conv) for _, f, spec, conv in string.Formatter().parse(fmt) if f is not None]
+    except (re.error, ValueError) as e:
+        raise Failed(f"{where}: invalid subject: {e}") from e
+    # Plain {name} only: no attributes, indexes, conversions or format specs.
+    if not fields or any(f not in compiled.groupindex or spec or conv for f, spec, conv in fields):
+        raise Failed(f"{where}: subject's format may only use {{group}} names from its pattern")
+    return compiled, fmt
+
+
+def line_subject(rule, text):
+    """The subject built from one line, or None if the rule has none or the line does not fit."""
+    if rule["subject"] is None:
+        return None
+    pattern, fmt = rule["subject"]
+    found = pattern.search(text)
+    if not found:
+        return None
+    values = {k: " ".join((v or "").split()) for k, v in found.groupdict().items()}
+    built = " ".join(fmt.format(**values).split())
+    if not built:
+        return None
+    if len(built) > MAX_SUBJECT:
+        built = built[:MAX_SUBJECT] + "…"
+    return f"{rule['project']}: {built}"
 
 
 def read_env(path):
@@ -161,8 +215,17 @@ def compose(matches, max_lines):
     for rule, when, text in matches:
         groups.setdefault((rule["project"], rule["name"]), (rule, []))[1].append((when, text))
     if len(groups) == 1:
-        (project, name), _ = next(iter(groups.items()))
-        subject = f"{project}: {name}" + (f" ({len(matches)})" if len(matches) > 1 else "")
+        (project, name), (rule, lines) = next(iter(groups.items()))
+        # From the first line, if the rule says how; the rest are counted.
+        try:
+            subject = line_subject(rule, lines[0][1])
+        except (KeyError, IndexError, TypeError, ValueError) as e:  # never lose the email over its subject
+            print(f"subject not built: {e}", file=sys.stderr)
+            subject = None
+        if subject is None:
+            subject = f"{project}: {name}" + (f" ({len(matches)})" if len(matches) > 1 else "")
+        elif len(matches) > 1:
+            subject += f" (+{len(matches) - 1} more)"
     else:
         subject = f"Log alerts: {len(matches)} lines (" + ", ".join(f"{p} {n}" for p, n in groups) + ")"
     parts, shown = [], 0

@@ -226,6 +226,16 @@
           "minLength": 1,
           "maxLength": 300,
           "pattern": "^[^\\n\\r]*$"
+        },
+        "subject": {
+          "description": "How to build the email's subject from the line: a Python regular expression with named groups, and a format that uses them as {group}. A line it does not fit gets the generic subject, PROJECT: NAME, and is emailed all the same.",
+          "type": "object",
+          "required": ["pattern", "format"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\n\\r]*$" },
+            "format": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\n\\r]*$" }
+          }
         }
       }
     },

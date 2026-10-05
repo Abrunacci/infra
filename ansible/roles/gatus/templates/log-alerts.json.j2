@@ -3,7 +3,11 @@
 {%- set ns = namespace(rules=[]) -%}
 {%- for p in projects_registry.projects if p.backend is defined and p.backend.log_alerts is defined -%}
 {%-   for r in p.backend.log_alerts -%}
-{%-     set ns.rules = ns.rules + [{'project': p.name, 'name': r.name, 'match': r.match, 'note': r.note}] -%}
+{%-     set rule = {'project': p.name, 'name': r.name, 'match': r.match, 'note': r.note} -%}
+{%-     if r.subject is defined -%}
+{%-       set _ = rule.update({'subject': r.subject}) -%}
+{%-     endif -%}
+{%-     set ns.rules = ns.rules + [rule] -%}
 {%-   endfor -%}
 {%- endfor -%}
 {{ {'rules': ns.rules, 'max_lines': gatus_log_alerts_max_lines | int} | to_nice_json(indent=2, ensure_ascii=False) }}
