@@ -128,6 +128,9 @@ projects:
         # a connection from it may set X-Forwarded-For (Caddy has no
         # trusted_proxies, so it always writes the visitor's address there).
         TRUSTED_PROXY: "caddy"
+        # Turnstile's site key (terraform/turnstile.tf, terraform output
+        # turnstile_site_key). Public: every visitor's browser gets it.
+        TURNSTILE_SITE_KEY: "0x4AAAAAAFPXTGN0VTSfeEjN"
       secrets:
         # Turnstile's secret key (terraform/turnstile.tf), from terraform output
         # -raw turnstile_secret_key. The backend checks each form against
