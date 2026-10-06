@@ -52,6 +52,9 @@ projects_backend_default_memory: 256m
 # a hot loop) slows down itself instead of starving the other backends,
 # Caddy and PostgreSQL. PostgreSQL has no limit.
 projects_backend_default_cpus: 0.5
+# Largest request body Caddy passes to a backend (projects.yml, max_body).
+# Larger ones get 413 before reaching it.
+projects_backend_default_max_body: 10MB
 # Env names the infrastructure sets itself (per-project databases): a project
 # cannot set them in env or secrets.
 projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]

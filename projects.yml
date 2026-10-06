@@ -19,6 +19,12 @@
 #              while the database exists, taking the project out of this file
 #              or setting false makes every run fail. See ansible/README.md,
 #              "Retiring a project with a database".
+#   permissions_policy
+#              the site's Permissions-Policy header (optional, only with a
+#              subdomain): replaces the default, which turns off the camera,
+#              microphone, location and other powerful features
+#              (roles/caddy, caddy_permissions_policy). The whole policy,
+#              such as "camera=(self), microphone=(), geolocation=()"
 #   deploy_key public ed25519 key of the project's CI (optional: without it the
 #              project cannot be deployed). It can only deploy this project:
 #              its site, its backend or both. How to create it:
@@ -43,6 +49,9 @@
 #                         project's backend (link-PROJECT), reached as
 #                         http://PROJECT-backend:PORT
 #                memory   64m to 512m (optional, defaults to 256m)
+#                max_body largest request body Caddy passes to it, such as
+#                         64KB (optional, only with a subdomain, defaults to
+#                         10MB); larger ones get 413
 #                cpus     share of the Droplet's CPU it may use, 0.1 to 1
 #                         (optional, defaults to 0.5), so one busy backend
 #                         cannot starve the others, Caddy or PostgreSQL
@@ -127,6 +136,8 @@ projects:
         # The inbox the messages go to. Not in env: this repository is public.
         MAIL_TO: manual
       memory: 128m
+      # A name, an email and a message: a few KB at most.
+      max_body: 64KB
 
   - name: epb-stock
     subdomain: epb

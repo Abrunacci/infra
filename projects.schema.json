@@ -60,6 +60,12 @@
           "description": "A PostgreSQL database and user for the backend. The playbook never drops it: while it exists on the server, removing the project or setting false fails the playbook until it is retired by hand (ansible/README.md).",
           "type": "boolean"
         },
+        "permissions_policy": {
+          "description": "The Permissions-Policy header of the site and its backend, replacing roles/caddy's default (caddy_permissions_policy, which turns off the camera, microphone, location and other powerful features). Write the whole policy, such as \"camera=(self), microphone=(), geolocation=()\": each feature off (()), for the site itself ((self)), or for any origin (*). Only with a subdomain.",
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[a-z][a-z-]*=(\\*|\\((self)?\\))(, [a-z][a-z-]*=(\\*|\\((self)?\\)))*$"
+        },
         "backend": { "$ref": "#/$defs/backend" },
         "deploy_key": {
           "description": "Public ed25519 key of the project's CI. Its authorized_keys line is fixed to deploying this project only: its site, its backend or both. Without it, the project cannot be deployed.",
@@ -80,10 +86,12 @@
                   { "not": { "required": ["port"] } },
                   { "not": { "required": ["health"] } },
                   { "not": { "required": ["paths"] } },
-                  { "not": { "required": ["private_paths"] } }
+                  { "not": { "required": ["private_paths"] } },
+                  { "not": { "required": ["max_body"] } }
                 ]
               }
-            }
+            },
+            "not": { "required": ["permissions_policy"] }
           }
         },
         {
@@ -192,6 +200,11 @@
           "description": "Memory limit of the container, from 64m to 512m. Defaults to 256m.",
           "type": "string",
           "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
+        },
+        "max_body": {
+          "description": "Largest request body Caddy passes to the backend, in KB or MB, such as 64KB for a form. Larger ones get 413 without reaching it. Defaults to 10MB. Only with a subdomain.",
+          "type": "string",
+          "pattern": "^([1-9][0-9]{0,4}KB|[1-9][0-9]?MB)$"
         },
         "cpus": {
           "description": "CPU limit of the container, in CPUs, from 0.1 to 1 (the Droplet has one). Defaults to 0.5.",
