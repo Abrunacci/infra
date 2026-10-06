@@ -44,6 +44,16 @@ gatus_host_failure_threshold: 2
 # alerts once the last successful one is older than this (the login warning's
 # limit, roles/backup).
 gatus_backup_max_age_hours: "{{ backup_max_age_hours | default(26) }}"
+# The monthly restore drill (ansible/README.md, "The restore drill, once a
+# month"): fails once a project with a database has had no passing drill for
+# this many days. A month and a few days of slack.
+gatus_drill_max_days: 35
+# Credentials that expire: fails this many days before the first one does.
+# The dates are the "Expires" column of terraform/README.md, "Credentials",
+# read by the playbook: a row without a date there is not checked. After
+# rotating one, write its new date there and run the playbook (--tags gatus).
+gatus_credentials_table: "{{ playbook_dir }}/../terraform/README.md"
+gatus_credentials_warn_days: 14
 
 # The check from outside the server: gatus-heartbeats pings healthchecks.io
 # at the end of every run (gatus_host_check_calendar), and healthchecks.io

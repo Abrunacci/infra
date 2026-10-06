@@ -14,7 +14,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 | `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
-| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent` and the internal backends. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. See "Status page and alerts" |
+| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent`, the internal backends, the restore drill's age and the credentials' expiration dates. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. See "Status page and alerts" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up. After the last role, every run, whatever `--tags` are given, ends with a warning while the server has no check from outside (see "Status page and alerts").
 
@@ -529,7 +529,7 @@ A backup that has never been restored is only a hope. `sudo backup-restore drill
 4. checks that the roles' list and the secrets decrypt;
 5. drops the scratch database, even if the drill stops halfway.
 
-It changes nothing else. Do it once a month (put it in your calendar), and every few months type the key from the **paper** copy, so you know the paper works.
+It changes nothing else, except recording when it passed, for the status page. Do it once a month: the `Server / Restore drill` heartbeat fails, and emails you, once a project with a database has gone 35 days without one. Every few months, type the key from the **paper** copy, so you know the paper works.
 
 ### Restoring
 
@@ -602,6 +602,8 @@ Every check uses the public address, from the server itself: DNS, the certificat
 | Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
 | Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
 | Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or the fail2ban log, or send its email (see "Log alerts") | after 2 in a row |
+| Server / Restore drill | `gatus-heartbeats`, every 5 minutes | a project with a database has had no passing `backup-restore drill` for 35 days (recorded in `/var/lib/infra/backup/drills/`, or else found in the journal) | after 2 in a row |
+| Server / Credentials | `gatus-heartbeats`, every 5 minutes | a credential in `terraform/README.md` ("Credentials") expires within 14 days, or has expired. The dates are that table's "Expires" column, copied to `/etc/infra/credentials-expiry.conf` by the playbook | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
 
 - **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.

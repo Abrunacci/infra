@@ -222,6 +222,11 @@ cmd_drill() {
     echo "== the secrets decrypt: $(decrypt "$work/secrets.tar.age" | tar -t | grep -vc '/$' || true) file(s)"
   fi
   logger -t backup-restore -- "drill project=$project snapshot=$snapshot result=ok by=${SUDO_USER:-root}"
+  # When, for the Restore drill heartbeat (gatus-heartbeats drill).
+  [[ -d "$BACKUP_STATE/drills" ]] || mkdir -m 0755 "$BACKUP_STATE/drills"
+  date -u +%s >"$BACKUP_STATE/drills/.$project.$$"
+  chmod 0644 "$BACKUP_STATE/drills/.$project.$$"
+  mv -f "$BACKUP_STATE/drills/.$project.$$" "$BACKUP_STATE/drills/$project"
   echo "Drill passed: $snapshot of $project decrypts and restores."
 }
 
