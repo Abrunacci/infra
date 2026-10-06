@@ -54,10 +54,56 @@ gatus_backup_max_age_hours: "{{ backup_max_age_hours | default(26) }}"
 gatus_healthchecks_ping_base: https://hc-ping.com
 
 # Log alerts: the backends' log lines projects.yml asks to hear about
-# (log_alerts), emailed by log-alerts on the same calendar as the heartbeats
-# (gatus_host_check_calendar), which also gives its heartbeat's interval.
+# (log_alerts), and the server's own (below), emailed by log-alerts on the
+# same calendar as the heartbeats (gatus_host_check_calendar), which also
+# gives its heartbeat's interval.
 # One email per run, with at most this many lines; the rest are counted.
 gatus_log_alerts_max_lines: 20
+# The server's own log alerts, read from the journal like the backends' but by
+# syslog identifier, under the name "server". Same fields as log_alerts in
+# projects.yml, plus identifiers. Patterns are anchored at the start of the
+# message, so text a command or a client chose (a sudo command line, an SSH
+# user name) cannot fake or hide a match. They carry the address someone
+# logged in from: yours, normally.
+gatus_log_alerts_server_rules:
+  - name: ops-login
+    # sshd-session is sshd's name for this process from OpenSSH 9.8 on.
+    identifiers: [sshd, sshd-session]
+    match: ['^Accepted publickey for ops from ']
+    subject:
+      pattern: '^Accepted publickey for (?P<user>\S+) from (?P<address>\S+)'
+      format: "{user} logged in over SSH from {address}"
+    note: >-
+      Someone logged in as ops with the admin key: you, or the playbook you ran. If it was not you, rotate
+      the key now (ansible/README.md, "Rotating the admin SSH key").
+  - name: unexpected-login
+    identifiers: [sshd, sshd-session]
+    match: ['^Accepted (?!publickey for (ops|deploy) from )']
+    note: >-
+      A login that sshd should never allow: another user, or a method other than a key. Find out how
+      (sudo sshd -T, /etc/ssh/sshd_config.d) and treat the server as compromised until you know.
+  - name: sudo-failure
+    identifiers: [sudo]
+    # sudo's verdict, before the command line it logs.
+    match:
+      - '^\s*\S+ : (\d+ incorrect password attempts?|user NOT in sudoers|command not allowed|a password is required) ;'
+    note: >-
+      sudo refused someone: a wrong password, or a user or command it does not allow. A mistyped password
+      at -K is you; anything else is not.
+  - name: deploy-failed
+    identifiers: [deploy, deploy-backend]
+    match: ['^result=failed ']
+    subject:
+      pattern: 'project=(?P<project>\S+)'
+      format: "deploy failed for {project}"
+    note: >-
+      A deploy was refused or failed; the running release is untouched. The reason is in the line. If no
+      workflow of yours failed at that time, someone else has a deploy key.
+# Once a day, the first run after this hour (UTC; 11 is 08:00 in Argentina)
+# counts fail2ban's bans of the last 24 hours, and emails the counts (never
+# the addresses) if a jail other than the quiet ones banned anyone.
+gatus_log_alerts_bans_digest_hour: 11
+gatus_log_alerts_bans_quiet_jails: [sshd]
 
 # Where the alerts go. Each channel is one file, templates/alerting-<channel>.yaml.j2,
 # plus its credentials (<channel>.env). Changing channels: ansible/README.md,

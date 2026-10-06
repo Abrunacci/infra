@@ -601,7 +601,7 @@ Every check uses the public address, from the server itself: DNS, the certificat
 |---|---|---|---|
 | Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
 | Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
-| Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or send its email (see "Log alerts") | after 2 in a row |
+| Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or the fail2ban log, or send its email (see "Log alerts") | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
 
 - **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
@@ -683,6 +683,23 @@ sudo log-alerts --dry-run --since -7d      # what the rules match in the last 7 
 sudo log-alerts                            # run now, as the timer does
 sudo journalctl -u log-alerts --since -1h  # what the runs did
 ```
+
+#### The server's own alerts
+
+The same runs also email what the server itself logs and you would want to hear about. The rules are `gatus_log_alerts_server_rules` in `roles/gatus/defaults`, under the name `server`, and read the journal by syslog identifier instead of `backend.<project>`:
+
+| Rule | Lines (identifier) | Means |
+|---|---|---|
+| `ops-login` | `Accepted publickey for ops from …` (`sshd`) | someone logged in as `ops`: you, a playbook run or the database tunnel. Subject: `server: ops logged in over SSH from <address>` |
+| `unexpected-login` | `Accepted …` for any user but `ops` and `deploy`, or by any method but a key (`sshd`) | sshd should never allow it: treat the server as compromised until you know how |
+| `sudo-failure` | a wrong password, a user not in sudoers, a command not allowed (`sudo`) | a mistyped password at `-K` is you; anything else is not |
+| `deploy-failed` | `result=failed` (`deploy`, `deploy-backend`) | a deploy was refused or failed. Subject: `server: deploy failed for <project>` |
+
+- **Anchored at the start of the line.** sudo logs the whole command line, and sshd the user name a client sent: a pattern that could match anywhere would fire on `sudo grep 'NOT in sudoers' …`. The patterns only look where sshd and sudo write their verdict.
+- **Not every login.** `deploy` logs in on every deploy, so only its failed deploys are emailed. A playbook run is one email: the logins of a run are grouped (`(+N more)` in the subject).
+- **Your address leaves the server** in the `ops-login` email. It is the only personal data these rules match.
+
+**The bans digest.** Once a day, the first run after 11:00 UTC (`gatus_log_alerts_bans_digest_hour`) counts the bans fail2ban made in the last 24 hours, per jail, from `/var/log/fail2ban.log` (and its last rotation). If a jail other than `sshd` (`gatus_log_alerts_bans_quiet_jails`) banned anyone, it emails the counts: bans and distinct addresses per jail, never the addresses themselves. `sshd` bans every day (bots trying passwords), so on its own it is not worth an email; the sites' jails (see "Bans from the access log") should be quiet, and a ban there is either an attack or a threshold to raise. `sudo log-alerts --dry-run` shows the digest as it would be now. The day it was last sent is in `/var/lib/infra/log-alerts/bans-digest-day`.
 
 ### Changing the alert channel
 
