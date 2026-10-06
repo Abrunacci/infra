@@ -5,10 +5,10 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | Role | What it does |
 |---|---|
 | `base` | Requires a password for the admin user's sudo (see below), manages the admin user's SSH keys (exclusive list) and empties root's, daily security updates with automatic reboots at 07:30 UTC, a persistent journal capped at 1 GB (the backends' logs, which stay out of `/var/log/syslog`), 2 GB of swap, `/etc/infra/secrets` (root only) and `/opt/infra` |
-| `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH |
+| `hardening` | sshd drop-ins (keys only, no root, only `admin_user`, no forwarding except the admin user's local forwards to the database bridge), ufw with the same rules as the cloud firewall, fail2ban for SSH (the jails for the sites are in `caddy`) |
 | `monitoring` | DigitalOcean's monitoring agent (`do-agent`) from DigitalOcean's apt repository, running and enabled. It reports the memory and disk usage the resource alerts fire on (`terraform/monitoring.tf`); the package upgrades itself daily |
 | `docker` | Docker Engine and the Compose plugin from Docker's apt repository, at pinned and held versions; log rotation for the containers that are not backends (Caddy, PostgreSQL, Gatus; backends log to the journal) and `no-new-privileges` for every container; the shared `edge` (Caddy and Gatus) and `db` networks |
-| `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability, and half of the CPU (`caddy_cpus`). Its access log goes to `/var/log/caddy` (see "Access log"). It creates one network per public backend (`edge-<name>`) and joins them all |
+| `caddy` | Caddy in a container: the only one with published ports (80, 443 and 443/udp). Non-root, read-only filesystem, a single capability, and half of the CPU (`caddy_cpus`). Its access log goes to `/var/log/caddy` (see "Access log"). fail2ban reads it and bans abusive addresses in Docker's `DOCKER-USER` chain (see "Bans from the access log"). It creates one network per public backend (`edge-<name>`) and joins them all |
 | `postgres` | PostgreSQL 17 in a container on the internal `db` network and on one internal network per project with a database (`db-<name>`), with no published port. Non-root, read-only filesystem, no capabilities. The superuser password is generated on the server. Refuses an image whose major version is not the data's |
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
@@ -332,13 +332,36 @@ sudo ls -lh /var/log/caddy                                  # current file and r
 sudo sh -c 'zcat /var/log/caddy/access-*.log.gz' | grep -c '"status":429'   # the rotated ones
 ```
 
-Caddy writes every request to every site (`server`, `status`, `www` and each project) to `/var/log/caddy/access.log` on the host, one JSON line each: time, client address, method, host, path, status, size, duration and request headers. It is what shows who asked for what, and what fail2ban reads.
+Caddy writes every request to every site (`server`, `status`, `www` and each project) to `/var/log/caddy/access.log` on the host, one JSON line each: time, client address, method, host, path, status, size, duration and request headers. It is what shows who asked for what, and what fail2ban reads (see "Bans from the access log").
 
 - **A file, not the journal.** journald takes at most 10,000 entries every 30 s from Docker, all containers together: a flood of requests would crowd out the backends' logs and rotate them away. The file is Caddy's alone.
 - **Rotated by Caddy.** At 20 MB the file is renamed with its time and gzipped; the 10 newest old files are kept, and none older than 14 days (`caddy_access_log_*` in `roles/caddy/defaults`). At most 20 MB plus ten compressed files, a few dozen MB.
 - **It holds personal data:** visitors' IP addresses and the paths they asked for. Query strings are cut (`?REDACTED`) from the path and the `Referer`, since they can carry tokens such as a password reset link, and Caddy itself writes `Cookie`, `Set-Cookie` and `Authorization` as `REDACTED`. Bodies are never logged. The 14 days are the only retention, and backups do not include it.
 - **Only root reads it.** The directory belongs to the `caddy` user (0750), and the files are 0600.
 - Gatus checks every site through Caddy each minute, so its requests are in the log too, from the address of Docker's `edge` gateway.
+
+### Bans from the access log
+
+```sh
+sudo fail2ban-client status caddy-auth                       # failures counted and addresses banned now
+sudo fail2ban-client status caddy-flood
+sudo fail2ban-client set caddy-auth unbanip 203.0.113.7      # lift a ban (use the jail that banned it)
+sudo iptables -S DOCKER-USER; sudo ip6tables -S DOCKER-USER  # the jumps to f2b-caddy-auth and f2b-caddy-flood
+sudo grep -E 'caddy-(auth|flood)' /var/log/fail2ban.log | grep -E 'Ban|Unban' | tail
+```
+
+fail2ban reads Caddy's access log with two jails (`roles/caddy`, `/etc/fail2ban/jail.d/caddy.local`), and bans an address from every site, on every port and protocol (HTTP/3 is UDP):
+
+- **`caddy-auth`:** 20 answers 401 or 429 within 10 minutes bans for an hour. That is someone guessing passwords or tokens at a login or an API, or ignoring a backend's own rate limit.
+- **`caddy-flood`:** 600 requests of any kind within a minute bans for 15 minutes. A page with all its files is a few dozen requests.
+
+The thresholds are `caddy_fail2ban_*` in `roles/caddy/defaults`.
+
+- **In `DOCKER-USER`, not `INPUT`.** Docker forwards Caddy's published ports straight to the container, so that traffic never reaches `INPUT`, where fail2ban bans by default (and where ufw is). `DOCKER-USER` is the chain Docker keeps for rules of one's own, checked before anything is forwarded to a container; Docker leaves it alone when it restarts. A ban only cuts traffic to the containers: a banned address can still reach SSH, which has its own jail.
+- **The address Caddy recorded.** The filters read `client_ip`, which Caddy writes before any request header. A forged `X-Forwarded-For`, or a header that imitates a field, is never what gets banned.
+- **Never Docker's own networks.** Gatus checks every site through Caddy from the `edge` gateway's address, so the private ranges (`172.16.0.0/12`, `192.168.0.0/16`, `fd00::/8`) and loopback are ignored (`caddy_fail2ban_ignoreip`).
+- **Shared addresses.** Everyone behind one public address (an office, a mobile carrier's NAT) counts as one. If a ban hits someone legitimate, lift it with `unbanip` and raise the threshold.
+- **Restarts.** fail2ban starts after Docker (`/etc/systemd/system/fail2ban.service.d/10-caddy.conf`), since `DOCKER-USER` must exist, and restores current bans from its database. It may use at most a quarter of the CPU (`caddy_fail2ban_cpu_quota`): during a flood it falls behind rather than slow everything else down.
 
 ### Databases
 
