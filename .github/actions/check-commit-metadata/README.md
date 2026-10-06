@@ -13,8 +13,9 @@ already has. It fails when a commit of the pull request:
 - links to one of the `blocked-domains`, or to a subdomain of one.
 
 Pull requests that Dependabot opened may also carry Dependabot's commits
-(`allow-dependabot`). Who opened the pull request comes from GitHub, not from
-the commits, so a commit that only claims to be Dependabot's fails anywhere
+(`allow-dependabot`), and pull requests that Renovate opened, Renovate's
+(`allow-renovate`). Who opened the pull request comes from GitHub, not from
+the commits, so a commit that only claims to be the bot's fails anywhere
 else. Their messages are still checked.
 
 ## What it does not cover

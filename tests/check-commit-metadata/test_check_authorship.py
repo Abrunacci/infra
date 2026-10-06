@@ -18,6 +18,7 @@ NOREPLY = "1+jane@users.noreply.github.com"
 DOMAIN = "blocked.example"
 GITHUB = ("GitHub", "noreply@github.com")
 DEPENDABOT = ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com")
+RENOVATE = ("renovate[bot]", "29139614+renovate[bot]@users.noreply.github.com")
 # Git knows the empty tree without it being stored.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -277,6 +278,57 @@ def test_dependabot_messages_are_still_checked(branch: Path) -> None:
     assert "author is" not in result.stdout
 
 
+# Renovate
+
+
+@pytest.mark.parametrize(
+    "committer",
+    [
+        # Commits made through GitHub's API (Renovate's platformCommit), signed by GitHub.
+        GITHUB,
+        # Commits made with git and pushed.
+        RENOVATE,
+    ],
+)
+def test_renovate_passes_in_its_own_pull_request(branch: Path, committer: tuple[str, str]) -> None:
+    commit(branch, "chore(deps): update caddy to v2.11", author=RENOVATE, committer=committer)
+    commit(branch, "Adapt the Caddyfile")
+    result = check(branch, "--allow-renovate", "--pr-author", "renovate[bot]")
+    assert result.returncode == 0, result.stdout
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--pr-author", "renovate[bot]"),
+        ("--allow-renovate", "--pr-author", "someone"),
+        ("--allow-renovate",),
+        # Each bot only in its own pull requests.
+        ("--allow-renovate", "--allow-dependabot", "--pr-author", "dependabot[bot]"),
+    ],
+)
+def test_renovate_fails_otherwise(branch: Path, extra: tuple[str, ...]) -> None:
+    commit(branch, "chore(deps): update caddy", author=RENOVATE, committer=GITHUB)
+    result = check(branch, *extra)
+    assert result.returncode == 1
+    assert "author is renovate[bot]" in result.stdout
+
+
+def test_dependabot_fails_in_renovate_pull_requests(branch: Path) -> None:
+    dependabot_commit(branch)
+    result = check(branch, "--allow-renovate", "--allow-dependabot", "--pr-author", "renovate[bot]")
+    assert result.returncode == 1
+    assert "author is dependabot[bot]" in result.stdout
+
+
+def test_renovate_messages_are_still_checked(branch: Path) -> None:
+    commit(branch, f"chore(deps): update caddy\n\nSee https://{DOMAIN}/x", author=RENOVATE, committer=GITHUB)
+    result = check(branch, "--allow-renovate", "--pr-author", "renovate[bot]")
+    assert result.returncode == 1
+    assert f"a link to {DOMAIN}" in result.stdout
+    assert "author is" not in result.stdout
+
+
 # Fetching, as the action does: the commits are not in the caller's checkout.
 
 
@@ -320,6 +372,7 @@ def run_action(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         "EMAILS": inputs["emails"],
         "BLOCKED_DOMAINS": inputs["blocked-domains"],
         "ALLOW_DEPENDABOT": inputs["allow-dependabot"],
+        "ALLOW_RENOVATE": inputs["allow-renovate"],
         "FETCH_TOKEN": "",
         "GITHUB_ACTION_PATH": str(ACTION),
         **env,
@@ -361,4 +414,14 @@ def test_action_passes_the_maintainer_and_dependabot(branch: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "2 commit(s) checked" in result.stdout
     # The same commits in a pull request someone else opened.
+    assert run_action(env).returncode == 1
+
+
+def test_action_passes_renovate(branch: Path) -> None:
+    base = git(branch, "rev-parse", "main")
+    head = commit(branch, "chore(deps): update caddy", author=RENOVATE, committer=GITHUB)
+    git(branch, "config", "uploadpack.allowFilter", "true")
+    env = {"PR_BASE": base, "PR_HEAD": head, "REPO_URL": branch.as_uri()}
+    result = run_action({**env, "PR_AUTHOR": "renovate[bot]"})
+    assert result.returncode == 0, result.stdout + result.stderr
     assert run_action(env).returncode == 1

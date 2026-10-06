@@ -7,9 +7,9 @@ trailer, a line starting with "Generated with/by", a line starting with "Request
 thread", or a link to a blocked domain.
 
 With ``--allow-dependabot``, a pull request that Dependabot opened may also carry Dependabot's
-commits. Who opened the pull request comes from GitHub, not from the commits, so in any other
-pull request a commit that claims to be Dependabot's is rejected. Their messages are still
-checked.
+commits, and with ``--allow-renovate`` the same goes for Renovate. Who opened the pull request
+comes from GitHub, not from the commits, so in any other pull request a commit that claims to be
+the bot's is rejected. Their messages are still checked.
 
 Standard library only, so the action runs it with the runner's Python and no install step::
 
@@ -55,6 +55,9 @@ GITHUB = ("GitHub", "noreply@github.com")
 # The login that opens Dependabot's pull requests, and the identity its commits carry.
 DEPENDABOT_LOGIN = "dependabot[bot]"
 DEPENDABOT = ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com")
+# The same for Renovate's GitHub app (Mend's hosted Renovate).
+RENOVATE_LOGIN = "renovate[bot]"
+RENOVATE = ("renovate[bot]", "29139614+renovate[bot]@users.noreply.github.com")
 
 # Fields of `git log` are separated by NUL and records by RS, which cannot appear in a message.
 FIELDS = ("sha", "author_name", "author_email", "committer_name", "committer_email", "message")
@@ -84,12 +87,17 @@ class Policy:
     emails: tuple[str, ...]
     domains: tuple[str, ...]
     dependabot: bool = False
+    renovate: bool = False
 
     def is_maintainer(self, name: str, email: str) -> bool:
         return name == self.name and email.lower() in (e.lower() for e in self.emails)
 
     def may_author(self, name: str, email: str) -> bool:
-        return self.is_maintainer(name, email) or (self.dependabot and same(name, email, DEPENDABOT))
+        return (
+            self.is_maintainer(name, email)
+            or (self.dependabot and same(name, email, DEPENDABOT))
+            or (self.renovate and same(name, email, RENOVATE))
+        )
 
     def may_commit(self, name: str, email: str) -> bool:
         return self.may_author(name, email) or same(name, email, GITHUB)
@@ -199,6 +207,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="accept Dependabot's commits when Dependabot opened the pull request",
     )
+    parser.add_argument(
+        "--allow-renovate",
+        action="store_true",
+        help="accept Renovate's commits when Renovate opened the pull request",
+    )
     parser.add_argument("--pr-author", default="", help="the login that opened the pull request")
     parser.add_argument("--fetch-from", metavar="URL", help="fetch the commits from this repository first")
     args = parser.parse_args(argv)
@@ -208,6 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         emails=tuple(args.email),
         domains=tuple(args.blocked_domain),
         dependabot=args.allow_dependabot and args.pr_author == DEPENDABOT_LOGIN,
+        renovate=args.allow_renovate and args.pr_author == RENOVATE_LOGIN,
     )
     # The token is read from the environment so it never shows up in a command line.
     env = None
