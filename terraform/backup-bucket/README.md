@@ -32,7 +32,7 @@ R2 applies lifecycle rules within a day of their time, so there may be one more 
 
 | What | Where | Scope | Expires |
 |---|---|---|---|
-| Backups admin token | Password manager; typed in as `CLOUDFLARE_API_TOKEN` for these runs only | `Account → Workers R2 Storage → Edit`, this account only | set when created |
+| Backups admin token | Password manager; typed in as `CLOUDFLARE_API_TOKEN` for these runs only | `Account → Workers R2 Storage → Edit`, this account only | 2027-09-25 |
 | State S3 credentials and account ID | `../.env`, as for the main configuration | `Object Read & Write` on `infra-tfstate` | see `../README.md` |
 
 The state lives in the same bucket as the main one, under `infra/backups.tfstate`.

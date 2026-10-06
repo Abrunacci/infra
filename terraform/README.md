@@ -19,25 +19,32 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 
 ## Credentials
 
-Nothing secret is stored in files that are committed. Every credential comes from the environment; `.env.example` lists them.
+Nothing secret is stored in files that are committed. Every credential Terraform uses comes from the environment; `.env.example` lists them. The others are kept in the password manager, and typed in only for their runs or stored on the server.
 
-| Variable | What it is | Minimum scope | Expires |
-|---|---|---|---|
-| `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project and monitoring, each at the levels in [DigitalOcean token scopes](#digitalocean-token-scopes) | ~2027-10-01 (to confirm in the panel) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
-| `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` | – |
-| `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account | – |
-| `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Not a credential, but kept out of the repo, which is public. It is stored in the state | – |
-| `TF_VAR_alert_email` | The address DigitalOcean sends the resource alerts to. It must belong to a verified user of the DigitalOcean team | Same as above | – |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for the state bucket | `Object Read & Write` on `infra-tfstate` only | set when created |
-| `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – | – |
-| `TF_VAR_admin_ssh_public_key` | Your public SSH key | – | – |
-| Backups admin token (not in `.env`) | Cloudflare API token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration. Kept in the password manager and typed in only for its runs | `Account → Workers R2 Storage → Edit` on this account only | ~2027-09-25 (to confirm in the panel) |
-| Backup token (not in `.env`) | R2 S3 credentials the server uploads backups with. Created by hand, stored only on the server | `Object Read & Write` on `infra-backups` only | ~2026-12-24 (to confirm in the panel) |
-| GHCR token (not in `.env`) | GitHub personal access token (classic) the server uses to pull private backend images. Stored only on the server; see `ansible/README.md`, "Pulling private images" | `read:packages` only | 2027-10-05 |
-| Resend key `abrunacci-dev-contact` (not in `.env`) | Resend API key the landing's contact form sends with (`RESEND_API_KEY` of `abrunacci-dev`). Kept in the password manager and on the server only (`sudo project-secret abrunacci-dev set RESEND_API_KEY`) | Sending access, domain `mail.abrunacci.dev` only | – (Resend keys don't expire; revoke it in Resend if it leaks) |
+Two tokens have almost the same name: **`terraform-infra`** (lowercase) is DigitalOcean's, and **`Terraform-infra`** (capital T) is Cloudflare's. The "Variable" column is what each one is called everywhere else in the repo, and in the expiry alerts.
 
-When you create a token, replace "set when created" with its expiration date (not a secret): an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running. The playbook reads this table's "Expires" column (the first `YYYY-MM-DD` in it), and the status page's `Server / Credentials` heartbeat fails, and emails you, 14 days before a date. After rotating a token, write its new date here and run `./play site.yml -K --diff --tags gatus`. A row without a date is not watched.
+| Variable | What it is | Provider: name in the panel (type) | Where in the panel | Minimum scope | Expires |
+|---|---|---|---|---|---|
+| `DIGITALOCEAN_TOKEN` | Terraform's DigitalOcean token, for the Droplet, firewall, SSH key, tags, project and resource alerts. In `.env` | DigitalOcean: `terraform-infra` (personal access token) | API → Tokens → Personal access tokens | Custom scopes: droplet, firewall, ssh_key, tag, project and monitoring, each at the levels in [DigitalOcean token scopes](#digitalocean-token-scopes) | 2027-10-01 |
+| `CLOUDFLARE_API_TOKEN` | Terraform's Cloudflare token, for DNS, Email Routing and the zone settings. In `.env` | Cloudflare: `Terraform-infra` (user token) | My Profile → API Tokens | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | R2 S3 credentials for Terraform's state (this configuration's and `backup-bucket/`'s). In `.env` | Cloudflare R2: `infra-tfstate` (account token) | R2 Object Storage → Manage API tokens | `Object Read & Write` on the `infra-tfstate` bucket only | – (does not expire) |
+| Backups admin token (not in `.env`) | Cloudflare token for [`backup-bucket/`](backup-bucket/README.md), the backups bucket's own configuration (lock and lifecycle). Kept in the password manager and typed in as `CLOUDFLARE_API_TOKEN` only for its runs | Cloudflare R2: `terraform backups bucket` (user token) | R2 Object Storage → Manage API tokens | `Admin Read & Write` on every bucket of this account | 2027-09-25 |
+| Server backups token (not in `.env`) | R2 S3 credentials the server uploads the backups with. Kept in the password manager and on the server, stored with `sudo backup-credentials` (`/etc/infra/secrets/backup/r2.env`); the password manager's copy is what "Restoring without pasting the key on the server" (`ansible/README.md`) downloads with | Cloudflare R2: `server backups` (account token) | R2 Object Storage → Manage API tokens | `Object Read & Write` on the `infra-backups` bucket only | 2027-09-25 |
+| GHCR token (not in `.env`) | GitHub personal access token (classic) the server pulls private backend images with. Kept in the password manager and on the server; see `ansible/README.md`, "Pulling private images" | GitHub: `server.abrunacci.dev GHCR pull` (personal access token, classic) | Settings → Developer settings → Personal access tokens → Tokens (classic) | `read:packages` only | 2027-10-05 |
+| Resend key (not in `.env`) | Resend API key the landing's contact form sends with (`RESEND_API_KEY` of `abrunacci-dev`). Kept in the password manager and on the server only (`sudo project-secret abrunacci-dev set RESEND_API_KEY`) | Resend: `abrunacci-dev-contact` (API key) | API Keys | Sending access, domain `mail.abrunacci.dev` only | – (Resend keys don't expire; revoke it in Resend if it leaks) |
+
+The other variables in `.env` are not credentials:
+
+| Setting | What it is | Notes |
+|---|---|---|
+| `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` |
+| `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account |
+| `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Kept out of the repo, which is public. It is stored in the state |
+| `TF_VAR_alert_email` | The address DigitalOcean sends the resource alerts to. It must belong to a verified user of the DigitalOcean team | Same as above |
+| `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – |
+| `TF_VAR_admin_ssh_public_key` | Your public SSH key | – |
+
+When you create or rotate a token, write its expiration date (not a secret) in "Expires": an expired token fails whatever uses it next (a `terraform apply`, the nightly backup, a pull of a private image), while everything already running keeps running. The playbook reads this table's "Expires" column (the first `YYYY-MM-DD` in it), and the status page's `Server / Credentials` heartbeat fails, and emails you, 14 days before a date. After rotating a token, write its new date here and run `./play site.yml -K --diff --tags gatus`. A row without a date is not watched.
 
 The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. It has no R2 permission on purpose: see [`backup-bucket/`](backup-bucket/README.md). The R2 credentials (the state's and the server's) are separate tokens: a leak of one does not expose the others.
 
