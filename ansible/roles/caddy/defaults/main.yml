@@ -48,6 +48,26 @@ caddy_fail2ban_cpu_quota: 25%
 # system user created later (system uids are handed out downwards from 999).
 caddy_uid: 10001
 
+# Strict-Transport-Security on every site: browsers use only HTTPS for a
+# year, for the domain and every subdomain (includeSubDomains), so even the
+# first visit to a new subdomain never goes over plain HTTP. Every name under
+# the domain must therefore answer HTTPS: the ones in projects.yml always do
+# (Caddy); a record pointed elsewhere by hand needs HTTPS there too.
+caddy_hsts: max-age=31536000; includeSubDomains
+# Browser features no page may use, nor any page it embeds, unless the
+# project allows them (projects.yml, permissions_policy). If a script is
+# injected into a page (a bug in the app), it cannot reach the camera, the
+# microphone or the location either.
+caddy_permissions_policy: >-
+  camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(),
+  browsing-topics=()
+# Timeouts for clients (Caddy's defaults: 1 min for the headers, no limit on
+# the body, 5 min idle). read_body is for the whole body: at 64 KB/s, 30 s is about 2 MB, so
+# a larger upload over a slow link needs more.
+caddy_timeout_read_header: 10s
+caddy_timeout_read_body: 30s
+caddy_timeout_idle: 2m
+
 # Optional. With an email, the CAs can warn about expiring certificates and
 # problems with the account. Caddy renews on its own either way.
 caddy_acme_email: ""

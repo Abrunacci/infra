@@ -1,10 +1,22 @@
 # Managed by Ansible (roles/caddy).
-{% if caddy_acme_email %}
 {
+{% if caddy_acme_email %}
 	email {{ caddy_acme_email }}
-}
 
 {% endif %}
+	# How long a client may take to send its request, and to stay connected
+	# between requests. A slow client (one byte every few seconds) cannot
+	# keep a connection open for long. No limit on writing the answer: a
+	# slow download is not an attack on the server.
+	servers {
+		timeouts {
+			read_header {{ caddy_timeout_read_header }}
+			read_body {{ caddy_timeout_read_body }}
+			idle {{ caddy_timeout_idle }}
+		}
+	}
+}
+
 # The access log: every site imports it (including the ones in sites/), so
 # every request lands in one file, one JSON line each. Query strings are cut,
 # from the URI and the Referer: they can carry tokens (a password reset link).
@@ -44,10 +56,11 @@ status.{{ domain }} {
 	encode zstd gzip
 
 	header {
-		Strict-Transport-Security "max-age=31536000"
+		Strict-Transport-Security "{{ caddy_hsts }}"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Content-Security-Policy "frame-ancestors 'none'"
+		Permissions-Policy "{{ caddy_permissions_policy }}"
 		-Server
 	}
 

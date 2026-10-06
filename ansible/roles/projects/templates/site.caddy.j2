@@ -7,13 +7,16 @@
 	# Applied after the response is written (defer), so they replace a
 	# backend's own values instead of being added next to them. The two with ?
 	# are defaults: a backend that sends a stricter policy keeps it.
+	# Permissions-Policy is the project's (permissions_policy in projects.yml)
+	# or roles/caddy's default, for the static site and the backend alike.
 	header {
 		defer
-		Strict-Transport-Security "max-age=31536000"
+		Strict-Transport-Security "{{ caddy_hsts }}"
 		X-Content-Type-Options "nosniff"
 		?Referrer-Policy "strict-origin-when-cross-origin"
 		# No other site may frame this one (clickjacking).
 		?Content-Security-Policy "frame-ancestors 'none'"
+		Permissions-Policy "{{ item.permissions_policy | default(caddy_permissions_policy) }}"
 		-Server
 	}
 {% if item.backend is defined %}
@@ -25,7 +28,7 @@
 		respond @private 404
 {%     endif %}
 		request_body {
-			max_size 10MB
+			max_size {{ item.backend.max_body | default(projects_backend_default_max_body) }}
 		}
 		# The container's alias on the edge network. While it is recreated
 		# (a deploy or a rollback), requests wait for it instead of failing.
@@ -85,7 +88,7 @@
 www.{{ domain }} {
 	import access_log
 	header {
-		Strict-Transport-Security "max-age=31536000"
+		Strict-Transport-Security "{{ caddy_hsts }}"
 		-Server
 	}
 	redir https://{{ domain }}{uri} permanent
