@@ -11,6 +11,12 @@
 #       backup     only when the last successful backup is older than
 #                  <target> hours: a failure, so a backup that stopped
 #                  running alerts on time. backup-run pushes its own results.
+#       drill      every project with a database (/etc/infra/projects.json)
+#                  passed a restore drill within <target> days: when
+#                  backup-restore drill recorded it, or else the journal's
+#                  record of it
+#       credentials no credential in /etc/infra/credentials-expiry.conf
+#                  expires within <target> days
 #       Then it pings healthchecks.io, from outside the server: a success if
 #       Gatus took every push, a failure (/fail) if it did not. If the pings
 #       stop (the whole server is down), healthchecks.io alerts by itself.
@@ -40,6 +46,8 @@ cd /
 readonly CONF=/etc/infra/gatus.conf
 readonly LIST=/etc/infra/gatus-heartbeats.conf
 readonly BACKUP_STATE=/var/lib/infra/backup
+readonly REGISTRY=/etc/infra/projects.json
+readonly CREDENTIALS=/etc/infra/credentials-expiry.conf
 
 fail() {
   echo "gatus-heartbeats: $*" >&2
@@ -156,6 +164,64 @@ check_backup_age() {
   echo failed "$detail"
 }
 
+# join ITEM...: the items, separated by "; ".
+join() {
+  local out="" item
+  for item; do out+="${out:+; }$item"; done
+  echo "$out"
+}
+
+# When PROJECT last passed a restore drill (seconds since the epoch), or
+# nothing. backup-restore records it; drills from before it did are found in
+# the journal.
+last_drill() {
+  local last=""
+  [[ -r "$BACKUP_STATE/drills/$1" ]] && last="$(<"$BACKUP_STATE/drills/$1")"
+  if [[ ! "$last" =~ ^[0-9]+$ ]]; then
+    last="$(journalctl -q -t backup-restore -o short-unix --no-pager 2>/dev/null \
+      | awk -v p="$1" '$0 ~ " drill project=" p " snapshot=[^ ]+ result=ok " { t = int($1) } END { if (t) print t }')"
+  fi
+  echo "$last"
+}
+
+check_drill() {
+  local max_days="$1" projects project last late=()
+  projects="$(python3 -I -c 'import json, sys
+for p in json.load(open(sys.argv[1]))["projects"]:
+    if p.get("database"):
+        print(p["name"])' "$REGISTRY" 2>/dev/null)" || { echo failed "cannot read $REGISTRY"; return; }
+  for project in $projects; do
+    last="$(last_drill "$project")"
+    if [[ -z "$last" ]]; then
+      late+=("$project (none on record)")
+    elif (($(date -u +%s) - last > max_days * 86400)); then
+      late+=("$project ($(( ($(date -u +%s) - last) / 86400 )) days ago)")
+    fi
+  done
+  if ((${#late[@]})); then
+    echo failed "no restore drill within $max_days days: $(join "${late[@]}")"
+  else
+    echo ok "every database had a restore drill within $max_days days"
+  fi
+}
+
+check_credentials() {
+  local warn_days="$1" today date name left soon=()
+  [[ -r "$CREDENTIALS" ]] || { echo failed "$CREDENTIALS is missing (run the playbook)"; return; }
+  today="$(date -u -d "$(date -u +%F)" +%s)"
+  while read -r date name; do
+    [[ -n "$date" && "$date" != \#* ]] || continue
+    # Whole days from today to that date; a date that does not parse counts as due.
+    left="$(( ($(date -u -d "$date" +%s 2>/dev/null || echo 0) - today) / 86400 ))"
+    ((left <= warn_days)) && soon+=("$name on $date")
+  done <"$CREDENTIALS"
+  if ((${#soon[@]})); then
+    echo failed "expiring within $warn_days days: $(join "${soon[@]}")"
+  else
+    echo ok "no credential expires within $warn_days days"
+  fi
+}
+
 # Results pushed by the program that produces them, as it ends.
 if [[ $# -gt 0 ]]; then
   [[ ( "$1" == backup || "$1" == log-alerts ) && ( "${2:-}" == ok || "${2:-}" == failed ) && $# -le 3 ]] \
@@ -181,6 +247,8 @@ while read -r key check target; do
     service) result="$(check_service "$target")" ;;
     container) result="$(check_container "$target")" ;;
     backup) result="$(check_backup_age "$target")" ;;
+    drill) result="$(check_drill "$target")" ;;
+    credentials) result="$(check_credentials "$target")" ;;
     # Pushed by log-alerts itself; no push for its interval fails it.
     log-alerts) continue ;;
     *) echo "$key: unknown check $check" >&2; status=1; continue ;;

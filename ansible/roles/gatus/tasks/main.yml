@@ -17,6 +17,44 @@
   ansible.builtin.set_fact:
     gatus_heartbeats: "{{ lookup('ansible.builtin.template', 'heartbeats.yaml.j2') | from_yaml }}"
 
+# The credentials that expire, from the table in terraform/README.md,
+# "Credentials" (the one whose header starts "| Variable | What it is |"): its
+# first column (the name, without backticks or notes in parentheses) and the
+# first date in its last one ("~2027-10-01 (to confirm in the panel)" counts).
+# Rows without a date are not checked. If none had one, the table's format
+# changed: the check would watch nothing, so the run stops instead.
+- name: List the credentials that expire
+  ansible.builtin.set_fact:
+    gatus_credentials: >-
+      {%- set found = [] -%}
+      {%- set table = namespace(on=false, done=false) -%}
+      {%- for line in lookup('ansible.builtin.file', gatus_credentials_table).splitlines() if not table.done -%}
+      {%-   if line.startswith('| Variable | What it is |') -%}
+      {%-     set table.on = true -%}
+      {%-   elif table.on and not line.startswith('|') -%}
+      {%-     set table.done = true -%}
+      {%-   elif table.on and not line.startswith('|---') -%}
+      {%-     set cells = line.strip().strip('|').split('|') -%}
+      {%-     set date = cells[-1] | regex_search('(?<![0-9])20[0-9]{2}-[01][0-9]-[0-3][0-9](?![0-9])') -%}
+      {%-     if date -%}
+      {%-       set _ = found.append({'expires': date,
+                  'name': cells[0] | regex_replace('[(][^)]*[)]', '') | replace('`', '') | trim}) -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ found }}
+
+- name: Check the credentials' table
+  ansible.builtin.assert:
+    that:
+      - gatus_credentials | length > 0
+      - gatus_credentials | map(attribute='name') | select('match', '^[A-Za-z0-9_ ,.-]{1,80}$') | list | length
+        == gatus_credentials | length
+    fail_msg: >-
+      No credential with an expiration date in {{ gatus_credentials_table }} ("Credentials"), or a name
+      with unexpected characters: the Credentials heartbeat would check nothing.
+    quiet: true
+
 # Gatus runs as this unprivileged user inside the container. It owns the
 # check history, and nothing else.
 - name: Create the gatus system group
@@ -77,6 +115,14 @@
   ansible.builtin.template:
     src: gatus-heartbeats.conf.j2
     dest: /etc/infra/gatus-heartbeats.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Write the credentials' expiration dates gatus-heartbeats checks
+  ansible.builtin.template:
+    src: credentials-expiry.conf.j2
+    dest: /etc/infra/credentials-expiry.conf
     owner: root
     group: root
     mode: "0644"
