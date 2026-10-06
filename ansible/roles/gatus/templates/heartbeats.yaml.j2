@@ -37,7 +37,7 @@
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
-  description: log-alerts could not read the logs or send its email, so the lines it watches (log_alerts in projects.yml, and the server's own: SSH logins, sudo failures, failed deploys, the bans digest) are not being emailed. On the server, see journalctl -u log-alerts.
+  description: log-alerts could not read the logs or send its email, so the lines it watches (log_alerts in projects.yml, plus SSH logins, sudo failures, failed deploys and the bans digest) are not being emailed. On the server, see journalctl -u log-alerts.
 {% for p in projects_registry.projects if p.subdomain is not defined and p.backend is defined %}
 {#   Grouped by the project's name, not its title: the name is what the key
      needs (letters, digits and -), and it is already public in the repo. #}
