@@ -48,7 +48,7 @@
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
-  description: A project with a database has had no passing restore drill for {{ gatus_drill_max_days }} days. On the server, run sudo backup-restore drill PROJECT (ansible/README.md, "The restore drill, once a month").
+  description: A project with a database has had no passing restore drill for {{ gatus_drill_max_days }} days. On the server, run sudo backup-restore drill PROJECT (ansible/README.md, The restore drill, once a month).
 - group: Server
   name: Credentials
   key: {{ key('Server', 'Credentials') }}
