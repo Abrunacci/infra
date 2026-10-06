@@ -65,15 +65,17 @@
 		header @assets Cache-Control "public, max-age=31536000, immutable"
 		@not_assets not {
 			path /assets/*
-			file
+			file {path} {path}/index.html
 		}
 		header @not_assets Cache-Control "no-cache"
 
-		# Single-page app: a path that is not a file gets index.html. A missing
-		# asset stays a 404 instead of returning HTML.
+		# Single-page app: a path that is neither a file nor a folder with its
+		# own index.html gets /index.html. Such a folder (dist/es/index.html) is
+		# left to file_server, which serves /es/ from it and redirects /es to
+		# /es/. A missing asset stays a 404 instead of returning HTML.
 		@spa {
 			not path /assets/*
-			not file
+			not file {path} {path}/index.html
 		}
 		rewrite @spa /index.html
 
