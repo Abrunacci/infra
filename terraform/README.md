@@ -16,6 +16,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
 | DMARC `p=reject`: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
 | Resend's sending records (two CNAMEs and the DKIM key) under `mail.abrunacci.dev` | `email.tf` |
+| Turnstile widget for the landing's contact form (`abrunacci.dev`, Managed mode); its keys are the outputs `turnstile_site_key` and `turnstile_secret_key` | `turnstile.tf` |
 
 ## Credentials
 
@@ -24,7 +25,7 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 | Variable | What it is | Minimum scope | Expires |
 |---|---|---|---|
 | `DIGITALOCEAN_TOKEN` | DigitalOcean API token | Custom scopes: droplet, firewall, ssh_key, tag, project and monitoring, each at the levels in [DigitalOcean token scopes](#digitalocean-token-scopes) | ~2027-10-01 (to confirm in the panel) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` | 2026-12-23 |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | On the `abrunacci.dev` zone only: `Zone → DNS → Edit`, `Zone → SSL and Certificates → Edit`, `Zone → Email Routing Rules → Edit` and `Zone → Zone Settings → Edit`. On this account only: `Account → Email Routing Addresses → Edit` and `Account → Turnstile → Edit` | 2026-12-23 |
 | `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` | – |
 | `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account | – |
 | `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Not a credential, but kept out of the repo, which is public. It is stored in the state | – |
@@ -39,7 +40,7 @@ Nothing secret is stored in files that are committed. Every credential comes fro
 
 When you create a token, replace "set when created" with its expiration date (not a secret): an expired token fails the next `terraform apply` or backend deploy, while everything already running keeps running. The playbook reads this table's "Expires" column (the first `YYYY-MM-DD` in it), and the status page's `Server / Credentials` heartbeat fails, and emails you, 14 days before a date. After rotating a token, write its new date here and run `./play site.yml -K --diff --tags gatus`. A row without a date is not watched.
 
-The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses. It has no R2 permission on purpose: see [`backup-bucket/`](backup-bucket/README.md). The R2 credentials (the state's and the server's) are separate tokens: a leak of one does not expose the others.
+The Cloudflare token needs `SSL and Certificates: Edit` only to keep Universal SSL off, and `Zone Settings: Edit` only to turn Email Routing on. `Zone Settings: Edit` covers every setting of the zone, but nothing is proxied, so almost none of them has any effect. The token still cannot touch any other zone, and on the account it can only manage Email Routing destination addresses and Turnstile widgets. Turnstile needs a user token (My Profile → API Tokens): Cloudflare's account-owned tokens do not work with it. It has no R2 permission on purpose: see [`backup-bucket/`](backup-bucket/README.md). The R2 credentials (the state's and the server's) are separate tokens: a leak of one does not expose the others.
 
 ### DigitalOcean token scopes
 
@@ -97,6 +98,15 @@ Cloudflare Email Routing forwards `hello@`, `postmaster@` and `abuse@` to `TF_VA
 
   Once they are in the state, the block does nothing and the variable is no longer passed.
 - **The inbox address is in the state.** `email_forward_to` is `sensitive`, so plans hide it, but the state in R2 stores it in plain text.
+
+## Turnstile
+
+The landing's contact form (the `abrunacci-dev` backend in `../projects.yml`) asks Cloudflare Turnstile whether the visitor is a person (`turnstile.tf`). The widget accepts only `abrunacci.dev`, in Managed mode: Cloudflare decides, per visitor, whether a click is needed.
+
+- **Two keys.** The site key (`terraform output turnstile_site_key`) is public: the page shows the widget with it, and it is `TURNSTILE_SITE_KEY` in `projects.yml`. The secret key (`terraform output -raw turnstile_secret_key`) is how the backend checks each answer; it lives on the server only, set with `sudo project-secret abrunacci-dev set TURNSTILE_SECRET_KEY`. The backend does not start without both.
+- **The secret key is in the state.** Terraform stores every attribute of the widget, the secret included, in the state in R2 (`infra-tfstate`). The output is `sensitive`, so plans and `terraform output` hide it, but anyone who can read the state can read the key. That was accepted on 2026-10-06 in exchange for creating the widget as code.
+- **Never replaced by mistake.** `prevent_destroy` stops any plan that would destroy the widget. A new widget has new keys, and the form rejects every message until `projects.yml` and the server both have them.
+- **The backend calls out.** It checks each answer at `challenges.cloudflare.com:443`. Outbound traffic from the containers is not filtered today; a filter added later must allow it.
 
 ## After the first apply
 
