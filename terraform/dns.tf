@@ -107,3 +107,21 @@ resource "cloudflare_universal_ssl_setting" "this" {
   zone_id = var.cloudflare_zone_id
   enabled = false
 }
+
+# DNSSEC: Cloudflare signs the zone, so a resolver that validates (1.1.1.1,
+# 8.8.8.8, most ISPs') rejects forged answers for the domain. Cloudflare
+# Registrar publishes the DS record in .dev by itself; the status reads
+# "pending" until it is there, then "active".
+# Never removed by mistake: turning DNSSEC off while the DS record is still in
+# .dev makes the whole domain fail to resolve on those resolvers, for as long
+# as the DS stays cached (up to a day). To turn it off, do it in the
+# dashboard (DNS → Settings → Disable DNSSEC), which removes the DS first, and
+# only then drop this block (prevent_destroy first, then terraform state rm).
+resource "cloudflare_zone_dnssec" "this" {
+  zone_id = var.cloudflare_zone_id
+  status  = "active"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

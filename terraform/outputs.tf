@@ -17,3 +17,8 @@ output "hostnames" {
   description = "Every hostname that points at the Droplet."
   value       = sort(values(local.hostnames))
 }
+
+output "dnssec_ds" {
+  description = "The DS record Cloudflare Registrar publishes in .dev for the domain (compare with dig DS)."
+  value       = cloudflare_zone_dnssec.this.ds
+}
