@@ -518,16 +518,22 @@ sudo journalctl -t backup -t backup-restore            # what happened
 systemctl list-timers backup.timer                     # when the next run is
 ```
 
-A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without one, the newest trustworthy daily backup is used. The commands that decrypt ask for the private key without showing it: typed from paper, or pasted from the password manager. The key is never written to a file. It stays in the command's memory while it runs, which the kernel could move to swap, like anything else in memory.
+A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without one, the newest trustworthy daily backup is used. The commands that decrypt (`drill`, `database` and `secrets`, but not `database --from-dir`) need the age private key, which is not on the server: have it at hand before running them. They ask for the private key without showing it: typed from paper, or pasted from the password manager. The key is never written to a file. It stays in the command's memory while it runs, which the kernel could move to swap, like anything else in memory.
 
 ### The restore drill, once a month
 
+**Before you start: the private key.** The server holds only the **public** keys (`backup_age_recipients`, written to `/etc/infra/backup-recipients.txt`), which can encrypt but never decrypt. The private key (`AGE-SECRET-KEY-1...`) is kept by you, off the server, where "Setting it up" says: it is not in this repo, nor anywhere on the server. The drill cannot run without it, so have it at hand before you type the command.
+- **When it is asked for:** right after the backup is downloaded and checked, before anything is restored. It is read without being shown and is never written to a file.
+- **A wrong key** stops the drill with `that key does not decrypt this backup`. Nothing has been restored or recorded yet; run it again with the right key.
+- **If every copy is lost,** no existing backup can be decrypted any more. Make a new key pair and put its public key in place of the lost one ("Setting it up", steps 1 to 3), then take a backup right away with `sudo backup-run`.
+
 A backup that has never been restored is only a hope. `sudo backup-restore drill <project>`:
 1. downloads the newest backup and checks it against its manifest;
-2. restores it, as the owner, into a scratch database (`restore_drill`; the project name `restore-drill` is reserved for that);
-3. prints each table's row count in the backup and in the live database;
-4. checks that the roles' list and the secrets decrypt;
-5. drops the scratch database, even if the drill stops halfway.
+2. asks for the private key, and checks that it decrypts this backup;
+3. restores it, as the owner, into a scratch database (`restore_drill`; the project name `restore-drill` is reserved for that);
+4. prints each table's row count in the backup and in the live database;
+5. checks that the roles' list and the secrets decrypt;
+6. drops the scratch database, even if the drill stops halfway.
 
 It changes nothing else, except recording when it passed, for the status page. Do it once a month: the `Server / Restore drill` heartbeat fails, and emails you, once a project with a database has gone 35 days without one. Every few months, type the key from the **paper** copy, so you know the paper works.
 
