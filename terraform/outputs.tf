@@ -22,3 +22,14 @@ output "dnssec_ds" {
   description = "The DS record Cloudflare Registrar publishes in .dev for the domain (compare with dig DS)."
   value       = cloudflare_zone_dnssec.this.ds
 }
+
+output "turnstile_site_key" {
+  description = "Public site key of the contact form's Turnstile widget (TURNSTILE_SITE_KEY of abrunacci-dev in projects.yml)."
+  value       = cloudflare_turnstile_widget.contact_form.sitekey
+}
+
+output "turnstile_secret_key" {
+  description = "Secret key of the contact form's Turnstile widget. Set it on the server with sudo project-secret abrunacci-dev set TURNSTILE_SECRET_KEY; read it with terraform output -raw turnstile_secret_key."
+  value       = cloudflare_turnstile_widget.contact_form.secret
+  sensitive   = true
+}
