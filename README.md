@@ -51,3 +51,13 @@ pip install pre-commit==4.6.2   # same version as CI
 pre-commit install
 pre-commit run --all-files
 ```
+
+## Updates
+
+Everything this repository pins (the server's images by tag and digest, Docker Engine's packages, Terraform's providers, Ansible's collections, the actions, pre-commit's hooks and the tools in CI) gets a pull request from [Renovate](https://docs.renovatebot.com/) when a new version is out. Its configuration is `renovate.json`.
+
+- **Once a week,** before 09:00 on Monday (Buenos Aires time), and only for versions at least 3 days old, so a release pulled back right away never reaches a pull request.
+- **Grouped by what a merge changes:** `server images` (Caddy, Gatus, PostgreSQL, rclone and socat), `Docker Engine` (its three packages together), `Terraform providers`, `Ansible collections`, and `CI and tools`. A major version gets its own pull request. The issue "Dependency Dashboard" lists what is pending.
+- **Not PostgreSQL's major versions:** going from 17 to 18 is a dump and restore, not a bump, so Renovate never proposes it. Minor versions and new digests of 17 still come.
+- **gitleaks' binary** gets its own pull request: its checksum (`GITLEAKS_SHA256` in `.github/workflows/ci.yml`) has to be updated by hand, and the secret scan fails until it is.
+- **Merging is not applying.** An image or Docker Engine reaches the server on the next playbook run; a provider, on the next `terraform init -upgrade` and `plan`.
