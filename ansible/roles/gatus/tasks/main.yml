@@ -17,6 +17,16 @@
   ansible.builtin.set_fact:
     gatus_heartbeats: "{{ lookup('ansible.builtin.template', 'heartbeats.yaml.j2') | from_yaml }}"
 
+# Gatus refuses an alert description with " or \ in it (and so the whole
+# config, on the server): caught here, before anything changes.
+- name: Check the heartbeats' descriptions
+  ansible.builtin.assert:
+    that:
+      - gatus_heartbeats | map(attribute='description') | select('search', '["\\\\]') | list | length == 0
+    fail_msg: >-
+      A description in templates/heartbeats.yaml.j2 has a double quote or a backslash, which Gatus refuses.
+    quiet: true
+
 # The credentials that expire, from the table in terraform/README.md,
 # "Credentials" (the one whose header starts "| Variable | What it is |"): its
 # first column (the name, without backticks or notes in parentheses) and the
