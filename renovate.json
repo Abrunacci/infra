@@ -1,0 +1,215 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Pull requests for new versions of everything this repository pins. See README.md, 'Updates'.",
+    "Once a week, grouped by what a merge changes: the server's images, Docker Engine, Terraform's providers, Ansible's collections, and the CI and its tools."
+  ],
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "America/Argentina/Buenos_Aires",
+  "schedule": [
+    "before 9am on monday"
+  ],
+  "prConcurrentLimit": 6,
+  "labels": [
+    "dependencies"
+  ],
+  "minimumReleaseAge": "3 days",
+  "pre-commit": {
+    "enabled": false
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Images in the roles' defaults: name, tag and digest (caddy_image, gatus_image, postgres_image, backup_rclone_image), or name and digest only (db_tunnel_image)",
+      "managerFilePatterns": [
+        "/^ansible/roles/[^/]+/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "\\n[a-z_]+_image: (?<depName>[a-z0-9./-]+)(?::(?<currentValue>[A-Za-z0-9._-]+))?@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Engine's docker-ce package, pinned and held (roles/docker)",
+      "managerFilePatterns": [
+        "/^ansible/roles/docker/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "docker_ce_version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "docker-ce",
+      "datasourceTemplate": "deb",
+      "versioningTemplate": "deb",
+      "registryUrlTemplate": "https://download.docker.com/linux/ubuntu?suite=noble&components=stable&binaryArch=amd64"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Engine's containerd.io package, pinned and held (roles/docker)",
+      "managerFilePatterns": [
+        "/^ansible/roles/docker/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "docker_containerd_version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "containerd.io",
+      "datasourceTemplate": "deb",
+      "versioningTemplate": "deb",
+      "registryUrlTemplate": "https://download.docker.com/linux/ubuntu?suite=noble&components=stable&binaryArch=amd64"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Engine's docker-compose-plugin package, pinned and held (roles/docker)",
+      "managerFilePatterns": [
+        "/^ansible/roles/docker/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "docker_compose_version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "docker-compose-plugin",
+      "datasourceTemplate": "deb",
+      "versioningTemplate": "deb",
+      "registryUrlTemplate": "https://download.docker.com/linux/ubuntu?suite=noble&components=stable&binaryArch=amd64"
+    },
+    {
+      "customType": "regex",
+      "description": "pre-commit's hooks, frozen to a commit with the tag in a comment (pre-commit autoupdate --freeze)",
+      "managerFilePatterns": [
+        "/^\\.pre-commit-config\\.yaml$/"
+      ],
+      "matchStrings": [
+        "repo: https://github\\.com/(?<depName>[^/\\s]+/[^/\\s]+?)(?:\\.git)?\\n\\s+rev: (?<currentDigest>[0-9a-f]{40})\\s+# frozen: (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "description": "Terraform's version in CI",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "terraform_version: (?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "hashicorp/terraform",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "TFLint's version in CI",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "tflint_version: v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "terraform-linters/tflint",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "pre-commit's own version, in CI and in README.md (for running the hooks locally)",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/",
+        "/^README\\.md$/"
+      ],
+      "matchStrings": [
+        "pip install pre-commit==(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "pre-commit",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "The gitleaks binary of the full-history scan, pinned with its checksum",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "GITLEAKS_VERSION: (?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Images the server runs: one pull request, applied with the playbook",
+      "matchFileNames": [
+        "ansible/roles/**/defaults/main.yml"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "server images"
+    },
+    {
+      "description": "PostgreSQL's major versions need a dump and restore, never a plain bump: only minor versions and digests",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "postgres"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Docker Engine: the three packages move together, held by the playbook",
+      "matchDatasources": [
+        "deb"
+      ],
+      "groupName": "Docker Engine"
+    },
+    {
+      "description": "Terraform's providers and their lock file",
+      "matchManagers": [
+        "terraform"
+      ],
+      "groupName": "Terraform providers"
+    },
+    {
+      "description": "Ansible's collections (ansible/requirements.yml), installed on your machine",
+      "matchManagers": [
+        "ansible-galaxy"
+      ],
+      "groupName": "Ansible collections"
+    },
+    {
+      "description": "CI and its tools: actions, pre-commit's hooks, Terraform, TFLint, pre-commit, the tests' requirements and the test image",
+      "matchManagers": [
+        "github-actions",
+        "custom.regex",
+        "pip_requirements",
+        "dockerfile"
+      ],
+      "matchFileNames": [
+        ".github/**",
+        ".pre-commit-config.yaml",
+        "README.md",
+        "tests/**"
+      ],
+      "groupName": "CI and tools"
+    },
+    {
+      "description": "gitleaks on its own: its checksum (GITLEAKS_SHA256) must be updated by hand, so the scan fails until it is",
+      "matchPackageNames": [
+        "gitleaks/gitleaks"
+      ],
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "groupName": null,
+      "prBodyNotes": [
+        "Update `GITLEAKS_SHA256` in `.github/workflows/ci.yml` to the checksum in the release's `gitleaks_<version>_checksums.txt`, for `gitleaks_<version>_linux_x64.tar.gz`. Until then the secret scan fails, on purpose."
+      ]
+    }
+  ]
+}
