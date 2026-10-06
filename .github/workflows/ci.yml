@@ -67,6 +67,25 @@ jobs:
           tar -xzf "${tarball}" gitleaks
       - run: ./gitleaks git --redact --verbose .
 
+  trivy-config:
+    name: Config scan (trivy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # The same image as the weekly scan (security-scan.yml).
+      TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Terraform and the Dockerfiles. The compose files are Jinja templates
+      # (roles/*/templates), which Trivy cannot read. Accepted findings, each
+      # with why: .trivyignore.yaml.
+      - name: trivy config
+        run: >-
+          docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" config --exit-code 1
+          --severity MEDIUM,HIGH,CRITICAL --ignorefile /src/.trivyignore.yaml /src
+
   commit-metadata-action:
     name: Test (check-commit-metadata)
     runs-on: ubuntu-24.04

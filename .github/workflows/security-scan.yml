@@ -1,0 +1,55 @@
+---
+name: Security scan
+
+# The images the server runs (the *_image values in the roles' defaults),
+# scanned with Trivy for vulnerabilities that have a fix. Weekly, on Monday
+# after Renovate's update pull requests (renovate.json), by hand (Actions →
+# Security scan → Run workflow), and on pull requests that change an image.
+# It fails on a CRITICAL one, so GitHub emails its result; the job summary
+# lists every HIGH and CRITICAL. Accepted findings: .trivyignore.yaml.
+on:
+  schedule:
+    - cron: "0 12 * * 1"  # 09:00 in Buenos Aires
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ansible/roles/*/defaults/main.yml
+      - .trivyignore.yaml
+      - .github/workflows/security-scan.yml
+      - .github/scripts/trivy-summary.py
+
+permissions:
+  contents: read
+
+env:
+  # Run from its image, pinned by digest like every other image here.
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  images:
+    name: Scan the server's images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan each image
+        run: |
+          mkdir -p "$RUNNER_TEMP/reports"
+          grep -hE '^[a-z_]+_image: ' ansible/roles/*/defaults/main.yml | awk '{print $2}' |
+            while read -r image; do
+              name="$(printf '%s' "${image%%@*}" | tr '/:' '__')"
+              echo "::group::$image"
+              # A failed scan leaves an empty report, which the summary counts as a failure.
+              touch "$RUNNER_TEMP/reports/$name.json"
+              docker run --rm \
+                -v "$RUNNER_TEMP/reports:/reports" -v trivy-cache:/root/.cache \
+                -v "$PWD/.trivyignore.yaml:/trivyignore.yaml:ro" \
+                "$TRIVY_IMAGE" image --image-src remote --severity HIGH,CRITICAL --ignore-unfixed \
+                --ignorefile /trivyignore.yaml --format json --output "/reports/$name.json" "$image" || true
+              echo "::endgroup::"
+            done
+      - name: Summarize
+        if: always()
+        run: python3 .github/scripts/trivy-summary.py "$RUNNER_TEMP/reports" | tee -a "$GITHUB_STEP_SUMMARY"

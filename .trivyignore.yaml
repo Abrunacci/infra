@@ -1,0 +1,26 @@
+# Findings Trivy reports that are accepted, each with why (README.md,
+# "Security scan"). Read by both scans: `trivy config` in CI and the weekly
+# image scan (.github/workflows/security-scan.yml). A vulnerability is only
+# accepted until expired_at: after that date it fails the scan again, and is
+# either fixed by then or looked at once more.
+
+---
+misconfigurations:
+  - id: DIG-0001
+    paths: [terraform/firewall.tf]
+    statement: >-
+      Inbound from anywhere is the point of the firewall: HTTP and HTTPS for the sites, ICMP, and SSH, which
+      takes keys only and has fail2ban (README.md, "Firewall: SSH, HTTP(S) and ICMP only").
+  - id: DIG-0003
+    paths: [terraform/firewall.tf]
+    statement: >-
+      Outbound to anywhere: certificates, images, backups, email and the backends' own calls need it.
+      Restricting the backends' egress is a later step of the security audit (step 11).
+vulnerabilities:
+  - id: CVE-2025-68121
+    paths: [usr/local/bin/gosu]
+    statement: >-
+      In the postgres image, gosu's Go standard library (crypto/tls session resumption). gosu only drops to
+      the postgres user when the container starts and makes no TLS connection. The latest postgres:17 image
+      still carries it.
+    expired_at: 2026-11-06

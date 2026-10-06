@@ -135,6 +135,17 @@
       "depNameTemplate": "gitleaks/gitleaks",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Trivy's image in the workflows (the config scan in CI and the weekly image scan)",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "TRIVY_IMAGE: (?<depName>aquasec/trivy):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [

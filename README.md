@@ -42,7 +42,7 @@ DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) ar
 
 ## Development
 
-Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, a JSON Schema check of `projects.yml`, ansible-lint (production profile), shellcheck, ruff (the Python scripts) and actionlint.
+Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform fmt`/`validate`, tflint, yamllint, a JSON Schema check of `projects.yml`, ansible-lint (production profile), shellcheck, ruff (the Python scripts), actionlint and, in CI only, a Trivy config scan.
 
 Requirements: Python 3, Terraform 1.16, TFLint 0.64 and, to run the playbook, ansible-core 2.21. The other tools are installed by pre-commit itself.
 
@@ -61,3 +61,13 @@ Everything this repository pins (the server's images by tag and digest, Docker E
 - **Not PostgreSQL's major versions:** going from 17 to 18 is a dump and restore, not a bump, so Renovate never proposes it. Minor versions and new digests of 17 still come.
 - **gitleaks' binary** gets its own pull request: its checksum (`GITLEAKS_SHA256` in `.github/workflows/ci.yml`) has to be updated by hand, and the secret scan fails until it is.
 - **Merging is not applying.** An image or Docker Engine reaches the server on the next playbook run; a provider, on the next `terraform init -upgrade` and `plan`.
+
+## Security scan
+
+[Trivy](https://trivy.dev) looks for known vulnerabilities and risky settings, from its image pinned by digest (`TRIVY_IMAGE`, updated by Renovate).
+
+- **The server's images, once a week:** `.github/workflows/security-scan.yml` scans every `*_image` in the roles' defaults on Monday at 09:00 (Buenos Aires time), after Renovate's pull requests, and on pull requests that change an image. Run it by hand from Actions → Security scan → Run workflow. Only vulnerabilities with a fix count. The job summary lists every HIGH and CRITICAL one; a CRITICAL one fails the run, so GitHub emails you. HIGH ones usually go away with the next `server images` pull request.
+- **The configuration, on every pull request:** the CI job "Config scan (trivy)" checks Terraform and the Dockerfiles for MEDIUM and higher. The compose files are Jinja templates, which Trivy cannot read.
+- **Accepted findings** go in `.trivyignore.yaml`, each with why and the paths it applies to. A vulnerability is accepted only until its `expired_at`: after that date it fails the scan again, and gets fixed or looked at once more.
+
+When the weekly scan fails: open its summary, update the image (merge its pending pull request, or let Renovate bring a new digest of the same tag), or, if the vulnerability cannot be reached on this server, add it to `.trivyignore.yaml` with a reason and an `expired_at` a month out.
