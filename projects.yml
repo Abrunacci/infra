@@ -114,8 +114,8 @@ projects:
     database: false
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJITKgKgF+4yXbqYGiYVx4Z26x/rf0qn9/gqE2KMu1pJ abrunacci-dev-deploy
     # The contact form (backend/ in the abrunacci.dev repository). Its log
-    # holds the full text of held and discarded messages (name, email and
-    # message): personal data, kept as long as the backend's logs are.
+    # holds nothing a visitor typed: only each event, its reason, an ID, the
+    # time and the message's length.
     backend:
       image: ghcr.io/abrunacci/abrunacci-dev-backend
       port: 8000
@@ -133,7 +133,7 @@ projects:
         RESEND_API_KEY: manual
         # Signs the form's time token. A new value invalidates open forms.
         FORM_SECRET: generated
-        # The inbox the messages go to. Not in env: this repository is public.
+        # The inbox the messages go to, set on the server.
         MAIL_TO: manual
       memory: 128m
       # A name, an email and a message: a few KB at most.
