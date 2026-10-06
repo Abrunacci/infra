@@ -36,6 +36,10 @@ inputs:
     description: >-
       "true" accepts Dependabot's commits in pull requests Dependabot opened.
     default: "true"
+  allow-renovate:
+    description: >-
+      "true" accepts Renovate's commits in pull requests Renovate opened.
+    default: "true"
   token:
     description: Reads the repository's commits. The job's own token is enough.
     default: ${{ github.token }}
@@ -57,6 +61,7 @@ runs:
         EMAILS: ${{ inputs.emails }}
         BLOCKED_DOMAINS: ${{ inputs.blocked-domains }}
         ALLOW_DEPENDABOT: ${{ inputs.allow-dependabot }}
+        ALLOW_RENOVATE: ${{ inputs.allow-renovate }}
         FETCH_TOKEN: ${{ inputs.token }}
       run: |
         # The same CI job also runs on pushes to main, where there is no pull
@@ -75,5 +80,8 @@ runs:
         done <<< "$BLOCKED_DOMAINS"
         if [[ "$ALLOW_DEPENDABOT" == true ]]; then
           args+=(--allow-dependabot)
+        fi
+        if [[ "$ALLOW_RENOVATE" == true ]]; then
+          args+=(--allow-renovate)
         fi
         python3 "$GITHUB_ACTION_PATH/check_authorship.py" "${args[@]}"
