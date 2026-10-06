@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emails the backends' log lines that projects.yml asks to hear about.
+"""Emails the log lines that projects.yml and the server's own rules ask to hear about.
 
     log-alerts                       read what the backends logged since the last
                                      run and email the lines that match a rule
@@ -9,10 +9,13 @@
                                      that period instead
     log-alerts --check FILE          check a rules file (the playbook's validate)
 
-The rules are each backend's log_alerts in projects.yml, written by the
-playbook to /etc/infra/log-alerts.json: a line logged by backend.<project>
-matches a rule when every one of its match patterns (Python regular
-expressions) is found in it. Run every 5 minutes by log-alerts.timer.
+The rules are each backend's log_alerts in projects.yml, plus the server's
+own (gatus_log_alerts_server_rules in roles/gatus: SSH logins, sudo failures,
+failed deploys), written by the playbook to /etc/infra/log-alerts.json. A
+rule reads what one or more syslog identifiers logged: backend.<project> for a
+backend's, its identifiers for a server rule. A line matches it when every
+one of its match patterns (Python regular expressions) is found in it. Run
+every 5 minutes by log-alerts.timer.
 
 A rule may also say how to build the email's subject from the line: subject
 has a pattern with named groups and a format that uses them, such as
@@ -26,6 +29,11 @@ run, and any run with no rules, only records where the journal ends: lines
 logged before it are never emailed. All the lines a run finds go in one email,
 up to max_lines of them; the rest are counted. If the email is not sent, the
 cursor stays put and the next run tries again.
+
+Once a day, the first run after bans_digest's hour (UTC) also counts the
+bans fail2ban made in the last 24 hours, per jail, from its log. It emails the
+counts (never the addresses) when a jail outside quiet_jails banned anyone:
+the SSH jail bans every day, the sites' jails should not.
 
 Emails go to the alerts' address through the alerts' channel (only email):
 the Resend key gatus-credentials stored, the same sender and recipient as
@@ -48,7 +56,7 @@ import string
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
@@ -62,6 +70,12 @@ MAX_LINE = 1000
 # A longer subject built from a line is cut.
 MAX_SUBJECT = 150
 NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}\Z")
+IDENTIFIER = re.compile(r"[A-Za-z0-9_.@-]{1,64}\Z")
+JAIL = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+DIGEST_DAY = os.path.join(STATE_DIR, "bans-digest-day")
+# "2026-10-05 22:14:36,879 fail2ban.actions [2693]: NOTICE  [caddy-auth] Ban 203.0.113.7".
+# A ban restored after a restart says "Restore Ban" and is not counted again.
+BAN = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\S* fail2ban\.actions\s.*?NOTICE\s+\[([^\]]+)\] Ban (\S+)")
 PROJECT = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
@@ -70,7 +84,7 @@ class Failed(Exception):
 
 
 def load_rules(path):
-    """Returns (rules, max_lines), each rule with its patterns compiled."""
+    """Returns (rules, max_lines, digest), each rule with its patterns compiled."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -78,14 +92,21 @@ def load_rules(path):
         raise Failed(f"cannot read {path}: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
         raise Failed(f"{path}: no rules list")
+    if set(data) - {"rules", "max_lines", "bans_digest"}:
+        raise Failed(f"{path}: unknown keys {sorted(set(data) - {'rules', 'max_lines', 'bans_digest'})}")
     max_lines = data.get("max_lines")
     if not isinstance(max_lines, int) or isinstance(max_lines, bool) or not 1 <= max_lines <= 200:
         raise Failed(f"{path}: max_lines must be a number from 1 to 200")
     rules, seen = [], set()
     for i, rule in enumerate(data["rules"]):
         where = f"{path}: rule {i + 1}"
-        if not isinstance(rule, dict) or sorted(set(rule) - {"subject"}) != ["match", "name", "note", "project"]:
-            raise Failed(f"{where}: needs project, name, match and note, and only subject besides")
+        if not isinstance(rule, dict) or sorted(set(rule) - {"subject", "identifiers"}) != [
+            "match",
+            "name",
+            "note",
+            "project",
+        ]:
+            raise Failed(f"{where}: needs project, name, match and note, and only subject and identifiers besides")
         project, name, match, note = rule["project"], rule["name"], rule["match"], rule["note"]
         if not isinstance(project, str) or not PROJECT.match(project):
             raise Failed(f"{where}: invalid project {project!r}")
@@ -102,16 +123,42 @@ def load_rules(path):
             patterns = [re.compile(p) for p in match]
         except re.error as e:
             raise Failed(f"{where}: invalid pattern: {e}") from e
+        # A backend's rules read its own log; a server rule names what it reads.
+        identifiers = rule.get("identifiers", [f"backend.{project}"])
+        if (
+            not isinstance(identifiers, list)
+            or not identifiers
+            or not all(isinstance(i, str) and IDENTIFIER.match(i) for i in identifiers)
+        ):
+            raise Failed(f"{where}: identifiers must be a list of syslog identifiers")
         rules.append(
             {
                 "project": project,
                 "name": name,
                 "note": note,
                 "patterns": patterns,
+                "identifiers": identifiers,
                 "subject": load_subject(rule.get("subject"), where),
             }
         )
-    return rules, max_lines
+    return rules, max_lines, load_digest(data.get("bans_digest"), path)
+
+
+def load_digest(digest, path):
+    """Returns the bans digest's settings, or None when there is none."""
+    if digest is None:
+        return None
+    where = f"{path}: bans_digest"
+    if not isinstance(digest, dict) or sorted(digest) != ["hour", "log", "quiet_jails"]:
+        raise Failed(f"{where}: needs exactly hour, log and quiet_jails")
+    hour, log, quiet = digest["hour"], digest["log"], digest["quiet_jails"]
+    if not isinstance(hour, int) or isinstance(hour, bool) or not 0 <= hour <= 23:
+        raise Failed(f"{where}: hour must be a number from 0 to 23")
+    if not isinstance(log, str) or not log.startswith("/"):
+        raise Failed(f"{where}: log must be an absolute path")
+    if not isinstance(quiet, list) or not all(isinstance(j, str) and JAIL.match(j) for j in quiet):
+        raise Failed(f"{where}: quiet_jails must be a list of jail names")
+    return {"hour": hour, "log": log, "quiet_jails": set(quiet)}
 
 
 def load_subject(subject, where):
@@ -193,10 +240,11 @@ def journal_end():
 
 def scan(rules, position):
     """Returns (matches, last cursor read): position is ["--after-cursor=C"] or ["--since=S"]."""
-    tags = sorted({"backend." + r["project"] for r in rules})
     by_tag = {}
     for rule in rules:
-        by_tag.setdefault("backend." + rule["project"], []).append(rule)
+        for identifier in rule["identifiers"]:
+            by_tag.setdefault(identifier, []).append(rule)
+    tags = sorted(by_tag)
     matches, last = [], None
     for entry in journal([*position, *(f"--identifier={t}" for t in tags)]):
         last = entry["__CURSOR"]
@@ -242,12 +290,15 @@ def compose(matches, max_lines):
         parts.append("")
     if shown < len(matches):
         first = min(when for _, when, _ in matches)
-        tags = " ".join(sorted({f"-t backend.{p}" for p, _ in groups}))
+        tags = " ".join(sorted({f"-t {i}" for rule, _ in groups.values() for i in rule["identifiers"]}))
         parts.append(
             f"{len(matches) - shown} more not shown. On the server: sudo journalctl {tags} "
             f"--since '{first:%Y-%m-%d %H:%M:%S} UTC'\n"
         )
-    parts.append(f"Sent by log-alerts on {socket.gethostname()}. The rules are log_alerts in projects.yml.")
+    parts.append(
+        f"Sent by log-alerts on {socket.gethostname()}. The rules are log_alerts in projects.yml, "
+        "and gatus_log_alerts_server_rules in roles/gatus for the server's own."
+    )
     return subject, "\n".join(parts) + "\n"
 
 
@@ -308,7 +359,87 @@ def heartbeat(result):
         print(f"status page: not updated: {e}", file=sys.stderr)
 
 
-def run(rules, max_lines):
+def ban_lines(log):
+    """The log's lines and its last rotation's (logrotate leaves the newest one uncompressed)."""
+    for path in (log + ".1", log):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                yield from f
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            raise Failed(f"cannot read {path}: {e}") from e
+
+
+def count_bans(digest, now):
+    """Returns {jail: [bans, addresses]} for the 24 hours before now."""
+    since = now - timedelta(hours=24)
+    counts = {}
+    for line in ban_lines(digest["log"]):
+        found = BAN.match(line)
+        if not found:
+            continue
+        try:
+            # fail2ban logs the server's local time.
+            when = datetime.strptime(found.group(1), "%Y-%m-%d %H:%M:%S").astimezone()
+        except ValueError:
+            continue
+        if when >= since:
+            jail = counts.setdefault(found.group(2), [0, set()])
+            jail[0] += 1
+            jail[1].add(found.group(3))
+    return {jail: [n, len(addresses)] for jail, (n, addresses) in counts.items()}
+
+
+def compose_digest(counts, digest):
+    """Returns (subject, body), or None when only quiet jails banned anyone."""
+    if not any(n for jail, (n, _) in counts.items() if jail not in digest["quiet_jails"]):
+        return None
+    jails = sorted(counts, key=lambda j: (j in digest["quiet_jails"], j))
+    subject = "server: bans in the last 24 h: " + ", ".join(f"{j} {counts[j][0]}" for j in jails)
+    parts = ["fail2ban's bans in the last 24 hours, per jail (bans, distinct addresses):", ""]
+    for jail in jails:
+        bans, addresses = counts[jail]
+        parts.append(f"  {jail}: {bans} ban(s), {addresses} address(es)")
+    parts += [
+        "",
+        "The addresses stay on the server. A ban of someone legitimate, such as a visitor behind a shared",
+        "address, is lifted with: sudo fail2ban-client set <jail> unbanip <address>",
+        "On the server: sudo grep -E 'NOTICE .*\\] Ban ' /var/log/fail2ban.log | tail",
+        "",
+        f"Sent by log-alerts on {socket.gethostname()} once a day, when a jail other than "
+        + ", ".join(sorted(digest["quiet_jails"]) or ["none"])
+        + " banned anyone (bans_digest in /etc/infra/log-alerts.json).",
+    ]
+    return subject, "\n".join(parts) + "\n"
+
+
+def read_digest_day():
+    try:
+        with open(DIGEST_DAY) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def bans_digest(digest):
+    """Once a day, after digest's hour (UTC): emails the day's bans if a loud jail banned anyone."""
+    utc = datetime.now(timezone.utc)
+    today = f"{utc:%Y-%m-%d}"
+    if utc.hour < digest["hour"] or read_digest_day() == today:
+        return
+    mail = compose_digest(count_bans(digest, datetime.now(timezone.utc)), digest)
+    if mail:
+        send(*mail)
+        print("emailed the bans digest")
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".digest.")
+    with os.fdopen(fd, "w") as f:
+        f.write(today + "\n")
+    os.replace(tmp, DIGEST_DAY)
+
+
+def run(rules, max_lines, digest):
     """One timer run. Returns how many lines were emailed."""
     cursor = read_cursor()
     if not rules or cursor is None:
@@ -316,17 +447,21 @@ def run(rules, max_lines):
         save_cursor(journal_end())
         if rules:
             print("first run: reading the journal from now on")
-        return 0
-    matches, last = scan(rules, [f"--after-cursor={cursor}"])
-    if matches:
-        send(*compose(matches, max_lines))
-        print(f"emailed {len(matches)} line(s)")
-    if last:
-        save_cursor(last)
-    return len(matches)
+        emailed = 0
+    else:
+        matches, last = scan(rules, [f"--after-cursor={cursor}"])
+        if matches:
+            send(*compose(matches, max_lines))
+            print(f"emailed {len(matches)} line(s)")
+        if last:
+            save_cursor(last)
+        emailed = len(matches)
+    if digest:
+        bans_digest(digest)
+    return emailed
 
 
-def dry_run(rules, max_lines, since):
+def dry_run(rules, max_lines, digest, since):
     if since is not None:
         position = [f"--since={since}"]
     else:
@@ -338,16 +473,26 @@ def dry_run(rules, max_lines, since):
     matches, _ = scan(rules, position) if rules else ([], None)
     if not matches:
         print("nothing to email")
-        return
-    subject, body = compose(matches, max_lines)
-    print(f"Subject: {subject}\n\n{body}", end="")
+    else:
+        subject, body = compose(matches, max_lines)
+        print(f"Subject: {subject}\n\n{body}", end="")
+    if digest:
+        # The digest as it would be now, whether or not today's was sent.
+        counts = count_bans(digest, datetime.now(timezone.utc))
+        mail = compose_digest(counts, digest)
+        print(f"\n--- bans digest (sent once a day after {digest['hour']:02d}:00 UTC) ---")
+        if mail:
+            print(f"Subject: {mail[0]}\n\n{mail[1]}", end="")
+        else:
+            totals = ", ".join(f"{j} {n}" for j, (n, _) in sorted(counts.items())) or "no bans"
+            print(f"nothing to email ({totals})")
 
 
 def main():
     args = sys.argv[1:]
     try:
         if len(args) == 2 and args[0] == "--check":
-            rules, _ = load_rules(args[1])
+            rules, _, _ = load_rules(args[1])
             print(f"{len(rules)} rule(s)")
             return 0
         if os.geteuid() != 0:

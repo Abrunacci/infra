@@ -1,5 +1,6 @@
 {#- Read by log-alerts: every backend's log_alerts in projects.yml, with its
-    project. JSON, so the patterns reach Python as they were written. -#}
+    project, then the server's own rules (gatus_log_alerts_server_rules) and
+    the bans digest. JSON, so the patterns reach Python as they were written. -#}
 {%- set ns = namespace(rules=[]) -%}
 {%- for p in projects_registry.projects if p.backend is defined and p.backend.log_alerts is defined -%}
 {%-   for r in p.backend.log_alerts -%}
@@ -10,4 +11,10 @@
 {%-     set ns.rules = ns.rules + [rule] -%}
 {%-   endfor -%}
 {%- endfor -%}
-{{ {'rules': ns.rules, 'max_lines': gatus_log_alerts_max_lines | int} | to_nice_json(indent=2, ensure_ascii=False) }}
+{%- for r in gatus_log_alerts_server_rules -%}
+{%-   set ns.rules = ns.rules + [dict(r, project='server')] -%}
+{%- endfor -%}
+{%- set digest = {'hour': gatus_log_alerts_bans_digest_hour | int, 'log': '/var/log/fail2ban.log',
+                  'quiet_jails': gatus_log_alerts_bans_quiet_jails} -%}
+{{ {'rules': ns.rules, 'max_lines': gatus_log_alerts_max_lines | int, 'bans_digest': digest}
+   | to_nice_json(indent=2, ensure_ascii=False) }}
