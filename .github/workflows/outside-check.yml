@@ -1,0 +1,47 @@
+---
+name: Outside check
+
+# The server as the internet sees it: open ports (IPv4), TLS, security
+# headers, private paths and the CAA and DS records, compared with what the
+# repo says (.github/scripts/outside-check.py). Weekly, on Monday after the
+# security scan, and by hand (Actions → Outside check → Run workflow).
+#
+# The repo is public, so this job's log and summary never say what differs:
+# the result goes to the "infra outside check" check in healthchecks.io, as a
+# success ping or a failure ping with the differences. healthchecks.io also
+# emails when no ping arrives, so a workflow that stops running is noticed.
+# The run is green whenever the check ran, red only when it could not.
+on:
+  schedule:
+    - cron: "30 12 * * 1"  # 09:30 in Buenos Aires
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: outside-check
+
+env:
+  # The DS record Cloudflare Registrar published for DNSSEC (terraform/dns.tf),
+  # as `dig +short DS abrunacci.dev @1.1.1.1` showed it on 2026-10-07. It
+  # changes only with the zone's signing key: then update it from the same dig.
+  DNSSEC_DS: "2371 13 2 4BEC85FC5312BEE63365E64FCFE1D189A2FFA96B9111E763F1654CE15B51F957"
+
+jobs:
+  check:
+    name: Check the server from outside
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install nmap, dig and PyYAML
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends nmap dnsutils python3-yaml >/dev/null
+      - name: Check and report to healthchecks.io
+        env:
+          OUTSIDE_CHECK_PING_URL: ${{ secrets.OUTSIDE_CHECK_PING_URL }}
+        run: /usr/bin/python3 .github/scripts/outside-check.py run
