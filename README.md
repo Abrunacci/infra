@@ -71,3 +71,23 @@ Everything this repository pins (the server's images by tag and digest, Docker E
 - **Accepted findings** go in `.trivyignore.yaml`, each with why and the paths it applies to. A vulnerability is accepted only until its `expired_at`: after that date it fails the scan again, and gets fixed or looked at once more.
 
 When the weekly scan fails: open its summary, update the image (merge its pending pull request, or let Renovate bring a new digest of the same tag), or, if the vulnerability cannot be reached on this server, add it to `.trivyignore.yaml` with a reason and an `expired_at` a month out.
+
+## Outside check
+
+Once a week, `.github/workflows/outside-check.yml` looks at the server from a GitHub runner, the way anyone on the internet sees it, and compares it with what this repo says. Nothing in it needs a credential. Run it by hand from Actions → Outside check → Run workflow.
+
+| What | Expected | From |
+|---|---|---|
+| TCP ports of `server.abrunacci.dev`, all of them, over IPv4 | open: the `tcp` inbound rules; everything else filtered | `terraform/firewall.tf` |
+| UDP ports | the `udp` inbound rules answer `open\|filtered` | `terraform/firewall.tf` |
+| TLS of every site | TLS 1.2 and 1.3 only, every cipher graded A by nmap | `projects.yml`, plus `status` and `www` |
+| Headers of every site | `caddy_hsts`, `nosniff`, `frame-ancestors`, no `Server`; `www` redirects permanently to the root domain | `projects.yml`, `roles/caddy` |
+| Private paths | each one, and the usual ways around a path match (trailing or doubled slash, upper case, percent-encoding), answers 404 or 405 to a POST | `private_paths` in `projects.yml` |
+| CAA and DS records, from 1.1.1.1 | exactly the CAA records of the repo and the DS record of `DNSSEC_DS` | `terraform/dns.tf`, the workflow |
+
+- **It reports to healthchecks.io, never to GitHub.** The repo is public, and so are the job's log and summary: they only say how many checks ran. The result goes to the `infra outside check` check: a success ping, or a failure ping with one line per difference, which healthchecks.io shows in its dashboard and emails. Its ping URL is the `OUTSIDE_CHECK_PING_URL` Actions secret.
+- **A silent week is noticed too.** The check expects a ping every 7 days, with 1 day of grace: if GitHub stops the schedule (it does after 60 days without activity in a public repo) or the job dies, healthchecks.io emails.
+- **Green unless it could not run.** A run that checked everything is green whatever it found. It is red only when the check itself failed (no secret, nmap missing, healthchecks.io not answering); then the failure ping, when it could be sent, carries the error.
+- **What it cannot see:** IPv6 (GitHub's runners have none) and anything inside the server. Its 20 or so HTTPS requests are far below fail2ban's limits (`caddy_fail2ban_*` in `roles/caddy`).
+
+When it fails: open the check in healthchecks.io, read the ping's body and fix what differs, or, if the change was intended, update the repo so it expects it. Then run the workflow by hand: the check goes back to up.
