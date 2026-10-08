@@ -1,0 +1,29 @@
+{# Read by server-posture (scripts/server-posture): what the server's security
+   settings must be, from the roles that set each one up. #}
+{%- set ssh_rules = hardening_ufw_rules | selectattr('comment', 'equalto', 'SSH') | list -%}
+{%- set web_rules = hardening_ufw_rules | rejectattr('comment', 'equalto', 'SSH') | list -%}
+{
+  "listeners": [
+{%- for r in hardening_ufw_rules %}
+    {#- Ubuntu 24.04 may start sshd by socket activation: then systemd holds port 22. #}
+    {"proto": {{ r.proto | to_json }}, "port": {{ r.port | int }}, "processes": {{ (['sshd', 'systemd'] if r in ssh_rules else ['docker-proxy']) | to_json }}}{{ '' if loop.last else ',' }}
+{%- endfor %}
+  ],
+  "published": {
+    "public": [{"service": "caddy/caddy", "ports": {{ web_rules | map(attribute='port') | zip(web_rules | map(attribute='proto')) | map('join', '/') | list | to_json }}}],
+    "loopback": [{"service": "gatus/gatus", "ports": {{ [gatus_push_port ~ '/tcp'] | to_json }}}]
+  },
+  "ufw": {{ hardening_ufw_rules | map(attribute='port') | zip(hardening_ufw_rules | map(attribute='proto')) | map('join', '/') | list | to_json }},
+  "sshd": {
+    "permitrootlogin": "no",
+    "passwordauthentication": "no",
+    "kbdinteractiveauthentication": "no",
+    "authenticationmethods": "publickey",
+    "allowusers": {{ hardening_ssh_allow_users | to_json }},
+    "maxauthtries": "3"
+  },
+  "services": ["fail2ban", "unattended-upgrades"],
+  "fail2ban_jails": {{ gatus_posture_fail2ban_jails | to_json }},
+  "reboot_required_max_hours": {{ gatus_posture_reboot_max_hours | int }},
+  "held_packages": {{ docker_held_packages | to_json }}
+}

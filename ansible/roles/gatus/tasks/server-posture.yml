@@ -1,0 +1,38 @@
+---
+# server-posture: checks the server's security settings every hour against
+# what the roles set up, and reports to its own check on healthchecks.io (not
+# to Gatus, whose page is public). Installed with the other Gatus commands
+# (main.yml). The ping URL is stored by `sudo gatus-credentials
+# server-posture`; until then, every run ends with a warning
+# (tasks/healthchecks.yml).
+
+# Checked by server-posture itself before it replaces the current file.
+- name: Write what server-posture expects
+  ansible.builtin.template:
+    src: server-posture.json.j2
+    dest: /etc/infra/server-posture.json
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/sbin/server-posture --check %s
+
+- name: Install server-posture's service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - server-posture.service
+    - server-posture.timer
+  notify: Reload systemd for the heartbeats
+
+- name: Apply server-posture's systemd changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Start server-posture's timer
+  ansible.builtin.systemd_service:
+    name: server-posture.timer
+    enabled: true
+    state: started

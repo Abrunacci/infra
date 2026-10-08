@@ -6,6 +6,13 @@
 docker_ce_version: "5:29.8.1-1~ubuntu.24.04~noble"
 docker_containerd_version: "2.3.5-1~ubuntu.24.04~noble"
 docker_compose_version: "5.5.1-1~ubuntu.24.04~noble"
+# The packages held at those versions; the only ones held on the server
+# (roles/gatus, server-posture, checks it).
+docker_held_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin
 
 # Docker's apt signing key, fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
 # (https://docs.docker.com/engine/install/ubuntu/). If Docker ever replaces the

@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Checks the server's security settings against what the repo says.
+
+    sudo server-posture          check, log what differs, report to healthchecks.io
+    sudo server-posture check    check and print what differs; no ping
+    server-posture --check FILE  only read FILE as its config (Ansible's validate)
+
+Run every hour by server-posture.timer. What is expected is
+/etc/infra/server-posture.json, written by Ansible (roles/gatus) from the
+roles that set each thing up:
+
+- listening sockets on public addresses, IPv4 and IPv6 (ss): only SSH and
+  Docker's proxy for Caddy's ports (hardening_ufw_rules);
+- ports Docker publishes: only Caddy on public addresses, only Gatus on
+  loopback;
+- ufw: active, deny incoming, exactly its rules in v4 and v6;
+- sshd's effective settings (sshd -T);
+- fail2ban: running, with exactly its jails;
+- unattended-upgrades running, no reboot pending for long, and only Docker's
+  packages held.
+
+The status page is public, so none of this goes to Gatus. The result goes to
+the "server posture" check on healthchecks.io: a success ping, or a failure
+ping with one line per difference, which only its dashboard and its email
+show. The same lines go to the journal (journalctl -t server-posture). The
+ping URL is stored by `sudo gatus-credentials server-posture` and never
+printed. Exits 1 only when the check itself could not run.
+Installed by Ansible (roles/gatus) as /usr/local/sbin/server-posture.
+"""
+
+import ipaddress
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import time
+import traceback
+import urllib.request
+
+CONF = pathlib.Path("/etc/infra/server-posture.json")
+PING_ENV = pathlib.Path("/etc/infra/secrets/gatus/server-posture.env")
+REBOOT_REQUIRED = pathlib.Path("/var/run/reboot-required")
+
+
+def run(*argv):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    return result.returncode, result.stdout
+
+
+def public(address):
+    """False for loopback; true for any other address, link-local included."""
+    address = address.split("%")[0].strip("[]")
+    if address == "*":
+        return True
+    return not ipaddress.ip_address(address).is_loopback
+
+
+def check_listeners(want):
+    """ss -tulpn: every socket listening on a public address must be expected."""
+    code, out = run("ss", "-H", "-tulpn")
+    if code:
+        raise RuntimeError("ss failed")
+    allowed = {(item["proto"], item["port"]): set(item["processes"]) for item in want}
+    seen, differences = set(), []
+    for line in out.splitlines():
+        fields = line.split()
+        proto, local = fields[0], fields[4]
+        address, _, port = local.rpartition(":")
+        if not public(address):
+            continue
+        processes = set(re.findall(r'\(\("([^"]+)"', line)) or {"unknown"}
+        key = (proto, int(port))
+        if key in allowed and processes <= allowed[key]:
+            seen.add(key)
+        else:
+            differences.append(f"listening on {proto} {local}: {', '.join(sorted(processes))}, not expected")
+    for proto, port in sorted(set(allowed) - seen):
+        differences.append(f"nothing listening on {proto} {port}, expected {', '.join(sorted(allowed[proto, port]))}")
+    return sorted(set(differences))
+
+
+def check_published(want):
+    """Ports Docker publishes: public ones only by want["public"], loopback ones only by want["loopback"]."""
+    code, out = run("docker", "ps", "-q")
+    if code:
+        raise RuntimeError("docker ps failed")
+    containers = json.loads(run("docker", "inspect", *out.split())[1]) if out.split() else []
+    expected = {
+        (rule["service"], scope, binding)
+        for scope in ("public", "loopback")
+        for rule in want[scope]
+        for binding in rule["ports"]
+    }
+    seen, differences = set(), []
+    for container in containers:
+        labels = container["Config"].get("Labels") or {}
+        service = f"{labels.get('com.docker.compose.project', '?')}/{labels.get('com.docker.compose.service', '?')}"
+        for port, bindings in (container["NetworkSettings"].get("Ports") or {}).items():
+            for binding in bindings or []:
+                scope = "public" if public(binding["HostIp"] or "0.0.0.0") else "loopback"
+                published = f"{binding['HostPort']}/{port.split('/')[1]}"
+                if (service, scope, published) in expected:
+                    seen.add((service, scope, published))
+                else:
+                    host = binding["HostIp"] or "*"
+                    differences.append(f"{service} publishes {published} on {host}, not expected")
+    for service, scope, published in sorted(expected - seen):
+        differences.append(f"{service} does not publish {published} ({scope}), expected")
+    return sorted(set(differences))
+
+
+def check_ufw(want):
+    code, out = run("ufw", "status", "verbose")
+    if code:
+        raise RuntimeError("ufw failed")
+    if "Status: active" not in out:
+        return ["ufw is not active"]
+    differences = []
+    if not re.search(r"^Default: deny \(incoming\)", out, re.MULTILINE):
+        differences.append("ufw does not deny incoming by default")
+    rules = set()
+    for line in out.split("\n--", 1)[-1].splitlines():
+        match = re.match(r"(\S+)( \(v6\))?\s+(ALLOW|DENY|REJECT|LIMIT)( IN| OUT)?\s+(\S+( \(v6\))?)", line.strip("-"))
+        if match:
+            rules.add(f"{match.group(1)}{match.group(2) or ''} {match.group(3)}{match.group(4) or ''} {match.group(5)}")
+    expected = {f"{port} ALLOW IN Anywhere" for port in want} | {f"{port} (v6) ALLOW IN Anywhere (v6)" for port in want}
+    differences += [f"ufw rule missing: {rule}" for rule in sorted(expected - rules)]
+    differences += [f"ufw rule not expected: {rule}" for rule in sorted(rules - expected)]
+    return differences
+
+
+def check_sshd(want):
+    # sshd -T needs its privilege separation directory, which ssh.service
+    # creates: with socket activation it may not exist before a first login.
+    os.makedirs("/run/sshd", mode=0o755, exist_ok=True)
+    code, out = run("sshd", "-T")
+    if code:
+        raise RuntimeError("sshd -T failed")
+    actual = {}
+    for line in out.splitlines():
+        key, _, value = line.partition(" ")
+        actual.setdefault(key, []).append(value.strip())
+    differences = []
+    for key, value in want.items():
+        expected = sorted(value) if isinstance(value, list) else [value]
+        found = sorted(" ".join(actual.get(key, [])).split()) if isinstance(value, list) else actual.get(key, [])
+        if found != expected:
+            differences.append(f"sshd {key} is {' '.join(found) or 'unset'}, expected {' '.join(expected)}")
+    return differences
+
+
+def check_services(want):
+    differences = []
+    for service in want:
+        state = run("systemctl", "is-active", service)[1].strip()
+        if state != "active":
+            differences.append(f"{service} is {state or 'unknown'}, expected active")
+    return differences
+
+
+def check_fail2ban(want):
+    code, out = run("fail2ban-client", "status")
+    match = re.search(r"Jail list:\s*(.*)", out)
+    if code or not match:
+        return ["fail2ban does not answer"]
+    jails = {jail.strip() for jail in match.group(1).split(",") if jail.strip()}
+    if jails != set(want):
+        return [f"fail2ban jails are {', '.join(sorted(jails)) or 'none'}, expected {', '.join(sorted(want))}"]
+    return []
+
+
+def check_updates(max_hours, held):
+    differences = []
+    if REBOOT_REQUIRED.exists():
+        hours = (time.time() - REBOOT_REQUIRED.stat().st_mtime) / 3600
+        if hours > max_hours:
+            differences.append(f"a reboot has been pending for {hours:.0f} hours, expected at most {max_hours}")
+    code, out = run("apt-mark", "showhold")
+    if code:
+        raise RuntimeError("apt-mark failed")
+    found = set(out.split())
+    if found != set(held):
+        held_now = ", ".join(sorted(found)) or "none"
+        differences.append(f"held packages are {held_now}, expected {', '.join(sorted(held))}")
+    return differences
+
+
+KEYS = {
+    "listeners": list,
+    "published": dict,
+    "ufw": list,
+    "sshd": dict,
+    "services": list,
+    "fail2ban_jails": list,
+    "reboot_required_max_hours": int,
+    "held_packages": list,
+}
+
+
+def load(path):
+    want = json.loads(pathlib.Path(path).read_text())
+    for key, kind in KEYS.items():
+        if not isinstance(want.get(key), kind):
+            raise TypeError(f"{path}: {key} must be a {kind.__name__}")
+    return want
+
+
+def differences(want):
+    found = []
+    found += check_listeners(want["listeners"])
+    found += check_published(want["published"])
+    found += check_ufw(want["ufw"])
+    found += check_sshd(want["sshd"])
+    found += check_services(want["services"])
+    found += check_fail2ban(want["fail2ban_jails"])
+    found += check_updates(want["reboot_required_max_hours"], want["held_packages"])
+    return found
+
+
+def ping_url():
+    try:
+        text = PING_ENV.read_text()
+    except FileNotFoundError:
+        return ""
+    match = re.search(r"^HEALTHCHECKS_PING_URL=(\S+)$", text, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def ping(url, suffix, body):
+    request = urllib.request.Request(url + suffix, data=body.encode()[:100_000], method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response.read()
+    except OSError as error:
+        print(f"healthchecks.io not reached ({type(error).__name__})")
+
+
+def main():
+    if os.geteuid() != 0:
+        print("server-posture: run it with sudo", file=sys.stderr)
+        return 1
+    if len(sys.argv) == 3 and sys.argv[1] == "--check":
+        load(sys.argv[2])
+        return 0
+    if sys.argv[1:] not in ([], ["check"]):
+        print("usage: sudo server-posture [check]", file=sys.stderr)
+        return 2
+    report = sys.argv[1:] == []
+    url = ping_url() if report else ""
+    if report and not url:
+        print("no ping URL, so nothing reports this check (run: sudo gatus-credentials server-posture)")
+    try:
+        found = differences(load(CONF))
+    except Exception:  # noqa: BLE001 - reported, then the run fails
+        error = traceback.format_exc()
+        print("the check could not run:\n" + error)
+        if url:
+            ping(url, "/fail", "server-posture could not run:\n\n" + error)
+        return 1
+    if found:
+        print(f"{len(found)} differences:\n" + "\n".join(found))
+        if url:
+            ping(url, "/fail", f"{len(found)} differences:\n\n" + "\n".join(found) + "\n")
+    else:
+        print("everything as expected")
+        if url:
+            ping(url, "", "Everything as expected.\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
