@@ -109,6 +109,20 @@ gatus_log_alerts_server_rules:
     note: >-
       A deploy was refused or failed; the running release is untouched. The reason is in the line. If no
       workflow of yours failed at that time, someone else has a deploy key.
+  - name: out-of-memory
+    # The kernel's own line when it kills a process: inside a container that
+    # reached its memory limit (Memory cgroup), or anywhere when the whole
+    # server ran out. Docker then restarts the container.
+    identifiers: [kernel]
+    match: ['^(Memory cgroup out of memory|Out of memory): Killed process \d+ \(']
+    subject:
+      pattern: '^(?P<scope>Memory cgroup out of memory|Out of memory): Killed process \d+ \((?P<process>[^)]*)\)'
+      format: "{process} killed: {scope}"
+    note: >-
+      The kernel killed a process for lack of memory. "Memory cgroup" means one container reached its limit
+      (projects.yml, memory) and was restarted: an upload or a request too big for it, or a leak. Plain "Out of
+      memory" means the whole server ran out. Which container: sudo journalctl -k -g oom-kill --since -1h shows
+      task_memcg=/system.slice/docker-<id>.scope, and sudo docker ps --no-trunc | grep <id> names it.
 # Once a day, the first run after this hour (UTC; 11 is 08:00 in Argentina)
 # counts fail2ban's bans of the last 24 hours, and emails the counts (never
 # the addresses) if a jail other than the quiet ones banned anyone.
