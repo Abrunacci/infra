@@ -5,17 +5,30 @@
 	encode zstd gzip
 
 	# Applied after the response is written (defer), so they replace a
-	# backend's own values instead of being added next to them. The two with ?
-	# are defaults: a backend that sends a stricter policy keeps it.
+	# backend's own values instead of being added next to them. The ones with
+	# ? are defaults: a backend that sends a stricter policy keeps it.
 	# Permissions-Policy is the project's (permissions_policy in projects.yml)
 	# or roles/caddy's default, for the static site and the backend alike.
+	# Referrer-Policy and Content-Security-Policy set in projects.yml
+	# (referrer_policy, content_security_policy) are forced like it.
 	header {
 		defer
 		Strict-Transport-Security "{{ caddy_hsts }}"
 		X-Content-Type-Options "nosniff"
+{% if item.referrer_policy is defined %}
+		Referrer-Policy "{{ item.referrer_policy }}"
+{% else %}
 		?Referrer-Policy "strict-origin-when-cross-origin"
-		# No other site may frame this one (clickjacking).
+{% endif %}
+		# No other site may frame this one (clickjacking). X-Frame-Options says
+		# the same to browsers too old for frame-ancestors; newer ones follow
+		# the CSP when both are present.
+{% if item.content_security_policy is defined %}
+		Content-Security-Policy "{{ item.content_security_policy }}"
+{% else %}
 		?Content-Security-Policy "frame-ancestors 'none'"
+{% endif %}
+		?X-Frame-Options "DENY"
 		Permissions-Policy "{{ item.permissions_policy | default(caddy_permissions_policy) }}"
 		-Server
 	}

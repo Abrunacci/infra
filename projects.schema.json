@@ -66,6 +66,19 @@
           "maxLength": 1024,
           "pattern": "^[a-z][a-z-]*=(\\*|\\((self)?\\))(, [a-z][a-z-]*=(\\*|\\((self)?\\)))*$"
         },
+        "referrer_policy": {
+          "description": "The Referrer-Policy header of the site and its backend, replacing roles/caddy's default (strict-origin-when-cross-origin, which the backend may replace): set here, the backend cannot replace it. Only with a subdomain.",
+          "enum": ["no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url"]
+        },
+        "content_security_policy": {
+          "description": "The whole Content-Security-Policy header of the site and its backend, replacing roles/caddy's default (frame-ancestors 'none', which the backend may replace): set here, the backend cannot replace it. Directives separated by \"; \", such as \"default-src 'self'; frame-ancestors 'none'\". It must keep frame-ancestors, so no other site may frame the page, and has no double quotes, backslashes or braces (Caddy would read {...} as a placeholder). Only with a subdomain.",
+          "type": "string",
+          "maxLength": 4096,
+          "allOf": [
+            { "pattern": "^[a-z][a-z-]*( [^\\s\";{}\\\\]+)*(; [a-z][a-z-]*( [^\\s\";{}\\\\]+)*)*$" },
+            { "pattern": "(^|; )frame-ancestors " }
+          ]
+        },
         "backend": { "$ref": "#/$defs/backend" },
         "deploy_key": {
           "description": "Public ed25519 key of the project's CI. Its authorized_keys line is fixed to deploying this project only: its site, its backend or both. Without it, the project cannot be deployed.",
@@ -91,7 +104,13 @@
                 ]
               }
             },
-            "not": { "required": ["permissions_policy"] }
+            "not": {
+              "anyOf": [
+                { "required": ["permissions_policy"] },
+                { "required": ["referrer_policy"] },
+                { "required": ["content_security_policy"] }
+              ]
+            }
           }
         },
         {

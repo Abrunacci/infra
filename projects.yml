@@ -25,6 +25,17 @@
 #              microphone, location and other powerful features
 #              (roles/caddy, caddy_permissions_policy). The whole policy,
 #              such as "camera=(self), microphone=(), geolocation=()"
+#   referrer_policy
+#              the site's Referrer-Policy header (optional, only with a
+#              subdomain), such as no-referrer: replaces the default
+#              (strict-origin-when-cross-origin), and the backend cannot
+#              replace it either
+#   content_security_policy
+#              the site's whole Content-Security-Policy header (optional,
+#              only with a subdomain): replaces the default (frame-ancestors
+#              'none'), and the backend cannot replace it either. Directives
+#              separated by "; ", with frame-ancestors among them, no double
+#              quotes or braces
 #   deploy_key public ed25519 key of the project's CI (optional: without it the
 #              project cannot be deployed). It can only deploy this project:
 #              its site, its backend or both. How to create it:
@@ -152,18 +163,31 @@ projects:
     title: EPB Stock
     site: true
     database: true
+    # Invitation links carry ?token=: not even the origin goes to another site.
+    referrer_policy: no-referrer
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMB6oIcQR/2AStIyAJjIVXcGkgxd4sKd2S0+9lOo54w/ epb-stock-deploy
     backend:
       image: ghcr.io/abrunacci/epb-stock-backend
       port: 8000
       health: /api/health
       paths: ["/api/*"]
+      # The API's documentation, if a release turns it on: never public.
+      private_paths: ["/api/docs", "/api/docs/*", "/api/redoc", "/api/openapi.json"]
       env:
         PUBLIC_APP_URL: "https://epb.abrunacci.dev"
         CORS_ORIGINS: "https://epb.abrunacci.dev"
         TRUST_FORWARDED_FOR: "true"
         MAIL_BACKEND: "resend"
         MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
+        # Explicit, so a new default in an EPB release changes nothing here.
+        # No COOKIE_DOMAIN: without one, the cookie is epb.abrunacci.dev's only.
+        COOKIE_SECURE: "true"
+        DEBUG: "false"
+        FEATURE_MANUFACTURING: "false"
+        # uvicorn's access log is off: it logs each URL whole, ?token= included,
+        # with Caddy's address. Caddy's access log is the one: the visitor's
+        # address, query strings cut, kept 14 days (roles/caddy).
+        UVICORN_ACCESS_LOG: "false"
       secrets:
         SECRET_KEY: generated
         RESEND_API_KEY: manual
