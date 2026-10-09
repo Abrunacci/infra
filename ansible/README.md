@@ -14,7 +14,7 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
 | `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
-| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent`, the internal backends, the restore drill's age and the credentials' expiration dates. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. See "Status page and alerts" |
+| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container: the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent`, the internal backends, the restore drill's age and the credentials' expiration dates. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. `server-posture` (every hour) checks the server's security settings and reports to healthchecks.io only. See "Status page and alerts" |
 
 The roles run in that order: each one depends on the previous ones, and `projects.yml` is checked before the first one, whatever `--tags` are given (only `--skip-tags always` skips it, on purpose; `--skip-tags projects_databases` skips only its database part, to repair Docker or PostgreSQL: see "When the databases cannot be listed"). `--tags projects` on its own needs a server that `base` has already set up. After the last role, every run, whatever `--tags` are given, ends with a warning while the server has no check from outside (see "Status page and alerts").
 
@@ -655,6 +655,7 @@ Resend's SMTP server is used on port 2587 (STARTTLS): DigitalOcean blocks outgoi
 ```sh
 sudo gatus-credentials                                  # store or replace the alerts' key (sends a test email)
 sudo gatus-credentials healthchecks                     # store or replace the ping URL of the check from outside (sends a ping)
+sudo gatus-credentials server-posture                   # the same for the server's security check
 sudo docker logs --since 1h gatus-gatus-1               # what Gatus checked and sent
 sudo gatus-heartbeats                                   # push the server's checks now, and print them
 systemctl list-timers gatus-heartbeats.timer            # when they run next
@@ -708,6 +709,32 @@ The same runs also email what the server itself logs and you would want to hear 
 - **Your address leaves the server** in the `ops-login` email. It is the only personal data these rules match.
 
 **The bans digest.** Once a day, the first run after 11:00 UTC (`gatus_log_alerts_bans_digest_hour`) counts the bans fail2ban made in the last 24 hours, per jail, from `/var/log/fail2ban.log` (and its last rotation). If a jail other than `sshd` (`gatus_log_alerts_bans_quiet_jails`) banned anyone, it emails the counts: bans and distinct addresses per jail, never the addresses themselves. `sshd` bans every day (bots trying passwords), so on its own it is not worth an email; the sites' jails (see "Bans from the access log") should be quiet, and a ban there is either an attack or a threshold to raise. `sudo log-alerts --dry-run` shows the digest as it would be now. The day it was last sent is in `/var/lib/infra/log-alerts/bans-digest-day`.
+
+### The server's security check
+
+Every hour, at 20 past, `server-posture` compares the server's security settings with what the roles set up, and reports to its own check on healthchecks.io, `server posture`. Never to Gatus: the status page is public, and a red check there would say that something is open right when it is.
+
+| What | Expected | Set up by |
+|---|---|---|
+| Sockets listening on any address but loopback, IPv4 and IPv6 (`ss -tulpn`) | only SSH on 22 (`sshd`, or `systemd` when Ubuntu starts sshd by socket activation) and `docker-proxy` on 80/443 TCP and 443 UDP | `hardening_ufw_rules` |
+| Ports Docker publishes | on public addresses, only Caddy's 80/443 TCP and 443 UDP; on loopback, only Gatus' `18080` | `roles/caddy`, `gatus_push_port` |
+| `ufw status verbose` | active, deny incoming, exactly the 4 rules, in v4 and v6 | `hardening_ufw_rules` |
+| `sshd -T` | `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `authenticationmethods publickey`, `allowusers ops deploy`, `maxauthtries 3` | `roles/hardening` |
+| fail2ban | active, with exactly the jails `sshd`, `caddy-auth` and `caddy-flood` | `roles/hardening`, `roles/caddy` |
+| Updates | `unattended-upgrades` active; `/var/run/reboot-required` absent or younger than 36 hours (the automatic reboot is daily at 07:30 UTC); only Docker's 4 packages held | `roles/base`, `docker_held_packages` |
+
+- **What it says.** A success ping when everything matches; otherwise a failure ping with one line per difference, which healthchecks.io shows in its dashboard and emails. The same lines go to the journal: `sudo journalctl -t server-posture`. healthchecks.io emails only when the state changes, not on every run.
+- **A silent hour is noticed too.** The check expects a ping every hour, with 30 minutes of grace: if the timer stops, healthchecks.io emails.
+- **What is expected** is `/etc/infra/server-posture.json`, written by the playbook from those roles' variables (`templates/server-posture.json.j2`): a new firewall rule or SSH user changes it on the next run with `--tags gatus`.
+- **During a playbook run** that recreates Caddy or Gatus, a run can land while a port is not published: one failure ping, and the next run (an hour later) clears it.
+- **The ping URL** is stored like the other one, by `sudo gatus-credentials server-posture`, in `/etc/infra/secrets/gatus/server-posture.env`. Without it the check runs and logs to the journal, and every playbook run ends with `WARNING: the server's security check reports nowhere (healthchecks.io)`.
+- **What it cannot see:** DigitalOcean's cloud firewall, which the weekly outside check covers (README.md, "Outside check").
+
+```sh
+sudo server-posture check                     # check now and print what differs; no ping
+sudo systemctl start server-posture           # a full run now, with its ping
+sudo journalctl -t server-posture --since -1d # what the last runs found
+```
 
 ### Changing the alert channel
 

@@ -65,11 +65,7 @@
   ansible.builtin.dpkg_selections:
     name: "{{ item }}"
     selection: hold
-  loop:
-    - docker-ce
-    - docker-ce-cli
-    - containerd.io
-    - docker-compose-plugin
+  loop: "{{ docker_held_packages }}"
 
 - name: Configure the Docker daemon
   ansible.builtin.template:

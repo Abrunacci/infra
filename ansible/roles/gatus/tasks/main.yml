@@ -112,6 +112,7 @@
     - gatus-credentials
     - gatus-heartbeats
     - log-alerts
+    - server-posture
 
 - name: Write the settings gatus-credentials reads
   ansible.builtin.template:
@@ -271,6 +272,9 @@
 # After the heartbeats: each run of log-alerts pushes to its own.
 - name: Set up the log alerts
   ansible.builtin.import_tasks: log-alerts.yml
+
+- name: Set up the server's security check
+  ansible.builtin.import_tasks: server-posture.yml
 
 - name: Remove older Gatus images
   ansible.builtin.command:

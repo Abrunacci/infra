@@ -1,0 +1,12 @@
+# Managed by Ansible (roles/gatus). If it stops, healthchecks.io notices: the
+# "server posture" check gets no ping for an hour and its grace time.
+[Unit]
+Description=Check the server's security settings ({{ gatus_posture_calendar }})
+
+[Timer]
+OnCalendar={{ gatus_posture_calendar }}
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

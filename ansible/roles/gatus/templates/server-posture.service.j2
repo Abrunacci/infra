@@ -1,0 +1,10 @@
+# Managed by Ansible (roles/gatus).
+[Unit]
+Description=Check the server's security settings (server-posture)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/server-posture
+SyslogIdentifier=server-posture
+TimeoutStartSec=2min

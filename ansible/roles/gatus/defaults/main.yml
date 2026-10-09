@@ -63,6 +63,17 @@ gatus_credentials_warn_days: 14
 # a warning (tasks/healthchecks.yml).
 gatus_healthchecks_ping_base: https://hc-ping.com
 
+# The server's security check (server-posture, tasks/server-posture.yml):
+# listening sockets, published ports, ufw, sshd, fail2ban and updates, against
+# what the roles set up. It reports to its own check on healthchecks.io, never
+# to Gatus: the status page is public. Every hour, at 20 past.
+gatus_posture_calendar: "*:20"
+# The jails roles/hardening (sshd) and roles/caddy set up.
+gatus_posture_fail2ban_jails: [sshd, caddy-auth, caddy-flood]
+# unattended-upgrades reboots every day at base_auto_reboot_time when an update
+# needs it: a reboot pending longer than this means that did not happen.
+gatus_posture_reboot_max_hours: 36
+
 # Log alerts: the backends' log lines projects.yml asks to hear about
 # (log_alerts), and the server's own (below), emailed by log-alerts on the
 # same calendar as the heartbeats (gatus_host_check_calendar), which also

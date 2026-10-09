@@ -21,3 +21,20 @@
     quiet: true
   register: gatus_healthchecks_warning
   ignore_errors: true
+
+# The same for the server's security check (server-posture): its ping URL is
+# stored by `gatus-credentials server-posture`.
+- name: Look for the server posture check's ping URL
+  ansible.builtin.stat:
+    path: "{{ gatus_secrets_dir }}/server-posture.env"
+  register: gatus_posture_ping
+
+- name: "WARNING: the server's security check reports nowhere (healthchecks.io)"
+  ansible.builtin.assert:
+    that: gatus_posture_ping.stat.exists
+    fail_msg: >-
+      server-posture checks the server every hour, but nothing hears about a difference. On the server, run:
+      sudo gatus-credentials server-posture (see ansible/README.md, "The server's security check").
+    quiet: true
+  register: gatus_posture_ping_warning
+  ignore_errors: true
