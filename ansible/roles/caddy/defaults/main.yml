@@ -64,8 +64,8 @@ caddy_permissions_policy: >-
 # Timeouts for clients (Caddy's defaults: 1 min for the headers, no limit on
 # the body, 5 min idle). read_body is for the whole body: at 64 KB/s, 30 s is about 2 MB, so
 # a larger upload over a slow link needs more. Caddy applies these to HTTP/1.1
-# and HTTP/2 only; each backend's site applies read_body to HTTP/3 itself
-# (roles/projects, site.caddy.j2).
+# and HTTP/2 only; each backend's site applies read_body again, on every
+# protocol, or the project's body_timeout (roles/projects, site.caddy.j2).
 caddy_timeout_read_header: 10s
 caddy_timeout_read_body: 30s
 caddy_timeout_idle: 2m

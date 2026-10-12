@@ -63,6 +63,10 @@
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
+#                body_timeout
+#                         how long a request body may take to arrive, 10s
+#                         to 300s (optional, only with a subdomain, defaults
+#                         to 30s); a slower one is cut
 #                cpus     share of the Droplet's CPU it may use, 0.1 to 1
 #                         (optional, defaults to 0.5), so one busy backend
 #                         cannot starve the others, Caddy or PostgreSQL
@@ -182,6 +186,10 @@ projects:
       # counting the bytes it reads. Caddy is the first line, just above the
       # largest: 7MB is 6.68 MiB, so no import the API accepts hits it.
       max_body: 7MB
+      # The API waits 30 s for a body and answers 408 request.too_slow; Caddy
+      # cuts 5 s later, so a slow client gets the API's own message and Caddy
+      # only catches what the API does not.
+      body_timeout: 35s
       env:
         PUBLIC_APP_URL: "https://epb.abrunacci.dev"
         CORS_ORIGINS: "https://epb.abrunacci.dev"
