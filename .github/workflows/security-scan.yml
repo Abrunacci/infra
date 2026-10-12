@@ -7,6 +7,11 @@ name: Security scan
 # Security scan → Run workflow), and on pull requests that change an image.
 # It fails on a CRITICAL one, so GitHub emails its result; the job summary
 # lists every HIGH and CRITICAL. Accepted findings: .trivyignore.yaml.
+#
+# Every scheduled or manual run also pings the "infra security scan" check in
+# healthchecks.io, whatever the scan found: that check says whether the scan
+# ran, the red run says what it found. healthchecks.io emails when a Monday
+# goes by without a ping, so a schedule that stops firing is noticed.
 on:
   schedule:
     - cron: "0 12 * * 1"  # 09:00 in Buenos Aires
@@ -52,4 +57,18 @@ jobs:
             done
       - name: Summarize
         if: always()
+        # Explicit, so the step runs with pipefail and fails with the script,
+        # not with tee: without it, a CRITICAL finding left the run green.
+        shell: bash
         run: python3 .github/scripts/trivy-summary.py "$RUNNER_TEMP/reports" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Report the run to healthchecks.io
+        if: always() && github.event_name != 'pull_request'
+        env:
+          SECURITY_SCAN_PING_URL: ${{ secrets.SECURITY_SCAN_PING_URL }}
+        run: |
+          if [ -z "$SECURITY_SCAN_PING_URL" ]; then
+            echo "::error::SECURITY_SCAN_PING_URL is not set"
+            exit 1
+          fi
+          curl -fsS --max-time 10 --retry 5 --retry-connrefused -o /dev/null "$SECURITY_SCAN_PING_URL"
+          echo "Run reported to healthchecks.io."
