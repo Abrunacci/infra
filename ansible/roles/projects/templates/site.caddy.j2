@@ -40,8 +40,22 @@
 		@private path {{ item.backend.private_paths | join(' ') }}
 		respond @private 404
 {%     endif %}
+{%     set max_body = item.backend.max_body | default(projects_backend_default_max_body) %}
+		# A body that announces more than max_body gets 413 here, before the
+		# backend reads a byte of it. request_body stops one that has no
+		# length (chunked, or HTTP/2 and 3 without one) once it passes max_body.
+		@too_large expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > {{ (max_body[:-2] | int) * (1000 if max_body.endswith('KB') else 1000000) }}`
+		respond @too_large 413
 		request_body {
-			max_size {{ item.backend.max_body | default(projects_backend_default_max_body) }}
+			max_size {{ max_body }}
+		}
+		# The server's read_body (roles/caddy) covers HTTP/1.1 and HTTP/2 only;
+		# this gives HTTP/3 the same time to send a body. Only HTTP/3: on
+		# HTTP/1.1 it would also cut a response to a request with no body (a
+		# long download) when it runs out.
+		@http3 protocol http/3
+		request_body @http3 {
+			read_timeout {{ caddy_timeout_read_body }}
 		}
 		# The container's alias on the edge network. While it is recreated
 		# (a deploy or a rollback), requests wait for it instead of failing.
