@@ -165,6 +165,11 @@ projects:
     database: true
     # Invitation links carry ?token=: not even the origin goes to another site.
     referrer_policy: no-referrer
+    # The policy EPB documents (docs/production-environment.md, "Headers the
+    # site needs"): everything from the site's own origin, nothing inline.
+    content_security_policy: >-
+      default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self';
+      connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMB6oIcQR/2AStIyAJjIVXcGkgxd4sKd2S0+9lOo54w/ epb-stock-deploy
     backend:
       image: ghcr.io/abrunacci/epb-stock-backend
