@@ -67,7 +67,7 @@
         or (item.backend is mapping
             and item.backend.keys()
                 | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
-                              'cpus', 'max_body', 'body_timeout', 'migrate', 'database_url_scheme',
+                              'cpus', 'max_body', 'migrate', 'database_url_scheme',
                               'log_alerts']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
@@ -97,10 +97,6 @@
         or (item.backend.max_body is string
             and item.backend.max_body is match('^([1-9][0-9]{0,4}KB|[1-9][0-9]?MB)\Z'))
       - >-
-        item.backend is not defined or item.backend.body_timeout is not defined
-        or (item.backend.body_timeout is string
-            and item.backend.body_timeout is match('^([1-9][0-9]|[12][0-9]{2}|300)s\Z'))
-      - >-
         item.permissions_policy is not defined
         or (item.permissions_policy is string and item.permissions_policy | length <= 1024
             and item.permissions_policy is match('^[a-z][a-z-]*=(\*|\((self)?\))(, [a-z][a-z-]*=(\*|\((self)?\)))*\Z'))
@@ -124,7 +120,7 @@
         or (not item.site and item.backend is defined and item.backend is mapping
             and item.backend.port is not defined and item.backend.health is not defined
             and item.backend.paths is not defined and item.backend.private_paths is not defined
-            and item.backend.max_body is not defined and item.backend.body_timeout is not defined
+            and item.backend.max_body is not defined
             and item.permissions_policy is not defined
             and item.referrer_policy is not defined and item.content_security_policy is not defined)
       - >-
