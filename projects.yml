@@ -176,8 +176,10 @@ projects:
       port: 8000
       health: /api/health
       paths: ["/api/*"]
-      # The API's documentation, if a release turns it on: never public.
-      private_paths: ["/api/docs", "/api/docs/*", "/api/redoc", "/api/openapi.json"]
+      # The API's documentation, if a release turns it on: never public. Each
+      # path also with /*: Caddy's `path /api/redoc` does not match /api/redoc/.
+      private_paths: ["/api/docs", "/api/docs/*", "/api/redoc", "/api/redoc/*", "/api/openapi.json",
+                      "/api/openapi.json/*"]
       # The API takes up to 6 MiB on its import routes and 1 MB elsewhere,
       # counting the bytes it reads. Caddy is the first line, just above the
       # largest: 7MB is 6.68 MiB, so no import the API accepts hits it.
