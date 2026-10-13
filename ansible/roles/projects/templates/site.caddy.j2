@@ -49,14 +49,6 @@
 		request_body {
 			max_size {{ max_body }}
 		}
-		# How long the body may take to arrive: the project's body_timeout, or
-		# the server's read_body (roles/caddy), which alone covers HTTP/1.1 and
-		# HTTP/2 but not HTTP/3. On HTTP/1.1 only when there is a body: there,
-		# on a request without one (a GET), it would also cut a long download.
-		@body_timeout expression `!({http.request.proto} in ["HTTP/1.0", "HTTP/1.1"]) || !({http.request.header.Content-Length} in ["", "0"])`
-		request_body @body_timeout {
-			read_timeout {{ item.backend.body_timeout | default(caddy_timeout_read_body) }}
-		}
 		# The container's alias on the edge network. While it is recreated
 		# (a deploy or a rollback), requests wait for it instead of failing.
 		reverse_proxy {{ item.name }}-backend:{{ item.backend.port }} {

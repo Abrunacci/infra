@@ -1,7 +1,7 @@
 ---
 # Pinned by digest: a tag can be moved, a digest cannot. Upgrading is a PR
 # that bumps both.
-caddy_image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+caddy_image: caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
 caddy_dir: "{{ infra_opt_dir }}/caddy"
 caddy_memory_limit: 256m
 # Half of the Droplet's one CPU, like each backend (projects.yml, cpus): a
@@ -62,12 +62,15 @@ caddy_permissions_policy: >-
   camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(),
   browsing-topics=()
 # Timeouts for clients (Caddy's defaults: 1 min for the headers, no limit on
-# the body, 5 min idle). read_body is for the whole body: at 64 KB/s, 30 s is about 2 MB, so
-# a larger upload over a slow link needs more. Caddy applies these to HTTP/1.1
-# and HTTP/2 only; each backend's site applies read_body again, on every
-# protocol, or the project's body_timeout (roles/projects, site.caddy.j2).
+# the body, 5 min idle). read_body is for the whole body, on HTTP/1.1, HTTP/2
+# and HTTP/3 alike (HTTP/3 since Caddy 2.11.5), and no site can change it: at
+# 64 KB/s, 35 s is about 2 MB, so a larger upload over a slow link needs more.
+# 35 s is 5 s over EPB Stock's API, which waits 30 s for a body and answers
+# 408 request.too_slow: a slow client gets the API's own message, and Caddy
+# only cuts what a backend does not. Answers have no limit: a long download
+# is never cut.
 caddy_timeout_read_header: 10s
-caddy_timeout_read_body: 30s
+caddy_timeout_read_body: 35s
 caddy_timeout_idle: 2m
 
 # Optional. With an email, the CAs can warn about expiring certificates and

@@ -1,0 +1,4 @@
+# What check.py needs beyond the standard library: aioquic for HTTP/3 (the
+# curl in Ubuntu has none), PyYAML to read projects.yml.
+aioquic==1.6.1
+pyyaml==6.0.3
