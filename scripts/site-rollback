@@ -68,11 +68,20 @@ flock -n 9 || die "a deploy or rollback of $project is running; try again"
 mapfile -t all < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -E "$RELEASE_RE" | sort -r)
 current="$(readlink "$site/current" || true)"
 
+# The release that was published becomes previous, as in deploy.sh: Caddy
+# serves a missing /assets/ file from there, for the tabs opened before.
+set_previous() {
+  [[ "$current" == releases/* ]] || return 0
+  ln -sfn "$current" "$site/.previous-$$"
+  mv -T "$site/.previous-$$" "$site/previous"
+}
+
 if [[ "${2:-}" == placeholder ]]; then
   [[ -f "$site/placeholder/index.html" && ! -L "$site/placeholder" ]] || die "$site/placeholder is missing (run the playbook)"
   [[ "$current" != placeholder ]] || die "the placeholder is already published"
   ln -sfn placeholder "$site/.current-$$"
   mv -T "$site/.current-$$" "$site/current"
+  set_previous
   logger -t site-rollback -- "project=$project from=${current#releases/} to=placeholder by=${SUDO_USER:-root}"
   echo "Published the $project placeholder (was ${current#releases/})"
   exit 0
@@ -98,5 +107,6 @@ fi
 
 ln -sfn "releases/$target" "$site/.current-$$"
 mv -T "$site/.current-$$" "$site/current"
+set_previous
 logger -t site-rollback -- "project=$project from=${current#releases/} to=$target by=${SUDO_USER:-root}"
 echo "Published $project release $target (was ${current#releases/})"
