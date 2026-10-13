@@ -183,7 +183,7 @@ def send_h3(url, body_file, connect_to, cacert):
     try:
         status, answer, error = asyncio.run(h3_post(url, body, connect_to, cacert))
     except (TimeoutError, ssl.SSLError, OSError, ConnectionError) as exc:
-        return None, b"", "3", f"{type(exc).__name__}: {exc or 'no connection over HTTP/3'}"
+        return None, b"", "3", f"{type(exc).__name__}: {str(exc) or 'no connection over HTTP/3'}"
     return status, answer, "3", error or ""
 
 
@@ -221,7 +221,7 @@ def main():
                 ok = case.check(status, body) and negotiated == version
                 failures += not ok
                 got = describe(status, body)
-                if negotiated and negotiated != version:
+                if status is not None and negotiated != version:
                     got += f" over HTTP/{negotiated}"
                 if error and not ok:
                     got += f" ({error})"

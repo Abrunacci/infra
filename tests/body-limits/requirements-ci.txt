@@ -1,0 +1,4 @@
+# What ci.sh needs too: ansible-playbook, to render Caddy's configuration from
+# the roles' own templates.
+-r requirements.txt
+ansible-core==2.21.5

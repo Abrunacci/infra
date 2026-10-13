@@ -108,3 +108,23 @@ jobs:
           "$RUNNER_TEMP/venv/bin/mypy" --strict
           .github/actions/check-commit-metadata/check_authorship.py
           tests/check-commit-metadata
+
+  body-limits:
+    name: Test (body limits)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the test tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -r tests/body-limits/requirements-ci.txt
+      # The pinned Caddy image with the Caddyfile and site files rendered from
+      # projects.yml, in front of a stand-in for EPB Stock's API: Caddy must
+      # accept the configuration and cut bodies where tests/body-limits/check.py
+      # expects, over HTTP/1.1, HTTP/2 and HTTP/3. A Caddy upgrade that breaks
+      # either fails here, before it reaches the server.
+      - name: Body limits
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" PYTHON="$RUNNER_TEMP/venv/bin/python" tests/body-limits/ci.sh

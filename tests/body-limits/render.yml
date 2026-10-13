@@ -1,0 +1,27 @@
+---
+# Renders the Caddyfile and every site file the way roles/caddy and
+# roles/projects do, from the same templates, variables and projects.yml,
+# into out_dir (conf/Caddyfile, conf/sites/*.caddy). Used by ci.sh.
+- name: Render Caddy's configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../ansible/group_vars/all/main.yml
+    - ../../ansible/roles/caddy/defaults/main.yml
+    - ../../ansible/roles/projects/defaults/main.yml
+    - ../../projects.yml
+  tasks:
+    - name: Render the Caddyfile
+      ansible.builtin.template:
+        src: ../../ansible/roles/caddy/templates/Caddyfile.j2
+        dest: "{{ out_dir }}/conf/Caddyfile"
+        mode: "0644"
+    - name: Render each site file
+      ansible.builtin.template:
+        src: ../../ansible/roles/projects/templates/site.caddy.j2
+        dest: "{{ out_dir }}/conf/sites/{{ item.name }}.caddy"
+        mode: "0644"
+      loop: "{{ projects | selectattr('subdomain', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
