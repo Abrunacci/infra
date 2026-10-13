@@ -14,7 +14,7 @@ name: Outside check
 on:
   schedule:
     # Off :00 and :30: GitHub delays scheduled runs under load, worst at the
-    # start of the hour (on 2026-10-12 they started about 9 hours late).
+    # start of the hour (on 2026-10-12, Outside check started 9 hours late).
     # The healthchecks.io check uses the same cron.
     - cron: "47 12 * * 1"  # 09:47 in Buenos Aires
   workflow_dispatch:
