@@ -14,6 +14,7 @@
           'image': p.backend.image,
           'port': p.backend.port | default(none),
           'health': p.backend.health | default(none),
+          'private_paths': p.backend.private_paths | default([]),
           'secrets': p.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping')
                      | items2dict,
           'links': p.backend.secrets | default({}) | dict2items | selectattr('value', 'mapping')
