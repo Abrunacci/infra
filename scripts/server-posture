@@ -17,7 +17,13 @@ roles that set each thing up:
 - sshd's effective settings (sshd -T);
 - fail2ban: running, with exactly its jails;
 - unattended-upgrades running, no reboot pending for long, and only Docker's
-  packages held.
+  packages held;
+- each backend's private_paths (/etc/infra/projects.json, from projects.yml):
+  every variant of each path, sent as a POST to Caddy on 127.0.0.1 with the
+  site's name, must get 404 or 405, as it does from the internet.
+
+The variants of a private path are the ones the outside check
+(.github/scripts/outside-check.py) also tries: it imports them from here.
 
 The status page is public, so none of this goes to Gatus. The result goes to
 the "server posture" check on healthchecks.io: a success ping, or a failure
@@ -28,11 +34,14 @@ printed. Exits 1 only when the check itself could not run.
 Installed by Ansible (roles/gatus) as /usr/local/sbin/server-posture.
 """
 
+import http.client
 import ipaddress
 import json
 import os
 import pathlib
 import re
+import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -40,8 +49,12 @@ import traceback
 import urllib.request
 
 CONF = pathlib.Path("/etc/infra/server-posture.json")
+REGISTRY = pathlib.Path("/etc/infra/projects.json")
 PING_ENV = pathlib.Path("/etc/infra/secrets/gatus/server-posture.env")
 REBOOT_REQUIRED = pathlib.Path("/var/run/reboot-required")
+# Caddy answers these for a private path (respond 404), or 405 for a method
+# the site does not take: either way the request never reached the backend.
+PRIVATE_PATH_OK = {404, 405}
 
 
 def run(*argv):
@@ -187,7 +200,66 @@ def check_updates(max_hours, held):
     return differences
 
 
+def private_path_variants(pattern):
+    """The ways a client could try to sneak past `path PATTERN` in Caddy."""
+    base = pattern.removesuffix("/*").rstrip("/") or "/"
+    segments = base.strip("/").split("/")
+    variants = {base, base + "/"}
+    if pattern.endswith("/*"):
+        variants.add(base + "/x")
+    if segments[0]:
+        variants.add("/" + "//".join(segments) if len(segments) > 1 else "/" + base)  # a doubled slash
+        variants.add("/" + "/".join([segments[0].upper(), *segments[1:]]))
+        last = segments[-1]
+        variants.add("/" + "/".join([*segments[:-1], f"%{ord(last[0]):02x}{last[1:]}"]))
+    return sorted(variants)
+
+
+def post_to_caddy(host, path):
+    """POST PATH to Caddy on this server as HOST, the path sent exactly as given.
+
+    Through 127.0.0.1:443, which Docker forwards to Caddy, with HOST as the TLS
+    name and Host header: the real Caddyfile and certificate, without the trip
+    through DNS and the firewall that the outside check already makes. Caddy
+    sees Docker's gateway, which fail2ban ignores (roles/caddy). The timeout
+    is longer than the 15 s Caddy holds a request while a backend is
+    recreated, so a path that reached the backend shows as Caddy's answer.
+    """
+    context = ssl.create_default_context()
+    connection = http.client.HTTPSConnection(host, 443, timeout=20, context=context)
+    try:
+        sock = socket.create_connection(("127.0.0.1", 443), timeout=20)
+        connection.sock = context.wrap_socket(sock, server_hostname=host)
+        connection.request("POST", path, body=b"", headers={"User-Agent": "server-posture"})
+        response = connection.getresponse()
+        response.read(65536)
+        return response.status
+    finally:
+        connection.close()
+
+
+def check_private_paths(domain):
+    """Every variant of each backend's private_paths must get 404 or 405 from Caddy."""
+    differences = []
+    for project in json.loads(REGISTRY.read_text())["projects"]:
+        subdomain, backend = project.get("subdomain"), project.get("backend") or {}
+        if subdomain is None or not backend.get("private_paths"):
+            continue
+        host = domain if subdomain == "@" else f"{subdomain}.{domain}"
+        paths = {variant for pattern in backend["private_paths"] for variant in private_path_variants(pattern)}
+        for path in sorted(paths):
+            try:
+                status = post_to_caddy(host, path)
+            except (OSError, http.client.HTTPException) as error:
+                differences.append(f"{host} {path}: HTTPS failed ({type(error).__name__})")
+                continue
+            if status not in PRIVATE_PATH_OK:
+                differences.append(f"{host} {path}: {status}, expected 404 or 405")
+    return differences
+
+
 KEYS = {
+    "domain": str,
     "listeners": list,
     "published": dict,
     "ufw": list,
@@ -216,6 +288,7 @@ def differences(want):
     found += check_services(want["services"])
     found += check_fail2ban(want["fail2ban_jails"])
     found += check_updates(want["reboot_required_max_hours"], want["held_packages"])
+    found += check_private_paths(want["domain"])
     return found
 
 

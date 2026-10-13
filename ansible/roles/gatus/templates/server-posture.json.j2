@@ -1,8 +1,11 @@
 {# Read by server-posture (scripts/server-posture): what the server's security
-   settings must be, from the roles that set each one up. #}
+   settings must be, from the roles that set each one up. The private paths
+   it checks are in /etc/infra/projects.json (roles/projects), so that
+   `--tags projects` updates them with Caddy's sites. #}
 {%- set ssh_rules = hardening_ufw_rules | selectattr('comment', 'equalto', 'SSH') | list -%}
 {%- set web_rules = hardening_ufw_rules | rejectattr('comment', 'equalto', 'SSH') | list -%}
 {
+  "domain": {{ domain | to_json }},
   "listeners": [
 {%- for r in hardening_ufw_rules %}
     {#- Ubuntu 24.04 may start sshd by socket activation: then systemd holds port 22. #}

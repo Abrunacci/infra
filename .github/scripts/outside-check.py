@@ -22,6 +22,8 @@ could not run.
 """
 
 import http.client
+import importlib.machinery
+import importlib.util
 import json
 import os
 import pathlib
@@ -39,9 +41,6 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TIMEOUT = 20
-# Caddy answers these for a private path (respond 404), or 405 for a method
-# the site does not take: either way the request never reached the backend.
-PRIVATE_PATH_OK = {404, 405}
 TLS_PROTOCOLS_OK = {"TLSv1.2", "TLSv1.3"}
 
 
@@ -85,19 +84,19 @@ def caddy_hsts():
     return defaults["caddy_hsts"]
 
 
-def private_path_variants(pattern):
-    """The ways a client could try to sneak past `path PATTERN` in Caddy."""
-    base = pattern.removesuffix("/*").rstrip("/") or "/"
-    segments = base.strip("/").split("/")
-    variants = {base, base + "/"}
-    if pattern.endswith("/*"):
-        variants.add(base + "/x")
-    if segments[0]:
-        variants.add("/" + "//".join(segments) if len(segments) > 1 else "/" + base)  # a doubled slash
-        variants.add("/" + "/".join([segments[0].upper(), *segments[1:]]))
-        last = segments[-1]
-        variants.add("/" + "/".join([*segments[:-1], f"%{ord(last[0]):02x}{last[1:]}"]))
-    return sorted(variants)
+def server_posture():
+    """scripts/server-posture, which also checks the private paths, from the server."""
+    loader = importlib.machinery.SourceFileLoader("server_posture", str(ROOT / "scripts/server-posture"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+# The same variants of each private path, and the same answers, as the check
+# from the server.
+SERVER_POSTURE = server_posture()
+private_path_variants = SERVER_POSTURE.private_path_variants
+PRIVATE_PATH_OK = SERVER_POSTURE.PRIVATE_PATH_OK
 
 
 def expected():
