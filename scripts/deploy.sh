@@ -21,9 +21,10 @@
 #
 # The release is checked and extracted as the sites user into
 # /srv/sites/PROJECT/releases/<UTC time>-<short sha>/ (extract-release), and
-# only then does current switch to it, atomically. If anything fails, what was
-# published stays published. The last 5 releases are kept, plus the one
-# current points at. Every attempt is logged to the journal (tag: deploy).
+# only then does current switch to it, atomically, and previous to the one it
+# replaced. If anything fails, what was published stays published. The last 5
+# releases are kept, plus the ones current and previous point at. Every
+# attempt is logged to the journal (tag: deploy).
 # Installed by Ansible (roles/deploy) as /usr/local/sbin/deploy.sh.
 set -euo pipefail
 umask 022
@@ -142,18 +143,26 @@ target="$releases/$release"
   || fail "the extracted release is incomplete"
 
 # Publish: a new symlink renamed over current, so there is never a moment
-# without one.
+# without one. The release it pointed at becomes previous, the same way:
+# Caddy serves a missing /assets/ file from there, for the tabs opened before
+# this deploy.
+previous_target="$(readlink "$site/current" || true)"
 ln -sfn "releases/$release" "$site/.current-$$"
 mv -T "$site/.current-$$" "$site/current"
 result="ok" reason=""
+if [[ "$previous_target" == releases/* ]]; then
+  ln -sfn "$previous_target" "$site/.previous-$$"
+  mv -T "$site/.previous-$$" "$site/previous"
+fi
 
-# Keep the newest releases and whatever current points at; the rest go, as
-# the sites user. A failure here does not undo the deploy.
+# Keep the newest releases and whatever current and previous point at; the
+# rest go, as the sites user. A failure here does not undo the deploy.
 current_target="$(readlink "$site/current")"
+previous_target="$(readlink "$site/previous" || true)"
 mapfile -t all < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' </dev/null | grep -E "$RELEASE_RE" | sort -r)
 removed=0
 for old in "${all[@]:$KEEP}"; do
-  [[ "releases/$old" == "$current_target" ]] && continue
+  [[ "releases/$old" == "$current_target" || "releases/$old" == "$previous_target" ]] && continue
   runuser -u "$SITES_USER" -- rm -rf -- "$releases/$old" </dev/null 9>&- && removed=$((removed + 1))
 done
 size="$size removed=$removed"

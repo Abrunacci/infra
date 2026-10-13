@@ -106,6 +106,23 @@
 		}
 		rewrite @spa /index.html
 
+		# A tab opened before a deploy still asks for the old build's lazily
+		# loaded files. When an asset is not in the published release, it is
+		# served from the one published before it (previous, kept by
+		# deploy.sh and site-rollback), if it is there.
+		@previous_asset {
+			path /assets/*
+			not file
+			file {
+				root {{ projects_sites_dir }}/{{ item.name }}/previous
+			}
+		}
+		route @previous_asset {
+			root * {{ projects_sites_dir }}/{{ item.name }}/previous
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+
 		file_server
 	}
 {% endif %}
