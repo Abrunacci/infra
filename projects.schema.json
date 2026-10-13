@@ -100,8 +100,7 @@
                   { "not": { "required": ["health"] } },
                   { "not": { "required": ["paths"] } },
                   { "not": { "required": ["private_paths"] } },
-                  { "not": { "required": ["max_body"] } },
-                  { "not": { "required": ["body_timeout"] } }
+                  { "not": { "required": ["max_body"] } }
                 ]
               }
             },
@@ -220,11 +219,6 @@
           "description": "Memory limit of the container, from 64m to 512m. Defaults to 256m.",
           "type": "string",
           "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
-        },
-        "body_timeout": {
-          "description": "How long a request's body may take to arrive, from 10s to 300s, such as 35s. Defaults to roles/caddy's caddy_timeout_read_body (30s). Only with a subdomain.",
-          "type": "string",
-          "pattern": "^([1-9][0-9]|[12][0-9]{2}|300)s$"
         },
         "max_body": {
           "description": "Largest request body Caddy passes to the backend, in KB or MB, such as 64KB for a form. Larger ones get 413 without reaching it. Defaults to 10MB. Only with a subdomain.",
