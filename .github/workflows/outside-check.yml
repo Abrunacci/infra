@@ -13,7 +13,10 @@ name: Outside check
 # The run is green whenever the check ran, red only when it could not.
 on:
   schedule:
-    - cron: "30 12 * * 1"  # 09:30 in Buenos Aires
+    # Off :00 and :30: GitHub delays scheduled runs under load, worst at the
+    # start of the hour (on 2026-10-12 they started about 9 hours late).
+    # The healthchecks.io check uses the same cron.
+    - cron: "47 12 * * 1"  # 09:47 in Buenos Aires
   workflow_dispatch:
 
 permissions:

@@ -14,7 +14,10 @@ name: Security scan
 # goes by without a ping, so a schedule that stops firing is noticed.
 on:
   schedule:
-    - cron: "0 12 * * 1"  # 09:00 in Buenos Aires
+    # Off :00 and :30: GitHub delays scheduled runs under load, worst at the
+    # start of the hour (on 2026-10-12 they started about 9 hours late).
+    # The healthchecks.io check uses the same cron.
+    - cron: "17 12 * * 1"  # 09:17 in Buenos Aires
   workflow_dispatch:
   pull_request:
     paths:
