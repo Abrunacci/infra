@@ -53,7 +53,8 @@
 #                         other containers may call them (only with a
 #                         subdomain; optional)
 #                env      non-secret variables, public: quoted strings
-#                secrets  names only, each generated or manual; the values
+#                secrets  names only, each generated, manual or optional (a
+#                         manual one the backend also runs without); the values
 #                         live on the server (sudo project-secret). Or
 #                         {from: PROJECT, key: KEY}: another project's secret,
 #                         copied by the server, plus a private network to that
@@ -203,6 +204,12 @@ projects:
         SECRET_KEY: generated
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
+        # The import's suggestions: a Claude API key (epb-produccion) from EPB's
+        # own Anthropic workspace, which has a spending limit. Without it, EPB
+        # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
+        # The backend calls api.anthropic.com:443, so a future filter on the
+        # containers' outbound traffic must allow it.
+        ANTHROPIC_API_KEY: optional
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
 

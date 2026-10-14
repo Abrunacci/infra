@@ -106,7 +106,7 @@ PY
     || fail "invalid database settings in the registry"
   [[ "$BACKEND_URL_SCHEME" =~ ^[a-z][a-z0-9+.-]{0,31}$ ]] || fail "invalid database URL scheme in the registry"
   for s in "${BACKEND_SECRETS[@]}"; do
-    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual)$ ]] || fail "invalid secret in the registry"
+    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual|optional)$ ]] || fail "invalid secret in the registry"
   done
   for s in "${BACKEND_LINKS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
@@ -365,8 +365,9 @@ backend_pull() {
     || fail "cannot pull $1: $(tail -n 1 <<<"$out" | tr -cd '[:print:]' | cut -c1-200)"
 }
 
-# Declared secrets that have no value, and values that are not declared.
-# Prints one line per problem; returns 1 if there is any.
+# Declared secrets that have no value, and values that are not declared. An
+# optional secret without a value is not a problem: the container runs without
+# the variable. Prints one line per problem; returns 1 if there is any.
 backend_secret_problems() {
   local project="$1" file="$SECRETS_DIR/$1/secrets.env" line key kind bad=0
   declare -A have=() declared=()
@@ -378,7 +379,7 @@ backend_secret_problems() {
   for line in "${BACKEND_SECRETS[@]}"; do
     read -r key kind <<<"$line"
     declared["$key"]=1
-    if [[ -z "${have[$key]:-}" ]]; then
+    if [[ -z "${have[$key]:-}" && "$kind" != optional ]]; then
       bad=1
       if [[ "$kind" == manual ]]; then
         echo "$key has no value: sudo project-secret $project set $key"
