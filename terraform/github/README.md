@@ -44,7 +44,7 @@ Before adding a check, confirm it appears, with that exact name, on the last pul
 | What | Where | Scope | Expires |
 |---|---|---|---|
 | GitHub rulesets token | `GITHUB_TOKEN` in `terraform/github/.env` (this configuration's own, readable by you only), and the password manager | Fine-grained, `Abrunacci`'s repositories in the table above only: `Administration: Read and write` (and `Metadata: Read`, which GitHub adds) | 2027-10-15 |
-| State S3 credentials | Also in `terraform/github/.env`: the same values as in `../.env` | `Object Read & Write` on `infra-tfstate` | see `../README.md` |
+| State S3 credentials | `../.env`, which `terraform/github/.env` loads | `Object Read & Write` on `infra-tfstate` | see `../README.md` |
 
 The token is also a row of `../README.md`, "Credentials", so the server's expiry check warns 14 days before it expires. The state lives in the same bucket as the main one, under `infra/github.tfstate`.
 
@@ -63,11 +63,11 @@ Copy the value into the password manager and into `terraform/github/.env` ("Usag
 
 ## Usage
 
-Once, create `terraform/github/.env` from the example and fill it in: `GITHUB_TOKEN` with the token, and the three `AWS_*` lines with the same values as in `../.env`. `.env` is git-ignored, here as in `..`.
+Once, create `terraform/github/.env` from the example and fill in `GITHUB_TOKEN`. Its first line loads `../.env`, where the state's credentials (`AWS_*`) already are, so nothing is copied. `.env` is git-ignored, here as in `..`.
 
 ```sh
 cd terraform/github
-cp .env.example .env && chmod 600 .env    # then fill it in
+cp .env.example .env && chmod 600 .env    # then fill in GITHUB_TOKEN
 ```
 
 Then, every time, from `terraform/github`:
@@ -79,7 +79,7 @@ terraform plan
 terraform apply
 ```
 
-`terraform apply` shows the plan again and asks for `yes` before changing anything. If the R2 state credentials in `../.env` ever change, change them here too; they do not expire. When the token is rotated, replace `GITHUB_TOKEN` here.
+`terraform apply` shows the plan again and asks for `yes` before changing anything. Load it from `terraform/github`: `../.env` is relative to where you are. That file also brings in the DigitalOcean and Cloudflare tokens, which this configuration does not use. When the token is rotated, replace `GITHUB_TOKEN` here.
 
 ## Adding a repository
 
