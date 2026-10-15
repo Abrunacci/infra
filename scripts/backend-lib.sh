@@ -34,6 +34,9 @@ readonly REGISTRY_AUTH=/etc/infra/secrets/registry
 readonly LOCK_DIR=/run/infra-backend
 readonly KEEP=5
 readonly HEALTH_SECONDS=60
+# A worker's health command loads the whole app (EPB's: about 18 s), so the
+# first one to pass can take longer than the backend's health path.
+readonly WORKER_HEALTH_SECONDS=120
 readonly PULL_SECONDS=300
 readonly NAME_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 readonly RELEASE_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$'
@@ -311,7 +314,10 @@ backend_container_healthy() {
       echo "$what is not staying up (status $status, $restarts restarts)" >&2
       return 1
     fi
-    ((SECONDS < deadline)) || return 1
+    if ((SECONDS >= deadline)); then
+      echo "$what's HEALTHCHECK has not passed yet (health: $health)" >&2
+      return 1
+    fi
     sleep 2
   done
 }
@@ -328,14 +334,15 @@ backend_container_healthy() {
 # HEALTHCHECK, or whose HEALTHCHECK already says unhealthy.
 #
 # With a worker, its container must also become healthy (its health command,
-# its HEALTHCHECK) within the same time: both start together.
+# its HEALTHCHECK), within WORKER_HEALTH_SECONDS of the same start when
+# SECONDS is not 0: both start together.
 backend_healthy() {
-  local project="$1" seconds="$2" deadline worker
-  deadline=$((SECONDS + seconds))
-  backend_service_healthy "$project" "$deadline" || return 1
+  local project="$1" seconds="$2" start="$SECONDS" worker worker_seconds=0
+  backend_service_healthy "$project" "$((start + seconds))" || return 1
   [[ "$BACKEND_WORKER" == true ]] || return 0
   worker="$(backend_compose "$project" ps -a -q worker 2>/dev/null)" || worker=""
-  backend_container_healthy "$worker" "$deadline" "the worker"
+  ((seconds > 0)) && worker_seconds="$WORKER_HEALTH_SECONDS"
+  backend_container_healthy "$worker" "$((start + worker_seconds))" "the worker"
 }
 
 # backend_healthy's check of the backend itself, until DEADLINE.
@@ -361,7 +368,10 @@ backend_service_healthy() {
       echo "the container is not staying up (status $status, $restarts restarts)" >&2
       return 1
     fi
-    ((SECONDS < deadline)) || return 1
+    if ((SECONDS >= deadline)); then
+      echo "the backend's health path does not answer" >&2
+      return 1
+    fi
     sleep 2
   done
 }
@@ -399,13 +409,13 @@ backend_switch() {
   if [[ -z "$prev_release" ]]; then
     backend_compose "$project" down >&2 || true
     rm -f "$STATE_DIR/$project/release.env"
-    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; there is no earlier release, so the backend was stopped"
+    SWITCH_RESULT="not healthy in time ($(backend_health_target "$project")), or it stopped; there is no earlier release, so the backend was stopped"
     return 1
   fi
   if backend_activate "$project" "$prev_release" "$prev_image"; then
-    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is healthy"
+    SWITCH_RESULT="not healthy in time ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is healthy"
   else
-    SWITCH_RESULT="not healthy within ${HEALTH_SECONDS}s ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is NOT healthy either"
+    SWITCH_RESULT="not healthy in time ($(backend_health_target "$project")), or it stopped; back to release $prev_release, which is NOT healthy either"
   fi
   return 1
 }

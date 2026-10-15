@@ -271,12 +271,12 @@ Before the first deploy, set the backend's manual secrets (below). The full guid
 
 ### A backend's worker
 
-A backend may have a `worker` in `projects.yml`: a second process of the same image without a port, such as EPB Stock's jobs (`python -m epb_stock.jobs`). It is its own container (`backend-<project>-worker-1`) in the backend's Compose project, so it always runs the same release: every deploy, rollback, `--restart` and `--apply` moves both, and waits until the worker's health command (its HEALTHCHECK, every 5 s while it starts, then every minute) says healthy, as it waits for the backend's health path. If either is not healthy in time, a deploy or rollback puts back the release before, for both.
+A backend may have a `worker` in `projects.yml`: a second process of the same image without a port, such as EPB Stock's jobs (`python -m epb_stock.jobs`). It is its own container (`backend-<project>-worker-1`) in the backend's Compose project, so it always runs the same release: every deploy, rollback, `--restart` and `--apply` moves both, and waits until the worker's health command (its HEALTHCHECK, every 5 s while it starts, then every 5 minutes, with 60 s for each run) says healthy, as it waits for the backend's health path: up to 60 s for the backend, 120 s for the worker. If either is not healthy in time, a deploy or rollback puts back the release before, for both.
 
 - **Secrets.** They are still set on the project (`sudo project-secret <project> set KEY`), in its one `secrets.env`. The ones the worker lists (`worker.secrets`) go only to the worker; the backend gets all the others. Before each start, `secrets.env` is split into `secrets-worker.env` and `secrets-backend.env` (root only, never edited by hand). The worker also gets the backend's `env` and, with a database, its `DATABASE_URL`, but no linked secrets.
 - **Network.** Its own network, only for its route out to the internet, plus the project's database. Neither Caddy nor any backend reaches it.
 - **Memory.** Its own `memory`, apart from the backend's; CPU is the backend's `cpus`. `stop_grace_period` (20s by default) is the time it gets to finish after SIGTERM.
-- **Monitoring.** The status page has a `<project> / Worker` heartbeat (`gatus-heartbeats`, every 5 minutes) that emails when its container is not running or its health command fails twice in a row. `sudo backend-status <project>` shows it too, and its log is `sudo journalctl -t backend.<project>-worker`.
+- **Monitoring.** The status page has a `<project> / Worker` heartbeat (`gatus-heartbeats`, every 5 minutes) that emails when its container is not running or Docker reports it unhealthy (two failed health commands in a row, 5 minutes apart): about 20 minutes after the worker stops. `sudo backend-status <project>` shows it too, and its log is `sudo journalctl -t backend.<project>-worker`.
 
 ### Pulling private images
 
@@ -620,6 +620,7 @@ Every check uses the public address, from the server itself: DNS, the certificat
 | Server / Restore drill | `gatus-heartbeats`, every 5 minutes | a project with a database has had no passing `backup-restore drill` for 35 days (recorded in `/var/lib/infra/backup/drills/`, or else found in the journal) | after 2 in a row |
 | Server / Credentials | `gatus-heartbeats`, every 5 minutes | a credential in `terraform/README.md` ("Credentials") expires within 14 days, or has expired. The dates are that table's "Expires" column, copied to `/etc/infra/credentials-expiry.conf` by the playbook | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
+| `<project>` / Worker, for each backend with a `worker` | `gatus-heartbeats`, every 5 minutes | the worker's container is not running, or its health command is not healthy | after 2 in a row |
 
 - **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
 - **Generic on the page.** A failure shows only a short, generic reason (the page is public); the backup's own reason stays on the server, in `/var/lib/infra/backup/last-run` and `journalctl -t backup`. The emails carry each heartbeat's description, which says where to look.

@@ -239,7 +239,7 @@
               "$ref": "#/$defs/command"
             },
             "health": {
-              "description": "Its HEALTHCHECK, run inside the worker's container every minute: exit 0 while it is working. Deploys wait for it, and the status page gets a heartbeat (PROJECT / Worker) that alerts when it fails.",
+              "description": "Its HEALTHCHECK, run inside the worker's container every 5 s while it starts, then every 5 minutes, with 60 s to finish: exit 0 while it is working. Deploys wait for it, and the status page gets a heartbeat (PROJECT / Worker) that alerts when it fails.",
               "$ref": "#/$defs/command"
             },
             "memory": {
