@@ -1,6 +1,6 @@
 # Its own state, next to the main one in the same R2 bucket, under another
-# key. The same S3 credentials as the main configuration, copied into this
-# configuration's .env:
+# key. The same S3 credentials as the main configuration: this configuration's
+# .env loads ../.env:
 #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  -> R2 API token scoped to infra-tfstate
 #   AWS_ENDPOINT_URL_S3                        -> https://<account_id>.r2.cloudflarestorage.com
 terraform {
