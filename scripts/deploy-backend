@@ -19,7 +19,8 @@
 # untouched. Then the container is recreated with the new image,
 # and its health path is checked from Caddy's container for up to 60 s (for an
 # internal backend, without a subdomain, Docker must report it healthy from
-# the image's HEALTHCHECK instead). If it
+# the image's HEALTHCHECK instead). A worker, if the backend has one, is
+# recreated with it and must report healthy too (its health command). If it
 # never becomes healthy, the previous release is put back and checked, and the deploy
 # fails; what was running keeps running. The container's log never goes to
 # the client, since CI logs may be public: it goes to the journal (tag

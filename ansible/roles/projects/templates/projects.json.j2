@@ -21,6 +21,9 @@
                    | items2dict,
           'migrate': p.backend.migrate is defined,
           'database_url_scheme': p.backend.database_url_scheme | default('postgresql'),
+          'worker': {
+            'secrets': p.backend.worker.secrets | default([]),
+          } if p.backend.worker is defined else none,
         } if p.backend is defined else none,
       }) -%}
 {%- endfor -%}

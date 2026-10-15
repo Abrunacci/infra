@@ -10,6 +10,9 @@
 #   /etc/infra/secrets/projects/NAME/secrets.env  secrets (root only)
 #   /etc/infra/secrets/projects/NAME/links.env    copies of other projects'
 #                                                 secrets (project-secret sync)
+# With a worker, secrets.env split in two before each start (backend_up):
+#   /etc/infra/secrets/projects/NAME/secrets-worker.env   the worker's secrets
+#   /etc/infra/secrets/projects/NAME/secrets-backend.env  all the others
 #   /var/lib/infra/backends/NAME/release.env      what is deployed:
 #                                                 BACKEND_IMAGE, BACKEND_RELEASE
 #   /var/lib/infra/backends/NAME/releases         history, oldest first:
@@ -49,10 +52,11 @@ readonly DATABASE_CONF=/etc/infra/database.conf
 BACKEND_SHOW_LOGS=0
 
 # Reads PROJECT's backend from the server's registry into BACKEND_REPO,
-# BACKEND_PORT, BACKEND_HEALTH, BACKEND_DATABASE and BACKEND_MIGRATE (true or
-# false), BACKEND_URL_SCHEME, BACKEND_SECRETS (an array of "KEY kind") and
-# BACKEND_LINKS (an array of "KEY SOURCE SOURCE_KEY": its secret KEY is a copy
-# of project SOURCE's SOURCE_KEY).
+# BACKEND_PORT, BACKEND_HEALTH, BACKEND_DATABASE, BACKEND_MIGRATE and
+# BACKEND_WORKER (true or false), BACKEND_URL_SCHEME, BACKEND_SECRETS (an array
+# of "KEY kind"), BACKEND_LINKS (an array of "KEY SOURCE SOURCE_KEY": its
+# secret KEY is a copy of project SOURCE's SOURCE_KEY) and
+# BACKEND_WORKER_SECRETS (an array of the keys only the worker gets).
 # An internal backend (a project without a subdomain) has no port or health
 # path: both are empty, and the image's own HEALTHCHECK is its health.
 # The registry is written by Ansible from a checked projects.yml; every value
@@ -76,11 +80,15 @@ for p in json.load(open(registry))["projects"]:
         print("true" if p.get("database") else "false")
         print("true" if b.get("migrate") else "false")
         print(b.get("database_url_scheme") or "postgresql")
+        print("true" if b.get("worker") else "false")
         for key, kind in sorted((b.get("secrets") or {}).items()):
             print(f"{key} {kind}")
         print("--")
         for key, link in sorted((b.get("links") or {}).items()):
             print(f"{key} {link['from']} {link['key']}")
+        print("--")
+        for key in sorted((b.get("worker") or {}).get("secrets") or []):
+            print(key)
         break
 PY
 )" || fail "cannot read the project registry"
@@ -89,14 +97,21 @@ PY
   [[ "${lines[0]}" == backend ]] || fail "$1 has no backend"
   BACKEND_REPO="${lines[1]}" BACKEND_PORT="${lines[2]}" BACKEND_HEALTH="${lines[3]}"
   BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
-  BACKEND_SECRETS=() BACKEND_LINKS=()
-  local i=7
+  BACKEND_WORKER="${lines[7]}"
+  BACKEND_SECRETS=() BACKEND_LINKS=() BACKEND_WORKER_SECRETS=()
+  local i=8
   while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
     BACKEND_SECRETS+=("${lines[i]}")
     ((i += 1))
   done
   [[ "${lines[i]:-}" == -- ]] || fail "invalid secrets in the registry"
-  BACKEND_LINKS=("${lines[@]:i+1}")
+  ((i += 1))
+  while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
+    BACKEND_LINKS+=("${lines[i]}")
+    ((i += 1))
+  done
+  [[ "${lines[i]:-}" == -- ]] || fail "invalid linked secrets in the registry"
+  BACKEND_WORKER_SECRETS=("${lines[@]:i+1}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
   if [[ -n "$BACKEND_PORT$BACKEND_HEALTH" ]]; then
     [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
@@ -104,6 +119,7 @@ PY
   fi
   [[ "$BACKEND_DATABASE" =~ ^(true|false)$ && "$BACKEND_MIGRATE" =~ ^(true|false)$ ]] \
     || fail "invalid database settings in the registry"
+  [[ "$BACKEND_WORKER" =~ ^(true|false)$ ]] || fail "invalid worker in the registry"
   [[ "$BACKEND_URL_SCHEME" =~ ^[a-z][a-z0-9+.-]{0,31}$ ]] || fail "invalid database URL scheme in the registry"
   for s in "${BACKEND_SECRETS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual|optional)$ ]] || fail "invalid secret in the registry"
@@ -111,6 +127,9 @@ PY
   for s in "${BACKEND_LINKS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
       || fail "invalid linked secret in the registry"
+  done
+  for s in "${BACKEND_WORKER_SECRETS[@]}"; do
+    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || fail "invalid worker secret in the registry"
   done
 }
 
@@ -223,13 +242,78 @@ backend_compose() {
   docker compose --project-directory "$BACKENDS_DIR/$project" "${env_file[@]}" "$@" </dev/null 9>&-
 }
 
+# Writes the two secrets files of a backend with a worker from secrets.env:
+# secrets-worker.env with the keys the worker lists, secrets-backend.env with
+# all the others. Each one replaced in one rename, root only. Nothing to do
+# without a worker: the backend reads secrets.env itself.
+backend_split_secrets() {
+  local project="$1" dir="$SECRETS_DIR/$1" line key tmp_w tmp_b
+  [[ "$BACKEND_WORKER" == true ]] || return 0
+  [[ -f "$dir/secrets.env" ]] || fail "$dir/secrets.env is missing (run the playbook)"
+  declare -A worker_key=()
+  for key in "${BACKEND_WORKER_SECRETS[@]}"; do worker_key["$key"]=1; done
+  tmp_w="$(mktemp "$dir/.secrets-worker.env.XXXXXX")" || return 1
+  tmp_b="$(mktemp "$dir/.secrets-backend.env.XXXXXX")" || { rm -f "$tmp_w"; return 1; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if [[ -n "${worker_key[${line%%=*}]:-}" ]]; then
+      printf '%s\n' "$line" >>"$tmp_w"
+    else
+      printf '%s\n' "$line" >>"$tmp_b"
+    fi
+  done <"$dir/secrets.env"
+  mv -f "$tmp_w" "$dir/secrets-worker.env"
+  mv -f "$tmp_b" "$dir/secrets-backend.env"
+}
+
+# Starts PROJECT's containers with `docker compose up -d` and the given
+# flags, after writing the secrets files they read. Every start goes through
+# here (deploys, rollbacks, restarts, --apply, restores), so a secret set with
+# project-secret reaches the right container, and only it.
+backend_up() {
+  local project="$1"
+  shift
+  backend_split_secrets "$project" || return 1
+  backend_compose "$project" up -d "$@"
+}
+
 # What backend_healthy checks, for messages.
 backend_health_target() {
+  local target
   if [[ -z "$BACKEND_HEALTH" ]]; then
-    echo "the image's HEALTHCHECK"
+    target="the image's HEALTHCHECK"
   else
-    echo "http://$1-backend:$BACKEND_PORT$BACKEND_HEALTH"
+    target="http://$1-backend:$BACKEND_PORT$BACKEND_HEALTH"
   fi
+  [[ "$BACKEND_WORKER" == true ]] && target+=", and the worker's health command"
+  echo "$target"
+}
+
+# Waits until Docker reports CONTAINER healthy (its HEALTHCHECK), until the
+# DEADLINE (in SECONDS). WHAT names it in messages. A container that stopped
+# or restarted, has no HEALTHCHECK, or already reports unhealthy fails at once.
+backend_container_healthy() {
+  local container="$1" deadline="$2" what="$3" restarts status health
+  if [[ -z "$container" || "$container" == *$'\n'* ]]; then
+    echo "$what's container is not there" >&2
+    return 1
+  fi
+  while :; do
+    read -r restarts status health < <(docker inspect \
+      -f '{{.RestartCount}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+      "$container" 2>/dev/null </dev/null 9>&-) || { echo "cannot inspect $what's container" >&2; return 1; }
+    case "$health" in
+      healthy) return 0 ;;
+      none) echo "$what has no HEALTHCHECK" >&2; return 1 ;;
+      unhealthy) echo "$what's HEALTHCHECK reports unhealthy" >&2; return 1 ;;
+    esac
+    if [[ "$restarts" != 0 || "$status" == exited || "$status" == dead ]]; then
+      echo "$what is not staying up (status $status, $restarts restarts)" >&2
+      return 1
+    fi
+    ((SECONDS < deadline)) || return 1
+    sleep 2
+  done
 }
 
 # Checks the health path from Caddy's container, the way requests get there
@@ -242,31 +326,25 @@ backend_health_target() {
 # waiting: that fails at once, so a broken image costs seconds of errors
 # instead of the whole wait. So does an internal backend whose image has no
 # HEALTHCHECK, or whose HEALTHCHECK already says unhealthy.
+#
+# With a worker, its container must also become healthy (its health command,
+# its HEALTHCHECK) within the same time: both start together.
 backend_healthy() {
-  local project="$1" seconds="$2" caddy="" container deadline restarts status health
-  container="$(backend_compose "$project" ps -a -q backend 2>/dev/null)" || container=""
+  local project="$1" seconds="$2" deadline worker
   deadline=$((SECONDS + seconds))
+  backend_service_healthy "$project" "$deadline" || return 1
+  [[ "$BACKEND_WORKER" == true ]] || return 0
+  worker="$(backend_compose "$project" ps -a -q worker 2>/dev/null)" || worker=""
+  backend_container_healthy "$worker" "$deadline" "the worker"
+}
+
+# backend_healthy's check of the backend itself, until DEADLINE.
+backend_service_healthy() {
+  local project="$1" deadline="$2" caddy="" container restarts status
+  container="$(backend_compose "$project" ps -a -q backend 2>/dev/null)" || container=""
   if [[ -z "$BACKEND_HEALTH" ]]; then
-    if [[ -z "$container" || "$container" == *$'\n'* ]]; then
-      echo "the backend's container is not there" >&2
-      return 1
-    fi
-    while :; do
-      read -r restarts status health < <(docker inspect \
-        -f '{{.RestartCount}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-        "$container" 2>/dev/null </dev/null 9>&-) || { echo "cannot inspect the backend's container" >&2; return 1; }
-      case "$health" in
-        healthy) return 0 ;;
-        none) echo "the image has no HEALTHCHECK, which a backend without a subdomain needs" >&2; return 1 ;;
-        unhealthy) echo "the image's HEALTHCHECK reports unhealthy" >&2; return 1 ;;
-      esac
-      if [[ "$restarts" != 0 || "$status" == exited || "$status" == dead ]]; then
-        echo "the container is not staying up (status $status, $restarts restarts)" >&2
-        return 1
-      fi
-      ((SECONDS < deadline)) || return 1
-      sleep 2
-    done
+    backend_container_healthy "$container" "$deadline" "the backend"
+    return
   fi
   caddy="$(docker ps -q --filter label=com.docker.compose.project=caddy \
     --filter label=com.docker.compose.service=caddy --filter label=com.docker.compose.oneoff=False)"
@@ -295,7 +373,7 @@ backend_activate() {
   tmp="$STATE_DIR/$project/.release.env.$$"
   printf 'BACKEND_IMAGE=%s\nBACKEND_RELEASE=%s\n' "$image" "$release" >"$tmp"
   mv -f "$tmp" "$STATE_DIR/$project/release.env"
-  backend_compose "$project" up -d --pull never --remove-orphans --quiet-pull >&2 || return 1
+  backend_up "$project" --pull never --remove-orphans --quiet-pull >&2 || return 1
   backend_healthy "$project" "$HEALTH_SECONDS"
 }
 

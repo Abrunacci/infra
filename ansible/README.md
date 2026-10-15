@@ -269,6 +269,15 @@ It prints `Deployed backend <project> release <id> (<digest>)`, or the reason it
 
 Before the first deploy, set the backend's manual secrets (below). The full guide for a project's repository (building and publishing the image to GHCR, cleaning old versions) comes with the first project that uses it.
 
+### A backend's worker
+
+A backend may have a `worker` in `projects.yml`: a second process of the same image without a port, such as EPB Stock's jobs (`python -m epb_stock.jobs`). It is its own container (`backend-<project>-worker-1`) in the backend's Compose project, so it always runs the same release: every deploy, rollback, `--restart` and `--apply` moves both, and waits until the worker's health command (its HEALTHCHECK, every 5 s while it starts, then every minute) says healthy, as it waits for the backend's health path. If either is not healthy in time, a deploy or rollback puts back the release before, for both.
+
+- **Secrets.** They are still set on the project (`sudo project-secret <project> set KEY`), in its one `secrets.env`. The ones the worker lists (`worker.secrets`) go only to the worker; the backend gets all the others. Before each start, `secrets.env` is split into `secrets-worker.env` and `secrets-backend.env` (root only, never edited by hand). The worker also gets the backend's `env` and, with a database, its `DATABASE_URL`, but no linked secrets.
+- **Network.** Its own network, only for its route out to the internet, plus the project's database. Neither Caddy nor any backend reaches it.
+- **Memory.** Its own `memory`, apart from the backend's; CPU is the backend's `cpus`. `stop_grace_period` (20s by default) is the time it gets to finish after SIGTERM.
+- **Monitoring.** The status page has a `<project> / Worker` heartbeat (`gatus-heartbeats`, every 5 minutes) that emails when its container is not running or its health command fails twice in a row. `sudo backend-status <project>` shows it too, and its log is `sudo journalctl -t backend.<project>-worker`.
+
 ### Pulling private images
 
 A public image needs nothing. For private images in GHCR, the server logs in once with a GitHub personal access token (classic) whose only scope is `read:packages`, with an expiration date. Fine-grained tokens do not work with GHCR. Create it in **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**, write its expiration date in `terraform/README.md` ("Credentials"), and on the server:
@@ -298,7 +307,7 @@ A secret other backends link to is changed only at its source. `set` (manual) an
 ### Backend status and rollbacks
 
 ```sh
-sudo backend-status <project>               # release, container and health
+sudo backend-status <project>               # release, containers and health
 sudo backend-rollback <project> --list      # releases, newest first; * is the deployed one
 sudo backend-rollback <project>             # back to the release before the deployed one
 sudo backend-rollback <project> RELEASE     # to that release

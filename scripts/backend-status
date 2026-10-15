@@ -2,6 +2,7 @@
 # Shows a project's backend: the deployed release, its container and whether
 # its health path answers (from Caddy's container, like requests), or, for an
 # internal backend, whether Docker reports it healthy (the image's HEALTHCHECK).
+# With a worker, also its container, which must be healthy too.
 #
 #   sudo backend-status PROJECT           check once
 #   sudo backend-status PROJECT --wait    keep checking for up to 60 s (the playbook
@@ -33,6 +34,9 @@ fi
 echo "release:   $release"
 echo "image:     $(backend_current "$project" BACKEND_IMAGE)"
 echo "container: $(backend_compose "$project" ps -a --format '{{.Name}} {{.State}} {{.Status}}' backend 2>/dev/null || echo unknown)"
+if [[ "$BACKEND_WORKER" == true ]]; then
+  echo "worker:    $(backend_compose "$project" ps -a --format '{{.Name}} {{.State}} {{.Status}}' worker 2>/dev/null || echo unknown)"
+fi
 
 seconds=0
 [[ "${2:-}" == --wait ]] && seconds="$HEALTH_SECONDS"
@@ -42,4 +46,5 @@ if backend_healthy "$project" "$seconds"; then
 fi
 echo "health:    NOT OK ($(backend_health_target "$project"))"
 echo "log:       sudo journalctl -t backend.$project -n 50"
+[[ "$BACKEND_WORKER" == true ]] && echo "           sudo journalctl -t backend.$project-worker -n 50"
 exit 1

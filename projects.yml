@@ -207,11 +207,32 @@ projects:
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
         # own Anthropic workspace, which has a spending limit. Without it, EPB
         # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
-        # The backend calls api.anthropic.com:443, so a future filter on the
-        # containers' outbound traffic must allow it.
+        # Only the worker gets it (below), and calls api.anthropic.com:443, so
+        # a future filter on the containers' outbound traffic must allow it.
         ANTHROPIC_API_KEY: optional
+        # The model the analysis uses, if set; without it, EPB's own default.
+        IMPORT_AI_MODEL: optional
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
+      # The jobs process (EPB issue #209): the import's AI analysis and its
+      # final step, off the API. Same image and release as the API, so every
+      # deploy and rollback moves both. While it is down, the API sees no
+      # signal from it and does that work itself, without the analysis.
+      worker:
+        command: [python, -m, epb_stock.jobs]
+        # Exits 0 if the worker left its signal in the database in the last
+        # 30 s (it does every 10 s). Deploys wait for it, and the status
+        # page's "epb-stock / Worker" heartbeat alerts when it fails.
+        health: [python, -m, epb_stock.jobs, check]
+        # The largest import is now its work: issue #79 has the memory budget
+        # and the measurement that checks this limit.
+        memory: 512m
+        # Room to finish a job; one still running then goes back to the queue.
+        stop_grace_period: 30s
+        # The only secrets it gets, and the API no longer does. No SECRET_KEY,
+        # RESEND_API_KEY or SETUP_TOKEN: it signs nothing and sends no email.
+        # It also gets DATABASE_URL (the app's role, like the API).
+        secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
 
   # Internal: a scheduler that runs data jobs, with no public route. Its
   # image's HEALTHCHECK says whether it is alive.
