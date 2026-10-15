@@ -125,6 +125,24 @@
   loop_control:
     label: "{{ item.name }}"
 
+# A backend with a worker reads its secrets from two files written from
+# secrets.env before each start (backend_up in backend-lib.sh): the
+# worker's own secrets, and everything else for the backend. Created empty
+# here only so the compose file is valid before the first start.
+- name: Create the per-container secrets files of each backend with a worker
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ projects_backends_secrets_dir }}/{{ item.0.name }}/{{ item.1 }}"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ projects_backends | selectattr('backend.worker', 'defined') | product(projects_split_files) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}"
+  vars:
+    projects_split_files: [secrets-backend.env, secrets-worker.env]
+
 # Creates the database and roles of each project that has one, or checks
 # them; writes database-app.env and database-migrate.env, which the compose
 # file below needs. Never creates an empty database where one existed (see

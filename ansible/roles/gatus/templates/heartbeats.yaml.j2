@@ -71,3 +71,16 @@
   success_threshold: 1
   description: The backend's container is not running or its HEALTHCHECK fails. On the server, see sudo backend-status {{ p.name }}.
 {% endfor %}
+{% for p in projects_registry.projects if p.backend is defined and p.backend.worker is defined %}
+{#   A worker has no URL either: its health command, run by Docker. While it
+     fails, the project keeps running without what the worker does. #}
+- group: {{ p.name }}
+  name: Worker
+  key: {{ key(p.name, 'Worker') }}
+  check: container
+  target: {{ p.name }}/worker
+  interval: {{ gatus_host_heartbeat }}
+  failure_threshold: {{ gatus_host_failure_threshold }}
+  success_threshold: 1
+  description: The worker's container is not running or its health command fails, so its jobs are not being done. On the server, see sudo backend-status {{ p.name }} and sudo journalctl -t backend.{{ p.name }}-worker.
+{% endfor %}

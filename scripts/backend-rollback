@@ -68,13 +68,14 @@ current="$(backend_current "$project" BACKEND_RELEASE)"
 problems="$(backend_secret_problems "$project")" \
   || fail "the backend's secrets are not ready: $(tr '\n' ';' <<<"$problems" | sed 's/;$//')"
 
-# Compose recreates the container only if its configuration changed; the
+# Compose recreates a container only if its configuration changed; the
 # health check then runs, with no automatic way back (the image is the same).
+# Every container counts: a change may recreate only the worker.
 if [[ "${2:-}" == --apply ]]; then
-  before="$(backend_compose "$project" ps -q backend 2>/dev/null)" || before=""
-  backend_compose "$project" up -d --pull never --remove-orphans --quiet-pull >&2 \
+  before="$(backend_compose "$project" ps -q 2>/dev/null | sort)" || before=""
+  backend_up "$project" --pull never --remove-orphans --quiet-pull >&2 \
     || fail "could not apply the configuration"
-  after="$(backend_compose "$project" ps -q backend 2>/dev/null)" || after=""
+  after="$(backend_compose "$project" ps -q 2>/dev/null | sort)" || after=""
   if [[ -n "$before" && "$before" == "$after" ]]; then
     echo "Unchanged: $project release $current"
     exit 0
@@ -89,8 +90,8 @@ if [[ "${2:-}" == --apply ]]; then
 fi
 
 if [[ "${2:-}" == --restart ]]; then
-  backend_compose "$project" up -d --pull never --remove-orphans --force-recreate --quiet-pull >&2 \
-    || fail "could not recreate the container"
+  backend_up "$project" --pull never --remove-orphans --force-recreate --quiet-pull >&2 \
+    || fail "could not recreate the containers"
   if backend_healthy "$project" "$HEALTH_SECONDS"; then
     logger -t backend-rollback -- "project=$project restart release=$current result=ok by=${SUDO_USER:-root}"
     echo "Restarted $project release $current: healthy"

@@ -6,6 +6,7 @@
 name: backend-{{ item.name }}
 {# The projects this backend links to (secrets {from: PROJECT, ...}). #}
 {% set link_targets = (item.backend.secrets | default({})).values() | select('mapping') | map(attribute='from') | unique | sort | list %}
+{% set worker = item.backend.worker | default(none) %}
 
 services:
   backend:
@@ -35,8 +36,15 @@ services:
     env_file:
       - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
         format: raw
+{% if worker %}
+      # secrets.env without the worker's own secrets, written from it before
+      # each start (backend_up in backend-lib.sh).
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets-backend.env
+        format: raw
+{% else %}
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets.env
         format: raw
+{% endif %}
       # Copies of other projects' secrets ({from: ...}), written by project-secret.
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/links.env
         format: raw
@@ -91,6 +99,65 @@ services:
       driver: journald
       options:
         tag: backend.{{ item.name }}
+{% if worker %}
+
+  # A second process of the same image and release (worker in projects.yml):
+  # every deploy, rollback and restart moves it with the backend, and waits
+  # for its health command. No port and no alias: neither Caddy nor any
+  # backend reaches it.
+  worker:
+    image: ${BACKEND_IMAGE:?no release deployed yet}
+    command: {{ worker.command | to_json }}
+    restart: unless-stopped
+    init: true
+    user: "{{ projects_backends_uid }}:{{ projects_backends_uid }}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Its own check instead of the image's, which is the backend's. Every
+    # 5 s while it starts (so a deploy sees it healthy in seconds), then every
+    # minute: each run is a new process, and costs CPU.
+    healthcheck:
+      test: {{ (['CMD'] + worker.health) | to_json }}
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 60s
+      start_interval: 5s
+    env_file:
+      - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
+        format: raw
+      # Only the secrets it lists, written from secrets.env before each start.
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets-worker.env
+        format: raw
+{% if item.database %}
+      # DATABASE_URL, as the app's role, like the backend.
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
+        format: raw
+{% endif %}
+    networks:
+      # Its own network, only for its route out to the internet.
+      worker-outbound: {}
+{% if item.database %}
+      db: {}
+{% endif %}
+    mem_limit: {{ worker.memory }}
+    memswap_limit: {{ worker.memory }}
+    cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
+    pids_limit: 256
+    stop_grace_period: {{ worker.stop_grace_period | default('20s') }}
+    labels:
+      infra.release: ${BACKEND_RELEASE:-}
+    # `sudo journalctl -t backend.{{ item.name }}-worker`, like the backend's.
+    logging:
+      driver: journald
+      options:
+        tag: backend.{{ item.name }}-worker
+{% endif %}
 {% if item.backend.migrate is defined %}
 
   # Run once per deploy by deploy-backend (docker compose run --rm migrate),
@@ -127,6 +194,10 @@ services:
 {% endif %}
 
 networks:
+{% if worker %}
+  # Created and removed by Compose with the backend (backend-{{ item.name }}_worker-outbound).
+  worker-outbound: {}
+{% endif %}
 {% if item.subdomain is defined %}
   # Created by roles/caddy.
   edge:

@@ -7,7 +7,9 @@
 #       Every check; run every 5 minutes by gatus-heartbeats.timer:
 #       service    the systemd unit <target> is active (do-agent)
 #       container  the backend of the project <target> is running and its
-#                  image's HEALTHCHECK says healthy (internal backends)
+#                  image's HEALTHCHECK says healthy (internal backends); with
+#                  <target> PROJECT/worker, that project's worker and its
+#                  health command
 #       backup     only when the last successful backup is older than
 #                  <target> hours: a failure, so a backup that stopped
 #                  running alerts on time. backup-run pushes its own results.
@@ -132,21 +134,22 @@ check_service() {
 }
 
 check_container() {
-  local ids status health
-  ids="$(docker ps -a -q --filter "label=com.docker.compose.project=backend-$1" \
-    --filter label=com.docker.compose.service=backend 2>/dev/null)" \
-    || { echo failed "cannot ask Docker about $1"; return; }
+  local project="${1%/*}" service=backend name="$1" ids status health
+  [[ "$1" == */worker ]] && service=worker
+  ids="$(docker ps -a -q --filter "label=com.docker.compose.project=backend-$project" \
+    --filter "label=com.docker.compose.service=$service" 2>/dev/null)" \
+    || { echo failed "cannot ask Docker about $name"; return; }
   if [[ -z "$ids" ]]; then
-    echo failed "$1 has no backend container"
+    echo failed "$name has no $service container"
     return
   fi
   read -r status health < <(docker inspect \
     -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-    "${ids%%$'\n'*}" 2>/dev/null) || { echo failed "cannot inspect $1's container"; return; }
+    "${ids%%$'\n'*}" 2>/dev/null) || { echo failed "cannot inspect $name's container"; return; }
   if [[ "$status" == running && "$health" == healthy ]]; then
-    echo ok "$1 is healthy"
+    echo ok "$name is healthy"
   else
-    echo failed "$1's container is $status, health $health"
+    echo failed "$name's container is $status, health $health"
   fi
 }
 

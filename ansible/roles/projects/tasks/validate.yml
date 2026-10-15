@@ -68,7 +68,7 @@
             and item.backend.keys()
                 | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
                               'cpus', 'max_body', 'migrate', 'database_url_scheme',
-                              'log_alerts']) | length == 0
+                              'log_alerts', 'worker']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and (item.backend.port is not defined
@@ -209,6 +209,55 @@
     projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
     projects_cpus: "{{ item.backend.cpus | default(projects_backend_default_cpus) }}"
     projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
+
+# A backend's worker: a second container of the same image and release,
+# with its own command, health command and memory. The secrets it lists are
+# the backend's own (not linked ones), and only it gets them.
+- name: Check each backend's worker
+  ansible.builtin.assert:
+    that:
+      - projects_worker is mapping
+      - projects_worker.keys() | difference(['command', 'health', 'memory', 'stop_grace_period', 'secrets'])
+        | length == 0
+      - projects_commands | length == 2
+      - projects_commands | reject('sequence') | list | length == 0
+      - projects_commands | select('string') | list | length == 0
+      - projects_commands | select('mapping') | list | length == 0
+      - projects_commands | map('length') | select('lt', 1) | list | length == 0
+      - projects_commands | map('length') | select('gt', 32) | list | length == 0
+      - projects_commands | flatten(levels=1) | reject('string') | list | length == 0
+      - projects_commands | flatten(levels=1) | reject('match', '^[^$\n\r]{1,256}\Z') | list | length == 0
+      - projects_worker.memory is string
+      - projects_worker.memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
+      - >-
+        projects_worker.stop_grace_period is not defined
+        or (projects_worker.stop_grace_period is string
+            and projects_worker.stop_grace_period is match('^([1-9]|[1-9][0-9]|1[01][0-9]|120)s\Z'))
+      - projects_worker_secrets is sequence and projects_worker_secrets is not string
+      - projects_worker_secrets is not mapping
+      - projects_worker.secrets is not defined or projects_worker_secrets | length > 0
+      - projects_worker_secrets | unique | length == projects_worker_secrets | length
+      - projects_worker_secrets | reject('string') | list | length == 0
+      - projects_worker_secrets | difference(projects_own_secrets) | length == 0
+    fail_msg: >-
+      projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
+      32 arguments), a memory from 64m to 512m, optionally a stop_grace_period from 1s to 120s, and optionally
+      secrets: names of the backend's own generated, manual or optional secrets, not linked ones.
+      See projects.schema.json.
+    quiet: true
+  loop: >-
+    {{ projects_registry.projects | selectattr('backend', 'defined') | selectattr('backend', 'mapping')
+       | selectattr('backend.worker', 'defined') | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_worker: "{{ item.backend.worker }}"
+    projects_commands: >-
+      {{ [projects_worker.command | default(none), projects_worker.health | default(none)] | reject('none') | list }}
+    projects_worker_secrets: "{{ projects_worker.secrets | default([]) }}"
+    projects_own_secrets: >-
+      {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
+         | list }}
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
 # and a private network to that project's backend (link-PROJECT). The source

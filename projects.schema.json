@@ -205,10 +205,7 @@
         },
         "migrate": {
           "description": "Command that applies the migrations, run in a one-off container of the new image before each deploy switches to it, such as [alembic, upgrade, head]. It gets MIGRATION_DATABASE_URL and APP_DB_USER.",
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^$\\n\\r]*$" }
+          "$ref": "#/$defs/command"
         },
         "database_url_scheme": {
           "description": "Scheme of DATABASE_URL and MIGRATION_DATABASE_URL, such as postgresql+psycopg for SQLAlchemy with psycopg 3. Defaults to postgresql.",
@@ -230,6 +227,39 @@
           "type": "number",
           "minimum": 0.1,
           "maximum": 1
+        },
+        "worker": {
+          "description": "A second process of the same image, without a port, such as a jobs queue: its own container (backend-PROJECT-worker), started, deployed and rolled back with the backend, always on the same release. It gets the backend's env, DATABASE_URL if the project has a database, and only the secrets it lists, which the backend then no longer gets. Its network only reaches the internet (and the project's database): neither Caddy nor any backend reaches it. Deploys, rollbacks and restarts wait for its health command, as for the backend's health path.",
+          "type": "object",
+          "required": ["command", "health", "memory"],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "description": "The process to run instead of the image's own command, such as [python, -m, app.jobs].",
+              "$ref": "#/$defs/command"
+            },
+            "health": {
+              "description": "Its HEALTHCHECK, run inside the worker's container every minute: exit 0 while it is working. Deploys wait for it, and the status page gets a heartbeat (PROJECT / Worker) that alerts when it fails.",
+              "$ref": "#/$defs/command"
+            },
+            "memory": {
+              "description": "Memory limit of the worker's container, from 64m to 512m, apart from the backend's.",
+              "type": "string",
+              "pattern": "^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m$"
+            },
+            "stop_grace_period": {
+              "description": "How long it gets to stop after SIGTERM before it is killed, from 1s to 120s. Defaults to 20s, the backend's.",
+              "type": "string",
+              "pattern": "^([1-9]|[1-9][0-9]|1[01][0-9]|120)s$"
+            },
+            "secrets": {
+              "description": "Names of the backend's secrets that only the worker gets (generated, manual or optional; not linked ones). They are still set with project-secret, on the project.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/env_name" }
+            }
+          }
         },
         "log_alerts": {
           "description": "Log lines of the backend to be emailed about (log-alerts, every 5 minutes, one email per run). The lines are emailed as they were logged: only match lines without personal data. Rule names are unique within the backend: checked by the playbook.",
@@ -286,6 +316,13 @@
         "from": { "$ref": "#/$defs/label" },
         "key": { "$ref": "#/$defs/env_name" }
       }
+    },
+    "command": {
+      "description": "A command as a list of arguments, run without a shell.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^$\\n\\r]*$" }
     },
     "env_name": {
       "description": "An environment variable name. The ones the infrastructure sets itself (per-project databases) are reserved.",
