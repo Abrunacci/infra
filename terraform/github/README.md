@@ -43,12 +43,12 @@ Before adding a check, confirm it appears, with that exact name, on the last pul
 
 | What | Where | Scope | Expires |
 |---|---|---|---|
-| GitHub rulesets token | Password manager; typed in as `GITHUB_TOKEN` for these runs only | Fine-grained, `Abrunacci`'s repositories in the table above only: `Administration: Read and write` (and `Metadata: Read`, which GitHub adds) | 2027-10-15 |
-| State S3 credentials | `../.env`, as for the main configuration | `Object Read & Write` on `infra-tfstate` | see `../README.md` |
+| GitHub rulesets token | `GITHUB_TOKEN` in `terraform/github/.env` (this configuration's own, readable by you only), and the password manager | Fine-grained, `Abrunacci`'s repositories in the table above only: `Administration: Read and write` (and `Metadata: Read`, which GitHub adds) | 2027-10-15 |
+| State S3 credentials | Also in `terraform/github/.env`: the same values as in `../.env` | `Object Read & Write` on `infra-tfstate` | see `../README.md` |
 
 The token is also a row of `../README.md`, "Credentials", so the server's expiry check warns 14 days before it expires. The state lives in the same bucket as the main one, under `infra/github.tfstate`.
 
-`Administration: Read and write` lets the token change any setting of those repositories, delete them included. That is why it is kept away: it is not in `../.env`, it lives in the password manager with an expiration date, and it is typed in only for this configuration's runs.
+`Administration: Read and write` lets the token change any setting of those repositories, delete them included. That is why it is not in `../.env`, which every Terraform and Ansible run loads: it is in `terraform/github/.env`, which only this configuration loads, with `chmod 600`, and it has an expiration date.
 
 To create it:
 1. Go to https://github.com/settings/personal-access-tokens/new (Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token).
@@ -59,23 +59,27 @@ To create it:
 6. **Permissions** → Repository permissions → **Administration:** Read and write. GitHub adds **Metadata:** Read-only by itself. Nothing else.
 7. **Generate token**.
 
-Copy the value into the password manager; GitHub shows it once. If you create it on another date, write its expiration in both tables (here and in `../README.md`).
+Copy the value into the password manager and into `terraform/github/.env` ("Usage"); GitHub shows it once. If you create it on another date, write its expiration in both tables (here and in `../README.md`).
 
 ## Usage
 
-From the repo's root, with the token in the password manager. The parentheses run it all in a subshell, so neither the token nor anything from `.env` is left in your terminal afterwards, even if a step fails:
+Once, create `terraform/github/.env` from the example and fill it in: `GITHUB_TOKEN` with the token, and the three `AWS_*` lines with the same values as in `../.env`. `.env` is git-ignored, here as in `..`.
 
 ```sh
-(
-  cd terraform/github || exit 1                  # stops here if not run from the repo's root
-  set -a; . ../.env; set +a                      # state credentials
-  read -rs "GITHUB_TOKEN?GitHub rulesets token: "; echo; export GITHUB_TOKEN
-  terraform init -input=false                    # needed once; harmless afterwards
-  terraform plan -out=tfplan && terraform apply tfplan
-)
+cd terraform/github
+cp .env.example .env && chmod 600 .env    # then fill it in
 ```
 
-`read -s` (zsh syntax; in bash: `read -rsp 'GitHub rulesets token: ' GITHUB_TOKEN`) reads the token without showing it or saving it in the history. `terraform apply tfplan` asks for no confirmation: it applies the plan printed just above, so stop with Ctrl-C at the plan if it is not what you expect, or run the plan alone first (without `&& terraform apply tfplan`).
+Then, every time, from `terraform/github`:
+
+```sh
+set -a; . ./.env; set +a
+terraform init -input=false    # needed once; harmless afterwards
+terraform plan
+terraform apply
+```
+
+`terraform apply` shows the plan again and asks for `yes` before changing anything. If the R2 state credentials in `../.env` ever change, change them here too; they do not expire. When the token is rotated, replace `GITHUB_TOKEN` here.
 
 ## Adding a repository
 
