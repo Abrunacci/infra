@@ -118,15 +118,17 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    # Its own check instead of the image's, which is the backend's. Every
-    # 5 s while it starts (so a deploy sees it healthy in seconds), then every
-    # minute: each run is a new process, and costs CPU.
+    # Its own check instead of the image's, which is the backend's. Each run
+    # is a new process that loads the app: EPB's takes about 18 s with half a
+    # CPU, so it gets 60 s, and runs every 5 s only while the worker starts
+    # (a deploy waits for the first pass), then every 5 minutes, so it does
+    # not eat the worker's CPU. Unhealthy after two failures in a row.
     healthcheck:
       test: {{ (['CMD'] + worker.health) | to_json }}
-      interval: 60s
-      timeout: 10s
+      interval: 5m
+      timeout: 60s
       retries: 2
-      start_period: 60s
+      start_period: 2m
       start_interval: 5s
     env_file:
       - path: {{ projects_backends_dir }}/{{ item.name }}/app.env
