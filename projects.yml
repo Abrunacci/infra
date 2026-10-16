@@ -257,6 +257,6 @@ projects:
         # The same value as cuanto-cuesta's INGEST_TOKEN, which stays its only
         # source: rotate it there (sudo project-secret cuanto-cuesta rotate INGEST_TOKEN).
         CUANTO_CUESTA_INGEST_TOKEN: {from: cuanto-cuesta, key: INGEST_TOKEN}
-      # 76 MiB peak with its jobs on 2026-10-16, over the 64 MiB that 128m
-      # needs (issue #79).
-      memory: 256m
+      # Twice its peak, rounded up to 64m (issue #79): 76 MiB with two days of
+      # jobs, on 2026-10-16.
+      memory: 192m
