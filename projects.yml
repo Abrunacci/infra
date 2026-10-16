@@ -100,6 +100,8 @@ projects:
       private_paths: ["/api/ingest", "/api/ingest/*"]
       secrets:
         INGEST_TOKEN: generated
+      # 105 MiB peak on 2026-10-16, with jobs from data-pipeline: twice that,
+      # rounded up to 64m, is 256m (issue #79).
       memory: 256m
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
@@ -212,6 +214,9 @@ projects:
         ANTHROPIC_API_KEY: optional
         # The model the analysis uses, if set; without it, EPB's own default.
         IMPORT_AI_MODEL: optional
+      # Twice its peak, rounded up to 64m (issue #79): 131 MiB on 2026-10-16,
+      # with a full real import going through the worker. `migrate` gets it too.
+      memory: 320m
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -224,8 +229,8 @@ projects:
         # 30 s (it does every 10 s). Deploys wait for it, and the status
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
-        # The largest import is now its work: issue #79 has the memory budget
-        # and the measurement that checks this limit.
+        # The largest import is now its work: 232 MiB peak on 2026-10-16 with a
+        # full real import (issue #79), under the 256 MiB that 512m allows.
         memory: 512m
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
@@ -252,4 +257,6 @@ projects:
         # The same value as cuanto-cuesta's INGEST_TOKEN, which stays its only
         # source: rotate it there (sudo project-secret cuanto-cuesta rotate INGEST_TOKEN).
         CUANTO_CUESTA_INGEST_TOKEN: {from: cuanto-cuesta, key: INGEST_TOKEN}
+      # 76 MiB peak with its jobs on 2026-10-16, over the 64 MiB that 128m
+      # needs (issue #79).
       memory: 256m
