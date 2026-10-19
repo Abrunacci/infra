@@ -8,10 +8,11 @@ Run weekly by .github/workflows/outside-check.yml. What is expected comes from
 the repo, so a new project needs no change here:
 
 - open ports: the tcp and udp inbound rules of terraform/firewall.tf;
-- sites: every subdomain in projects.yml, plus status (roles/caddy) and www
-  when the root domain has a site;
+- sites: every project hostname in projects.yml, plus status (roles/caddy)
+  and www for each project with a site on a domain itself;
 - private paths: each backend's private_paths in projects.yml;
-- CAA records: terraform/dns.tf; the DS record: the DNSSEC_DS variable.
+- CAA records: terraform/dns.tf, on every domain in projects.yml; the DS
+  record of the first one (the server's): the DNSSEC_DS variable.
 
 The repo is public, and so are this job's log and summary: they never say
 what differs, only that the result went to healthchecks.io. The differences
@@ -42,13 +43,6 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TIMEOUT = 20
 TLS_PROTOCOLS_OK = {"TLSv1.2", "TLSv1.3"}
-
-
-def terraform_string(name, text):
-    match = re.search(r'variable "' + name + r'"\s*\{[^}]*?default\s*=\s*"([^"]+)"', text, re.DOTALL)
-    if not match:
-        raise ValueError(f"no default for variable {name} in terraform/variables.tf")
-    return match.group(1)
 
 
 def firewall_ports(text):
@@ -100,27 +94,31 @@ PRIVATE_PATH_OK = SERVER_POSTURE.PRIVATE_PATH_OK
 
 
 def expected():
-    variables = (ROOT / "terraform/variables.tf").read_text()
-    domain = terraform_string("domain", variables)
-    projects = yaml.safe_load((ROOT / "projects.yml").read_text())["projects"]
-    sites, redirects, private = [f"status.{domain}"], [], {}
-    for project in projects:
+    registry = yaml.safe_load((ROOT / "projects.yml").read_text())
+    domains = [d["name"] for d in registry["domains"]]
+    # The server's own domain (ansible/group_vars/all/main.yml, domain).
+    domain = domains[0]
+    # Each redirect, by its hostname: where it must send visitors.
+    sites, redirects, private = [f"status.{domain}"], {}, {}
+    for project in registry["projects"]:
         subdomain = project.get("subdomain")
         if subdomain is None:
             continue
-        host = domain if subdomain == "@" else f"{subdomain}.{domain}"
+        project_domain = project.get("domain", domain)
+        host = project_domain if subdomain == "@" else f"{subdomain}.{project_domain}"
         sites.append(host)
         if subdomain == "@" and project.get("site"):
-            redirects.append(f"www.{domain}")
+            redirects[f"www.{project_domain}"] = host
         for pattern in project.get("backend", {}).get("private_paths", []):
             private.setdefault(host, set()).update(private_path_variants(pattern))
     ds = os.environ.get("DNSSEC_DS", "").strip()
     return {
         "domain": domain,
+        "domains": domains,
         "server": f"server.{domain}",
         "ports": firewall_ports((ROOT / "terraform/firewall.tf").read_text()),
         "sites": sorted(sites),
-        "redirects": redirects,
+        "redirects": dict(sorted(redirects.items())),
         "hsts": caddy_hsts(),
         "private_paths": {host: sorted(paths) for host, paths in sorted(private.items())},
         "caa": caa_records((ROOT / "terraform/dns.tf").read_text()),
@@ -218,15 +216,15 @@ def check_headers(host, hsts):
     return differences
 
 
-def check_redirect(host, domain, hsts):
+def check_redirect(host, target, hsts):
     try:
         response = request(host, "GET", "/")
     except (OSError, http.client.HTTPException, ssl.SSLError) as error:
         return [f"{host}: HTTPS failed ({type(error).__name__})"]
     differences = []
     location = response.headers.get("Location") or ""
-    if response.status not in {301, 308} or not location.startswith(f"https://{domain}/"):
-        differences.append(f"{host}: {response.status} to {location!r}, expected a permanent redirect to {domain}")
+    if response.status not in {301, 308} or not location.startswith(f"https://{target}/"):
+        differences.append(f"{host}: {response.status} to {location!r}, expected a permanent redirect to {target}")
     if response.headers.get("Strict-Transport-Security") != hsts:
         differences.append(f"{host}: Strict-Transport-Security {response.headers.get('Strict-Transport-Security')!r}")
     if "Server" in response.headers:
@@ -257,9 +255,10 @@ def dig(record, name, resolver):
 
 def check_dns(want, resolver):
     differences = []
-    caa = dig("CAA", want["domain"], resolver)
-    if caa != want["caa"]:
-        differences.append(f"CAA: {sorted(caa)}, expected {sorted(want['caa'])}")
+    for domain in want["domains"]:
+        caa = dig("CAA", domain, resolver)
+        if caa != want["caa"]:
+            differences.append(f"CAA of {domain}: {sorted(caa)}, expected {sorted(want['caa'])}")
     if want["ds"]:
         ds = {normalize_ds(line) for line in dig("DS", want["domain"], resolver)}
         if ds != want["ds"]:
@@ -296,14 +295,14 @@ def run():
         with tempfile.TemporaryDirectory() as workdir:
             differences += check_ports(want, workdir)
             checks += 1
-            for host in want["sites"] + want["redirects"]:
+            for host in want["sites"] + list(want["redirects"]):
                 differences += check_tls(host, workdir)
                 checks += 1
         for host in want["sites"]:
             differences += check_headers(host, want["hsts"])
             checks += 1
-        for host in want["redirects"]:
-            differences += check_redirect(host, want["domain"], want["hsts"])
+        for host, target in want["redirects"].items():
+            differences += check_redirect(host, target, want["hsts"])
             checks += 1
         for host, paths in want["private_paths"].items():
             for path in paths:

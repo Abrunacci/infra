@@ -8,13 +8,14 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Admin SSH key, tags and a DigitalOcean project that groups the resources | `main.tf` |
 | Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
 | Resource alerts by email: CPU, memory or disk above 80 % for 5 minutes | `monitoring.tf` |
-| A/AAAA records for `server`, `status` and each project in `../projects.yml`: the root domain for a project on `"@"`, plus `www` | `dns.tf` |
-| CAA records that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
-| Universal SSL turned off, so Cloudflare adds no CAA records of its own | `dns.tf` |
-| DNSSEC: the zone signed by Cloudflare, its DS record published in `.dev` by Cloudflare Registrar | `dns.tf` |
-| Google Search Console verification TXT record on the root domain | `dns.tf` |
-| Email Routing: `hello@`, `postmaster@` and `abuse@` forwarded to one inbox, every other address rejected | `email.tf` |
-| DMARC `p=reject`: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
+| One Cloudflare zone per domain in `../projects.yml` (`domains`); the first one (`abrunacci.dev`) is the server's own | `dns.tf` |
+| A/AAAA records for `server` and `status` (on the first domain) and each project in `../projects.yml`, under its domain: the domain itself for a project on `"@"`, plus `www` | `dns.tf` |
+| CAA records on every domain that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
+| Universal SSL turned off on every zone, so Cloudflare adds no CAA records of its own | `dns.tf` |
+| DNSSEC: every zone signed by Cloudflare; for `abrunacci.dev`, its DS record published in `.dev` by Cloudflare Registrar (output `dnssec_ds` has each domain's) | `dns.tf` |
+| Google Search Console verification TXT record on `abrunacci.dev` | `dns.tf` |
+| Email Routing, on each domain with `mail_forward` in `../projects.yml` (`hello@`, `postmaster@` and `abuse@abrunacci.dev`): those addresses forwarded to one inbox, every other address rejected | `email.tf` |
+| DMARC `p=reject` on every domain: only Resend sends mail, from `mail.abrunacci.dev` | `email.tf` |
 | Resend's sending records (two CNAMEs and the DKIM key) under `mail.abrunacci.dev` | `email.tf` |
 | Turnstile widget for the landing's contact form (`abrunacci.dev`, Managed mode); its keys are the outputs `turnstile_site_key` and `turnstile_secret_key` | `turnstile.tf` |
 
@@ -40,9 +41,9 @@ The other variables in `.env` are not credentials:
 
 | Setting | What it is | Notes |
 |---|---|---|
-| `TF_VAR_cloudflare_zone_id` | Zone ID, shown on the zone's overview page | A variable, so the token needs no `Zone:Read` |
+| `TF_VAR_cloudflare_zone_ids` | The zone ID of each domain in `../projects.yml` (`domains`), shown on each zone's overview page, as a map: `TF_VAR_cloudflare_zone_ids='{"abrunacci.dev"="<id>"}'` (one `"<domain>"="<id>"` per domain, separated by commas). A missing one fails the plan and names the domain | A variable, so the token needs no `Zone:Read` |
 | `TF_VAR_cloudflare_account_id` | Account ID, shown on the same page | Email Routing destination addresses belong to the account |
-| `TF_VAR_email_forward_to` | The inbox that receives the domain's mail | Kept out of the repo, which is public. It is stored in the state |
+| `TF_VAR_email_forward_to` | The inbox that receives the domains' mail. It must be outside them | Kept out of the repo, which is public. It is stored in the state |
 | `TF_VAR_alert_email` | The address DigitalOcean sends the resource alerts to. It must belong to a verified user of the DigitalOcean team | Same as above |
 | `AWS_ENDPOINT_URL_S3` | `https://<account_id>.r2.cloudflarestorage.com` | – |
 | `TF_VAR_admin_ssh_public_key` | Your public SSH key | – |
@@ -101,7 +102,7 @@ Cloudflare Email Routing forwards `hello@`, `postmaster@` and `abuse@` to `TF_VA
 
   ```sh
   curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-    "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name.endswith=mail.abrunacci.dev" \
+    "https://api.cloudflare.com/client/v4/zones/<abrunacci.dev's zone ID>/dns_records?name.endswith=mail.abrunacci.dev" \
     | jq -r '.result[] | [.id, .type, .name, .ttl, .proxied, .content] | @tsv'
   ```
 
@@ -149,8 +150,9 @@ The protection of `main` in every repository of the account (one ruleset each: p
 - **`ignore_changes = [user_data, ssh_keys, image]`**: these only matter at creation, and changing them would force a new Droplet. After the first boot, Ansible owns the server's configuration.
 - **Resizing** (`droplet_size`) keeps the Droplet but powers it off: `graceful_shutdown = true` stops PostgreSQL cleanly, and `resize_disk = false` changes only CPU and RAM, so the Droplet can go back to a smaller size.
 - **`projects.yml` is validated**, so a mistake fails instead of being read as zero projects, which would plan the deletion of every project's DNS records:
-  - A missing file, invalid YAML, or a missing or empty top-level `projects` key fails `terraform validate`. An entry without `subdomain` is an internal project (such as `data-pipeline`): it gets no DNS record.
-  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated or reserved (`server`, `status`, `www`) fail the plan. `"@"` is the root domain; with `site: true` it adds `www`, which redirects to it.
+  - A missing file, invalid YAML, or a missing or empty top-level `domains` or `projects` key fails `terraform validate`. An entry without `subdomain` is an internal project (such as `data-pipeline`): it gets no DNS record.
+  - Domains that are invalid, listed twice or under another listed domain, a project whose `domain` is not listed, and a domain without its zone ID in `TF_VAR_cloudflare_zone_ids` fail the plan.
+  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated within a domain or reserved (`server`, `status`, `www`) fail the plan. `"@"` is the domain itself; with `site: true` it adds `www`, which redirects to it.
   - A registry with no project that has a subdomain fails the plan too, unless it is allowed on purpose, for that run only: `terraform plan -out=tfplan -var=allow_zero_projects=true`. Never put it in `.env`: the guard would stay off without anyone noticing. That also covers a key repeated in the file, such as a second `projects: []` left by a bad merge: YAML keeps the last one.
   - yamllint also rejects repeated keys (`key-duplicates`) in pre-commit and CI. A repeated key that still leaves some projects, or a repeated `subdomain`, is caught only there, so run `pre-commit run --all-files` before a local plan.
 - **`proxied = false`** is set explicitly on every record, so the Cloudflare proxy cannot be turned on by accident (see the DNS decision in the main README).

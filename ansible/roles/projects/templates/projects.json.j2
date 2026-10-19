@@ -4,6 +4,7 @@
 {%-   set _ = entries.append({
         'name': p.name,
         'subdomain': p.subdomain | default(none),
+        'host': project_hosts[p.name] | default(none),
         'title': p.title | default(p.name),
         'repo': p.repo | default(none),
         'site': p.site,

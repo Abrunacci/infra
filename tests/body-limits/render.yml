@@ -10,8 +10,12 @@
     - ../../ansible/group_vars/all/main.yml
     - ../../ansible/roles/caddy/defaults/main.yml
     - ../../ansible/roles/projects/defaults/main.yml
-    - ../../projects.yml
   tasks:
+    # As roles/projects/tasks/validate.yml loads it before any role.
+    - name: Load the project registry
+      ansible.builtin.include_vars:
+        file: ../../projects.yml
+        name: projects_registry
     - name: Render the Caddyfile
       ansible.builtin.template:
         src: ../../ansible/roles/caddy/templates/Caddyfile.j2
@@ -22,6 +26,6 @@
         src: ../../ansible/roles/projects/templates/site.caddy.j2
         dest: "{{ out_dir }}/conf/sites/{{ item.name }}.caddy"
         mode: "0644"
-      loop: "{{ projects | selectattr('subdomain', 'defined') | list }}"
+      loop: "{{ projects_registry.projects | selectattr('subdomain', 'defined') | list }}"
       loop_control:
         label: "{{ item.name }}"

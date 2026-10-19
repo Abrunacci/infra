@@ -1,6 +1,6 @@
 output "server_fqdn" {
   description = "Hostname to reach the server over SSH and from Ansible."
-  value       = "server.${var.domain}"
+  value       = "server.${local.primary_domain}"
 }
 
 output "ipv4_address" {
@@ -15,12 +15,12 @@ output "ipv6_address" {
 
 output "hostnames" {
   description = "Every hostname that points at the Droplet."
-  value       = sort(values(local.hostnames))
+  value       = sort(keys(local.hostnames))
 }
 
 output "dnssec_ds" {
-  description = "The DS record Cloudflare Registrar publishes in .dev for the domain (compare with dig DS)."
-  value       = cloudflare_zone_dnssec.this.ds
+  description = "Each domain's DS record, which goes in its parent zone: Cloudflare Registrar publishes it by itself; other registrars, by hand (compare with dig DS)."
+  value       = { for d, dnssec in cloudflare_zone_dnssec.this : d => dnssec.ds }
 }
 
 output "turnstile_site_key" {

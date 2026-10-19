@@ -1,12 +1,15 @@
-# DNS lives in Cloudflare (the domain is registered with Cloudflare Registrar).
-# Records are DNS only (proxied = false): traffic goes straight to the Droplet
-# and Caddy obtains and renews certificates itself.
+# DNS lives in Cloudflare: one zone per domain in projects.yml (domains), its
+# ID in TF_VAR_cloudflare_zone_ids. Records are DNS only (proxied = false):
+# traffic goes straight to the Droplet and Caddy obtains and renews
+# certificates itself.
 
 resource "cloudflare_dns_record" "a" {
   for_each = local.hostnames
 
-  zone_id = var.cloudflare_zone_id
-  name    = each.value
+  # lookup(): a project whose domain is not in domains gets "" here, and the
+  # precondition below says so.
+  zone_id = lookup(local.zone_ids, each.value.zone, "")
+  name    = each.value.name
   type    = "A"
   content = digitalocean_droplet.server.ipv4_address
   ttl     = 300
@@ -16,6 +19,28 @@ resource "cloudflare_dns_record" "a" {
   lifecycle {
     # projects.yml is hand-edited: fail the plan instead of silently merging or
     # dropping records.
+    precondition {
+      condition     = alltrue([for d in local.domains : can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", d))])
+      error_message = "projects.yml: every domain must be a lowercase domain, such as example.com.ar."
+    }
+    precondition {
+      condition     = length(distinct(local.domains)) == length(local.domains)
+      error_message = "projects.yml: a domain is listed twice."
+    }
+    precondition {
+      # One zone per domain: a domain under another one would put its records
+      # in two zones.
+      condition     = !anytrue([for a in local.domains : anytrue([for b in local.domains : endswith(a, ".${b}")])])
+      error_message = "projects.yml: a domain is a subdomain of another one in domains."
+    }
+    precondition {
+      condition     = alltrue([for p in local.public_projects : contains(local.domains, p.domain)])
+      error_message = "projects.yml: a project's domain is not in domains."
+    }
+    precondition {
+      condition     = alltrue([for d in local.domains : local.zone_ids[d] != ""])
+      error_message = "TF_VAR_cloudflare_zone_ids has no zone ID for ${join(", ", [for d in local.domains : d if local.zone_ids[d] == ""])}: add it in .env (see \"Credentials\" in the README)."
+    }
     precondition {
       # An empty list is far more often a mistake (a bad merge, a stray
       # `projects: []`) than a decision, and it would delete every project's records.
@@ -34,8 +59,8 @@ resource "cloudflare_dns_record" "a" {
       error_message = "projects.yml: every subdomain must be a lowercase DNS label (a-z, 0-9, hyphens), or \"@\" for the root domain."
     }
     precondition {
-      condition     = length(distinct(local.subdomains)) == length(local.subdomains)
-      error_message = "projects.yml: two projects use the same subdomain."
+      condition     = length(distinct([for h in local.hostname_list : h.name])) == length(local.hostname_list)
+      error_message = "projects.yml: two projects use the same subdomain of the same domain."
     }
     precondition {
       condition     = length(setintersection(toset(local.subdomains), toset(local.reserved))) == 0
@@ -47,8 +72,8 @@ resource "cloudflare_dns_record" "a" {
 resource "cloudflare_dns_record" "aaaa" {
   for_each = local.hostnames
 
-  zone_id = var.cloudflare_zone_id
-  name    = each.value
+  zone_id = lookup(local.zone_ids, each.value.zone, "")
+  name    = each.value.name
   type    = "AAAA"
   content = digitalocean_droplet.server.ipv6_address
   ttl     = 300
@@ -56,7 +81,7 @@ resource "cloudflare_dns_record" "aaaa" {
   comment = "Managed by Terraform (infra repo)"
 }
 
-# CAA: only the two CAs Caddy uses may issue certificates for the domain,
+# CAA, on every domain: only the two CAs Caddy uses may issue certificates,
 # and no one may issue wildcards.
 locals {
   caa_records = {
@@ -67,10 +92,14 @@ locals {
 }
 
 resource "cloudflare_dns_record" "caa" {
-  for_each = local.caa_records
+  # Keyed <domain>/<record>, such as abrunacci.dev/letsencrypt.
+  for_each = {
+    for pair in setproduct(local.domains, keys(local.caa_records)) :
+    "${pair[0]}/${pair[1]}" => merge(local.caa_records[pair[1]], { domain = pair[0] })
+  }
 
-  zone_id = var.cloudflare_zone_id
-  name    = var.domain
+  zone_id = local.zone_ids[each.value.domain]
+  name    = each.value.domain
   type    = "CAA"
   ttl     = 3600
   comment = "Managed by Terraform (infra repo)"
@@ -88,8 +117,8 @@ resource "cloudflare_dns_record" "caa" {
 # separate, so neither replaces the other. Google checks it again from time to
 # time: removing it unverifies the domain.
 resource "cloudflare_dns_record" "google_site_verification" {
-  zone_id = var.cloudflare_zone_id
-  name    = var.domain
+  zone_id = local.zone_ids[local.primary_domain]
+  name    = local.primary_domain
   type    = "TXT"
   # Quoted, as Cloudflare stores TXT content (see the DMARC record in email.tf).
   content = "\"google-site-verification=9etRIHVIkfNP-vuYwCDkogM_Q8NmroSHfTFtHXrCtYI\""
@@ -104,21 +133,27 @@ resource "cloudflare_dns_record" "google_site_verification" {
 # Removing this block does NOT turn Universal SSL back on: the provider only
 # drops it from the state. To revert, set enabled = true.
 resource "cloudflare_universal_ssl_setting" "this" {
-  zone_id = var.cloudflare_zone_id
+  for_each = toset(local.domains)
+
+  zone_id = local.zone_ids[each.key]
   enabled = false
 }
 
-# DNSSEC: Cloudflare signs the zone, so a resolver that validates (1.1.1.1,
-# 8.8.8.8, most ISPs') rejects forged answers for the domain. Cloudflare
-# Registrar publishes the DS record in .dev by itself; the status reads
-# "pending" until it is there, then "active".
+# DNSSEC: Cloudflare signs each zone, so a resolver that validates (1.1.1.1,
+# 8.8.8.8, most ISPs') rejects forged answers for the domain. For a domain
+# registered with Cloudflare Registrar (abrunacci.dev), Cloudflare publishes
+# the DS record in the parent zone by itself; for any other, the DS from
+# terraform output dnssec_ds goes in by hand at the registrar. The status
+# reads "pending" until it is there, then "active".
 # Never removed by mistake: turning DNSSEC off while the DS record is still in
 # .dev makes the whole domain fail to resolve on those resolvers, for as long
 # as the DS stays cached (up to a day). To turn it off, do it in the
 # dashboard (DNS → Settings → Disable DNSSEC), which removes the DS first, and
 # only then drop this block (prevent_destroy first, then terraform state rm).
 resource "cloudflare_zone_dnssec" "this" {
-  zone_id = var.cloudflare_zone_id
+  for_each = toset(local.domains)
+
+  zone_id = local.zone_ids[each.key]
   status  = "active"
 
   lifecycle {
