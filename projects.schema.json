@@ -36,7 +36,24 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$" }
+        },
+        "proton": {
+          "description": "Proton Mail hosts the domain's mail (MX, SPF and the verification TXT, terraform/email.tf).",
+          "type": "object",
+          "required": ["verification"],
+          "additionalProperties": false,
+          "properties": {
+            "verification": {
+              "description": "The value Proton shows for the domain's TXT record, after protonmail-verification=.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          }
         }
+      },
+      "not": {
+        "description": "A domain has one set of MX records: Email Routing's or Proton's.",
+        "required": ["mail_forward", "proton"]
       }
     },
     "label": {
