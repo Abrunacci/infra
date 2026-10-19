@@ -47,6 +47,11 @@
               "description": "The value Proton shows for the domain's TXT record, after protonmail-verification=.",
               "type": "string",
               "pattern": "^[0-9a-f]{40}$"
+            },
+            "dkim": {
+              "description": "The part Proton's three DKIM CNAMEs share: protonmail.domainkey.<dkim>.domains.proton.ch. Shown once the domain is verified.",
+              "type": "string",
+              "pattern": "^[a-z0-9]{1,63}$"
             }
           }
         }
