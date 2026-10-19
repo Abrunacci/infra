@@ -47,7 +47,7 @@ Every commit runs the same checks as CI: secret scanning (gitleaks), `terraform 
 Requirements: Python 3, Terraform 1.16, TFLint 0.64 and, to run the playbook, ansible-core 2.21. The other tools are installed by pre-commit itself.
 
 ```sh
-pip install pre-commit==4.6.2   # same version as CI
+pip install pre-commit==4.7.0   # same version as CI
 pre-commit install
 pre-commit run --all-files
 ```
