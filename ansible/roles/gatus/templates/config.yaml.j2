@@ -20,7 +20,7 @@ ui:
 # backend's health path, or both. The certificate is checked on the first.
 endpoints:
 {% for p in projects_registry.projects if p.subdomain is defined %}
-{%   set host = domain if p.subdomain == '@' else p.subdomain ~ '.' ~ domain %}
+{%   set host = project_hosts[p.name] %}
 {%   set checks = [] %}
 {%   if p.site %}
 {%     set _ = checks.append({'name': 'Site', 'path': '/', 'conditions': ['[STATUS] == 200']}) %}

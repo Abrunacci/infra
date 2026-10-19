@@ -238,14 +238,19 @@ def post_to_caddy(host, path):
         connection.close()
 
 
-def check_private_paths(domain):
+def check_private_paths():
     """Every variant of each backend's private_paths must get 404 or 405 from Caddy."""
     differences = []
     for project in json.loads(REGISTRY.read_text())["projects"]:
-        subdomain, backend = project.get("subdomain"), project.get("backend") or {}
-        if subdomain is None or not backend.get("private_paths"):
+        host, backend = project.get("host"), project.get("backend") or {}
+        if not backend.get("private_paths"):
             continue
-        host = domain if subdomain == "@" else f"{subdomain}.{domain}"
+        if host is None:
+            # A projects.json older than this script: written before projects
+            # had their hostname in it.
+            if project.get("subdomain") is not None:
+                differences.append(f"{project['name']}: no host in {REGISTRY} (run the playbook with --tags projects)")
+            continue
         paths = {variant for pattern in backend["private_paths"] for variant in private_path_variants(pattern)}
         for path in sorted(paths):
             try:
@@ -259,7 +264,6 @@ def check_private_paths(domain):
 
 
 KEYS = {
-    "domain": str,
     "listeners": list,
     "published": dict,
     "ufw": list,
@@ -288,7 +292,7 @@ def differences(want):
     found += check_services(want["services"])
     found += check_fail2ban(want["fail2ban_jails"])
     found += check_updates(want["reboot_required_max_hours"], want["held_packages"])
-    found += check_private_paths(want["domain"])
+    found += check_private_paths()
     return found
 
 

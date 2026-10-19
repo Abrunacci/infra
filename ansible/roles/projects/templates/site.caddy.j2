@@ -1,5 +1,5 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
-{{ domain if item.subdomain == '@' else item.subdomain ~ '.' ~ domain }} {
+{{ project_hosts[item.name] }} {
 	# Defined in the main Caddyfile (roles/caddy).
 	import access_log
 	encode zstd gzip
@@ -121,14 +121,14 @@
 }
 {% if item.subdomain == '@' and item.site %}
 
-# The root domain's project also answers on www, only to send visitors to the
-# root domain, keeping the path and query string.
-www.{{ domain }} {
+# The project on a domain itself also answers on www, only to send visitors to
+# the domain, keeping the path and query string.
+www.{{ project_hosts[item.name] }} {
 	import access_log
 	header {
 		Strict-Transport-Security "{{ caddy_hsts }}"
 		-Server
 	}
-	redir https://{{ domain }}{uri} permanent
+	redir https://{{ project_hosts[item.name] }}{uri} permanent
 }
 {% endif %}

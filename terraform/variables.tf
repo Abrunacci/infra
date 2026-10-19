@@ -1,21 +1,11 @@
-variable "domain" {
-  description = "Apex domain. Its DNS zone is hosted in Cloudflare."
-  type        = string
-  default     = "abrunacci.dev"
+variable "cloudflare_zone_ids" {
+  description = "Cloudflare zone ID of each domain in projects.yml (domains), keyed by the domain, such as {\"abrunacci.dev\" = \"<id>\"}. Passed as a variable so the Cloudflare token does not need Zone:Read."
+  type        = map(string)
+  nullable    = false
 
   validation {
-    condition     = can(regex("^([a-z0-9-]+\\.)+[a-z]{2,}$", var.domain))
-    error_message = "domain must be a lowercase apex domain, e.g. example.dev."
-  }
-}
-
-variable "cloudflare_zone_id" {
-  description = "Cloudflare zone ID of var.domain. Passed as a variable so the Cloudflare token does not need Zone:Read."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[0-9a-f]{32}$", var.cloudflare_zone_id))
-    error_message = "cloudflare_zone_id must be a 32-character hex string."
+    condition     = alltrue([for id in values(var.cloudflare_zone_ids) : can(regex("^[0-9a-f]{32}$", id))])
+    error_message = "Every value of cloudflare_zone_ids must be a 32-character hex zone ID."
   }
 }
 
@@ -95,14 +85,16 @@ variable "cloudflare_account_id" {
 }
 
 variable "email_forward_to" {
-  description = "Inbox that receives the mail sent to the domain's addresses. Kept out of the repo (it is public): set it in .env. It is stored in the state, which lives in the private R2 bucket."
+  description = "Inbox that receives the mail sent to the domains' addresses (projects.yml, mail_forward). Kept out of the repo (it is public): set it in .env. It is stored in the state, which lives in the private R2 bucket."
   type        = string
   sensitive   = true
   nullable    = false
 
   validation {
-    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", lower(var.email_forward_to))) && !endswith(lower(var.email_forward_to), "@${var.domain}")
-    error_message = "email_forward_to must be an address outside the domain (forwarding to itself would loop)."
+    # It must also be outside the domains that receive mail: checked by the
+    # forwarding rules (email.tf).
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$", lower(var.email_forward_to)))
+    error_message = "email_forward_to must be an email address."
   }
 }
 

@@ -5,7 +5,6 @@
 {%- set ssh_rules = hardening_ufw_rules | selectattr('comment', 'equalto', 'SSH') | list -%}
 {%- set web_rules = hardening_ufw_rules | rejectattr('comment', 'equalto', 'SSH') | list -%}
 {
-  "domain": {{ domain | to_json }},
   "listeners": [
 {%- for r in hardening_ufw_rules %}
     {#- Ubuntu 24.04 may start sshd by socket activation: then systemd holds port 22. #}

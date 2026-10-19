@@ -1,5 +1,18 @@
 ---
-domain: abrunacci.dev
+# The server's own domain, the first in projects.yml (domains): server.<domain>
+# and status.<domain> live there, and so does every project without a domain.
+# projects_registry is loaded before any role (site.yml, pre_tasks).
+domain: "{{ projects_registry.domains[0].name }}"
+
+# The hostname of each public project (one with a subdomain), by name: its
+# subdomain under its domain, or the domain itself for "@".
+project_hosts: >-
+  {%- set hosts = {} -%}
+  {%- for p in projects_registry.projects if p.subdomain is defined -%}
+  {%-   set d = p.domain | default(domain) -%}
+  {%-   set _ = hosts.update({p.name: d if p.subdomain == '@' else p.subdomain ~ '.' ~ d}) -%}
+  {%- endfor -%}
+  {{ hosts }}
 
 # Created by cloud-init (terraform/variables.tf, admin_user) and used by
 # Ansible to connect. It is the only user allowed to log in over SSH.

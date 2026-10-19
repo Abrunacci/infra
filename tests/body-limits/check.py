@@ -57,10 +57,11 @@ def max_body_bytes(value):
 
 
 def target():
-    """The project's URL and max_body in bytes, from projects.yml and group_vars."""
-    domain = yaml.safe_load((ROOT / "ansible/group_vars/all/main.yml").read_text())["domain"]
-    projects = yaml.safe_load((ROOT / "projects.yml").read_text())["projects"]
-    project = next(p for p in projects if p["name"] == PROJECT)
+    """The project's URL and max_body in bytes, from projects.yml."""
+    registry = yaml.safe_load((ROOT / "projects.yml").read_text())
+    project = next(p for p in registry["projects"] if p["name"] == PROJECT)
+    # The first domain is every project's default (group_vars, project_hosts).
+    domain = project.get("domain", registry["domains"][0]["name"])
     host = domain if project["subdomain"] == "@" else f"{project['subdomain']}.{domain}"
     # The schema's default, roles/projects (projects_backend_default_max_body).
     return f"https://{host}{PATH}", max_body_bytes(project["backend"].get("max_body", "10MB"))

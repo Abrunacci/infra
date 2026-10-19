@@ -1,22 +1,28 @@
-# Mail for the domain: Cloudflare Email Routing forwards a few addresses to one
-# inbox (var.email_forward_to), and Resend sends the projects' mail from
-# mail.<domain> (records at the end). Nothing else sends from the domain.
+# Mail for the domains: Cloudflare Email Routing forwards the addresses each
+# domain lists in projects.yml (mail_forward) to one inbox
+# (var.email_forward_to), and Resend sends the projects' mail from
+# mail.<first domain> (records at the end). Nothing else sends from any domain.
 
 locals {
-  # Local parts forwarded to the inbox. hello is the public contact address;
-  # postmaster and abuse are the addresses RFC 5321 and RFC 2142 expect.
-  email_forwarded = toset(["hello", "postmaster", "abuse"])
+  # The domains that receive mail, with the local parts each one forwards.
+  mail_domains = { for d in local.registry.domains : d.name => d.mail_forward if lookup(d, "mail_forward", null) != null }
+  # Every forwarded address, such as hello@abrunacci.dev, with its domain.
+  email_forwarded = merge([
+    for domain, local_parts in local.mail_domains : { for l in local_parts : "${l}@${domain}" => domain }
+  ]...)
 }
 
-# Turns Email Routing on. Cloudflare then writes the MX, SPF and DKIM records
-# it needs on the root domain and locks them: their values (MX priorities, the
-# DKIM key) are Cloudflare's, so they are not declared here. Destroying this
-# resource turns Email Routing off.
+# Turns Email Routing on, on each domain that receives mail. Cloudflare then
+# writes the MX, SPF and DKIM records it needs on the domain and locks them:
+# their values (MX priorities, the DKIM key) are Cloudflare's, so they are not
+# declared here. Destroying this resource turns Email Routing off.
 # No `name`: it turns Email Routing on for a subdomain of the zone, and the API
-# rejects the root domain there ("must be a subdomain"). Without it, the call
-# applies to the root domain.
+# rejects the domain itself there ("must be a subdomain"). Without it, the call
+# applies to the domain itself.
 resource "cloudflare_email_routing_dns" "this" {
-  zone_id = var.cloudflare_zone_id
+  for_each = local.mail_domains
+
+  zone_id = local.zone_ids[each.key]
 }
 
 # Cloudflare emails this address a verification link on creation. Until it is
@@ -37,14 +43,14 @@ resource "cloudflare_email_routing_address" "forward" {
 resource "cloudflare_email_routing_rule" "forward" {
   for_each = local.email_forwarded
 
-  zone_id = var.cloudflare_zone_id
-  name    = "${each.key}@${var.domain} (Terraform, infra repo)"
+  zone_id = local.zone_ids[each.value]
+  name    = "${each.key} (Terraform, infra repo)"
   enabled = true
 
   matchers = [{
     type  = "literal"
     field = "to"
-    value = "${each.key}@${var.domain}"
+    value = each.key
   }]
   actions = [{
     type  = "forward"
@@ -56,6 +62,11 @@ resource "cloudflare_email_routing_rule" "forward" {
       condition     = cloudflare_email_routing_address.forward.verified != null
       error_message = "The destination address is not verified yet: click the link in Cloudflare's verification email, then plan and apply again."
     }
+    precondition {
+      # Forwarding to an address of a domain that forwards would loop.
+      condition     = !anytrue([for d in keys(local.mail_domains) : endswith(lower(var.email_forward_to), "@${d}")])
+      error_message = "email_forward_to must be an address outside the domains that receive mail (forwarding to one of them would loop)."
+    }
   }
 }
 
@@ -65,7 +76,9 @@ resource "cloudflare_email_routing_rule" "forward" {
 # this resource only sets it, and destroying it only drops it from the state,
 # leaving the rule as it was last set.
 resource "cloudflare_email_routing_catch_all" "this" {
-  zone_id = var.cloudflare_zone_id
+  for_each = local.mail_domains
+
+  zone_id = local.zone_ids[each.key]
   name    = "Catch-all (Terraform, infra repo): off"
   enabled = false
 
@@ -73,15 +86,17 @@ resource "cloudflare_email_routing_catch_all" "this" {
   actions  = [{ type = "drop" }]
 }
 
-# Only Resend sends mail for the domain, from mail.<domain>, and it passes
-# DMARC through its DKIM signature (records below). Any other message that
-# claims to come from the domain or a subdomain is forged: receivers must
-# reject it. The policy covers subdomains too, since there is no sp= tag. SPF
-# on the root domain comes from Email Routing (above) and does not cover
-# senders such as Gmail's "Send mail as".
+# Only Resend sends mail, from mail.<first domain>, and it passes DMARC
+# through its DKIM signature (records below). Any other message that claims to
+# come from one of the domains or a subdomain is forged: receivers must reject
+# it. The policy covers subdomains too, since there is no sp= tag. SPF on each
+# domain that receives mail comes from Email Routing (above) and does not
+# cover senders such as Gmail's "Send mail as".
 resource "cloudflare_dns_record" "dmarc" {
-  zone_id = var.cloudflare_zone_id
-  name    = "_dmarc.${var.domain}"
+  for_each = toset(local.domains)
+
+  zone_id = local.zone_ids[each.key]
+  name    = "_dmarc.${each.key}"
   type    = "TXT"
   # Quoted, as Cloudflare stores TXT content; unquoted, every plan shows a diff.
   content = "\"v=DMARC1; p=reject\""
@@ -90,14 +105,15 @@ resource "cloudflare_dns_record" "dmarc" {
   comment = "Managed by Terraform (infra repo)"
 }
 
-# Resend sends the projects' mail (EPB Stock's, for now) from mail.<domain>.
+# Resend sends the projects' mail (EPB Stock's, for now) from
+# mail.<first domain>.
 # These records were created on 2026-09-28 by Resend's Domain Connect flow and
 # adopted into Terraform with the import blocks below, so they are declared
 # exactly as Resend wrote them: no comment, TTL 1 h, DNS only. Changing any of
 # them breaks sending until Resend verifies the domain again.
 #   send.mail, rsend.mail  -> Resend's sending subdomains (bounces, SPF)
 #   resend._domainkey.mail -> DKIM public key; mail is signed for mail.<domain>,
-#                             which aligns with the root domain's DMARC policy
+#                             which aligns with the domain's DMARC policy
 locals {
   resend_records = {
     send  = { name = "send.mail", type = "CNAME", content = "send.forge.rmta.net" }
@@ -114,8 +130,8 @@ locals {
 resource "cloudflare_dns_record" "resend" {
   for_each = local.resend_records
 
-  zone_id = var.cloudflare_zone_id
-  name    = "${each.value.name}.${var.domain}"
+  zone_id = local.zone_ids[local.primary_domain]
+  name    = "${each.value.name}.${local.primary_domain}"
   type    = each.value.type
   content = each.value.content
   ttl     = 3600
@@ -129,5 +145,5 @@ import {
   for_each = var.resend_record_ids
 
   to = cloudflare_dns_record.resend[each.key]
-  id = "${var.cloudflare_zone_id}/${each.value}"
+  id = "${local.zone_ids[local.primary_domain]}/${each.value}"
 }

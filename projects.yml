@@ -1,15 +1,28 @@
 ---
-# Registry of deployed projects: the single source of truth for Terraform
-# (one DNS record per subdomain) and Ansible (roles/projects). Adding a
-# project starts with a new entry here. Schema: projects.schema.json.
+# Registry of the domains and the deployed projects: the single source of
+# truth for Terraform (one DNS zone per domain, one DNS record per hostname)
+# and Ansible (roles/projects). Adding a project starts with a new entry here.
+# Schema: projects.schema.json.
 #
+# domains: every domain the server answers for, each a Cloudflare zone whose ID
+# is in terraform/.env (TF_VAR_cloudflare_zone_ids). The first one is the
+# server's own: server.<domain> and status.<domain> live there, and so does
+# every project without a domain.
+#   name       the domain, such as abrunacci.dev
+#   mail_forward
+#              local parts Cloudflare Email Routing forwards to the inbox in
+#              terraform/.env (TF_VAR_email_forward_to), such as hello for
+#              hello@<domain>. Optional
+#
+# projects:
 #   name       directories, registry entry and, with a database, the database
 #              and user (with - turned into _)
-#   subdomain  DNS record and Caddy site. "@" (quoted) is the root domain;
-#              www then redirects to it. server, status and www are reserved.
-#              Optional: without it the project is internal (no DNS record,
-#              no Caddy site), has no site, and its backend has no port,
-#              health or paths
+#   domain     one of the domains above (optional, defaults to the first)
+#   subdomain  DNS record and Caddy site, under the project's domain. "@"
+#              (quoted) is the domain itself; www then redirects to it.
+#              server, status and www are reserved. Optional: without it the
+#              project is internal (no DNS record, no Caddy site), has no
+#              site, and its backend has no port, health or paths
 #   title      shown on the placeholder page (optional, defaults to name)
 #   repo       linked from the placeholder page (optional: leave it out for
 #              private repositories)
@@ -82,6 +95,12 @@
 #                         line. The lines are emailed as logged: never match
 #                         lines with personal data. See ansible/README.md,
 #                         "Log alerts".
+domains:
+  - name: abrunacci.dev
+    # hello is the public contact address; postmaster and abuse are the
+    # addresses RFC 5321 and RFC 2142 expect.
+    mail_forward: [hello, postmaster, abuse]
+
 projects:
   - name: cuanto-cuesta
     subdomain: cuanto-cuesta

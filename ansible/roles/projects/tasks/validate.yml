@@ -3,7 +3,8 @@
 # stops the play before anything changes. projects.schema.json checks the
 # same file in pre-commit and CI; this repeats its rules, so a run without
 # pre-commit is still protected, and adds the ones a schema cannot express
-# (unique names and subdomains, health inside paths). One gap is inherent:
+# (unique names and hostnames, a project's domain among the domains, health
+# inside paths). One gap is inherent:
 # Ansible reads YAML 1.1, so an unquoted `yes` becomes true here, while the
 # schema (YAML 1.2) rejects it. Regexes end with \Z: in Python, $ also
 # matches before a trailing newline.
@@ -16,26 +17,34 @@
 - name: Check the registry as a whole
   ansible.builtin.assert:
     that:
-      - projects_registry.keys() | list == ['projects']
+      - projects_registry.keys() | list | sort == ['domains', 'projects']
+      - projects_registry.domains is sequence
+      - projects_registry.domains is not string
+      - projects_registry.domains is not mapping
+      - projects_registry.domains | length > 0
       - projects_registry.projects is sequence
       - projects_registry.projects is not string
       - projects_registry.projects is not mapping
       - projects_names | unique | length == projects_names | length
-      - projects_subdomains | unique | length == projects_subdomains | length
+      - projects_hosts | unique | length == projects_hosts | length
       # One key per project: a key must never deploy two projects.
       - projects_deploy_keys | unique | length == projects_deploy_keys | length
       # Database roles are shared by the whole cluster: project x-app's
       # database role (x_app) must not be project x's app role.
       - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
     fail_msg: >-
-      projects.yml: it must hold only a projects list, with unique names, subdomains and deploy keys,
-      and no project with a database named like another one's plus -app.
+      projects.yml: it must hold only a domains list and a projects list, with unique names, hostnames and
+      deploy keys, and no project with a database named like another one's plus -app.
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
-    # Internal projects have none.
-    projects_subdomains: >-
-      {{ projects_registry.projects | selectattr('subdomain', 'defined') | map(attribute='subdomain') | list }}
+    # Internal projects have none. Each project's subdomain under its domain
+    # (the domain is checked per project, below).
+    projects_hosts: >-
+      {{ projects_registry.projects | selectattr('subdomain', 'defined')
+         | map(attribute='subdomain') | zip(projects_registry.projects | selectattr('subdomain', 'defined')
+                                            | map(attribute='domain', default=projects_registry.domains[0].name))
+         | map('join', '.') | list }}
     projects_db_names: >-
       {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database', 'true')
          | map(attribute='name') | select('string') | map('replace', '-', '_') | list }}
@@ -45,6 +54,31 @@
       {{ projects_registry.projects | selectattr('deploy_key', 'defined') | map(attribute='deploy_key')
          | select('string') | select('match', projects_deploy_key) | map('split') | map(attribute='1') | list }}
 
+- name: Check each domain
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | difference(['name', 'mail_forward']) | length == 0
+      - item.name is string and item.name | length <= 253
+      - item.name is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z')
+      - projects_domain_names | select('equalto', item.name) | list | length == 1
+      - >-
+        item.mail_forward is not defined
+        or (item.mail_forward is sequence and item.mail_forward is not string and item.mail_forward is not mapping
+            and item.mail_forward | length > 0
+            and item.mail_forward | unique | length == item.mail_forward | length
+            and item.mail_forward | reject('string') | list | length == 0
+            and item.mail_forward | reject('match', '^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?\Z') | list | length == 0)
+    fail_msg: >-
+      projects.yml: invalid domain {{ item.name | default('(no name)') }}. Each one has a unique name (a lowercase
+      domain such as example.com.ar) and optionally mail_forward, a list of local parts. See projects.schema.json.
+    quiet: true
+  loop: "{{ projects_registry.domains }}"
+  loop_control:
+    label: "{{ item.name | default('(no name)') }}"
+  vars:
+    projects_domain_names: "{{ projects_registry.domains | map(attribute='name', default=none) | list }}"
+
 - name: Check each project
   ansible.builtin.assert:
     that:
@@ -52,7 +86,8 @@
       - item.name is string and item.name is match(projects_label)
       # restore-drill: its database would be backup-restore's scratch one.
       - item.name not in ['postgres', 'template0', 'template1', 'restore-drill']
-      # "@" is the root domain; www is reserved for its redirect. Without a
+      - item.domain is not defined or item.domain in projects_registry.domains | map(attribute='name') | list
+      # "@" is the domain itself; www is reserved for its redirect. Without a
       # subdomain the project is internal.
       - >-
         item.subdomain is not defined
@@ -112,12 +147,13 @@
       - >-
         item.deploy_key is not defined
         or (item.deploy_key is string and item.deploy_key is match(projects_deploy_key))
-      # Without a subdomain nothing is public: no site, and a backend Caddy
-      # does not reach (no port, health, paths or private paths; the image's
-      # HEALTHCHECK says whether it is healthy). With one, Caddy needs both.
+      # Without a subdomain nothing is public: no domain, no site, and a
+      # backend Caddy does not reach (no port, health, paths or private paths;
+      # the image's HEALTHCHECK says whether it is healthy). With one, Caddy
+      # needs both.
       - >-
         item.subdomain is defined
-        or (not item.site and item.backend is defined and item.backend is mapping
+        or (not item.site and item.domain is not defined and item.backend is defined and item.backend is mapping
             and item.backend.port is not defined and item.backend.health is not defined
             and item.backend.paths is not defined and item.backend.private_paths is not defined
             and item.backend.max_body is not defined
@@ -159,8 +195,8 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, subdomain, title, repo, site, database, permissions_policy, referrer_policy,
-                            content_security_policy, backend, deploy_key]
+    projects_allowed_keys: [name, domain, subdomain, title, repo, site, database, permissions_policy,
+                            referrer_policy, content_security_policy, backend, deploy_key]
     projects_referrer_policies: [no-referrer, no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin,
                                  strict-origin, strict-origin-when-cross-origin, unsafe-url]
     projects_csp_pattern: '^[a-z][a-z-]*( [^\s";{}\\]+)*(; [a-z][a-z-]*( [^\s";{}\\]+)*)*\Z'
