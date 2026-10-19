@@ -15,7 +15,10 @@
 #              hello@<domain>. Optional
 #   proton     Proton Mail hosts the domain's mail instead: verification is
 #              the value Proton shows for its TXT record (after
-#              protonmail-verification=). Optional, not with mail_forward.
+#              protonmail-verification=), and dkim the part its DKIM CNAMEs
+#              share (protonmail.domainkey.<dkim>.domains.proton.ch), which
+#              Proton shows once the domain is verified. Optional, not with
+#              mail_forward.
 #              A domain with neither receives no mail and may send none
 #              (null MX, SPF -all)
 #
@@ -109,6 +112,7 @@ domains:
   - name: epbstock.com.ar
     proton:
       verification: 1403d4dd875513c53e423cf0ece55313a73070a6
+      dkim: dhxegrls23tlcj574wzw3n5ftazt6c6s24if73wzhzasdpqb3hxva
   # Redirects to epbstock.com.ar; receives and sends no mail.
   - name: epbstock.com
 

@@ -73,12 +73,14 @@
       - >-
         item.proton is not defined
         or (item.mail_forward is not defined and item.proton is mapping
-            and item.proton.keys() | list == ['verification']
-            and item.proton.verification is string and item.proton.verification is match('^[0-9a-f]{40}\Z'))
+            and item.proton.keys() | difference(['verification', 'dkim']) | length == 0
+            and item.proton.verification is string and item.proton.verification is match('^[0-9a-f]{40}\Z')
+            and (item.proton.dkim is not defined
+                 or (item.proton.dkim is string and item.proton.dkim is match('^[a-z0-9]{1,63}\Z'))))
     fail_msg: >-
       projects.yml: invalid domain {{ item.name | default('(no name)') }}. Each one has a unique name (a lowercase
       domain such as example.com.ar) and optionally either mail_forward, a list of local parts, or proton, with
-      its verification value. See projects.schema.json.
+      its verification value (and, once verified, its dkim value). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.domains }}"
   loop_control:

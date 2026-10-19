@@ -115,10 +115,10 @@ resource "cloudflare_dns_record" "dmarc" {
 }
 
 # Proton Mail: the records its "Domain names" page asks for. The MX and SPF
-# values are the same for every Proton domain; the verification value is the
-# domain's own (projects.yml). Proton's DKIM keys are CNAMEs it shows only once
-# the domain is verified: until they are here, mail from the domain passes
-# DMARC through SPF alone.
+# values are the same for every Proton domain; the verification and DKIM
+# values are the domain's own (projects.yml). Proton shows the DKIM values
+# only once the domain is verified: until they are here, mail from the domain
+# passes DMARC through SPF alone.
 locals {
   proton_mx = merge([
     for d in keys(local.proton_domains) : {
@@ -164,6 +164,26 @@ resource "cloudflare_dns_record" "proton_txt" {
   type    = "TXT"
   # Quoted, as Cloudflare stores TXT content (see the DMARC record above).
   content = "\"${each.value.content}\""
+  ttl     = 3600
+  proxied = false
+  comment = "Managed by Terraform (infra repo)"
+}
+
+# Proton signs mail with three keys and rotates them on its side: each
+# selector is a CNAME to Proton's key, so a rotation needs no change here.
+resource "cloudflare_dns_record" "proton_dkim" {
+  # Keyed <domain>/<selector>, such as epbstock.com.ar/protonmail2.
+  for_each = merge([
+    for d, proton in local.proton_domains : {
+      for s in ["protonmail", "protonmail2", "protonmail3"] :
+      "${d}/${s}" => { domain = d, selector = s, dkim = proton.dkim }
+    } if lookup(proton, "dkim", null) != null
+  ]...)
+
+  zone_id = local.zone_ids[each.value.domain]
+  name    = "${each.value.selector}._domainkey.${each.value.domain}"
+  type    = "CNAME"
+  content = "${each.value.selector}.domainkey.${each.value.dkim}.domains.proton.ch"
   ttl     = 3600
   proxied = false
   comment = "Managed by Terraform (infra repo)"
