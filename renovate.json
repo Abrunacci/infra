@@ -221,6 +221,16 @@
       "prBodyNotes": [
         "Update `GITLEAKS_SHA256` in `.github/workflows/ci.yml` to the checksum in the release's `gitleaks_<version>_checksums.txt`, for `gitleaks_<version>_linux_x64.tar.gz`. Until then the secret scan fails, on purpose."
       ]
+    },
+    {
+      "description": "CI's Python stays within what ansible-core supports (2.21: up to 3.14), or ansible-lint fails. Raise this with ansible-core",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
     }
   ]
 }

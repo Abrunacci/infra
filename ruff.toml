@@ -1,3 +1,5 @@
 # Python scripts installed on the server (scripts/) and the test image
 # (tests/db-probe/). Same line length as yamllint.
 line-length = 120
+# The server's Python (Ubuntu 24.04), so rules don't move with ruff's default.
+target-version = "py312"
