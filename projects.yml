@@ -26,12 +26,19 @@
 #   name       directories, registry entry and, with a database, the database
 #              and user (with - turned into _)
 #   domain     one of the domains above (optional, defaults to the first)
+#   redirect_from
+#              other hostnames that send visitors to the project with a 301,
+#              keeping the path, such as another domain it goes by. Each one
+#              a domain above or a name under one (optional, only with a
+#              subdomain)
 #   subdomain  DNS record and Caddy site, under the project's domain. "@"
 #              (quoted) is the domain itself; www then redirects to it.
 #              server, status and www are reserved. Optional: without it the
 #              project is internal (no DNS record, no Caddy site), has no
 #              site, and its backend has no port, health or paths
-#   title      shown on the placeholder page (optional, defaults to name)
+#   title      shown on the placeholder page, and the project's group on the
+#              status page, so unique among the projects with a subdomain
+#              (optional, defaults to name)
 #   repo       linked from the placeholder page (optional: leave it out for
 #              private repositories)
 #   site       true: Caddy serves /srv/sites/<name>/current
@@ -194,6 +201,18 @@ projects:
       memory: 128m
       # A name, an email and a message: a few KB at most.
       max_body: 64KB
+
+  # EPB Stock's landing (landing/ in the EPB_Stock repository), on its own
+  # domain. The app stays on epb.abrunacci.dev for now.
+  - name: epb-landing
+    domain: epbstock.com.ar
+    subdomain: "@"
+    redirect_from: [epbstock.com, www.epbstock.com]
+    # Not just "EPB Stock": that is the app's, and each title is a group on the
+    # status page.
+    title: EPB Stock (landing)
+    site: true
+    database: false
 
   - name: epb-stock
     subdomain: epb

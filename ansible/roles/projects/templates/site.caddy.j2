@@ -119,11 +119,13 @@
 	}
 {% endif %}
 }
-{% if item.subdomain == '@' and item.site %}
+{% set redirects = (['www.' ~ project_hosts[item.name]] if item.subdomain == '@' and item.site else [])
+                   + item.redirect_from | default([]) %}
+{% if redirects %}
 
-# The project on a domain itself also answers on www, only to send visitors to
-# the domain, keeping the path and query string.
-www.{{ project_hosts[item.name] }} {
+# The project's other hostnames only send visitors to it, keeping the path and
+# query string: www for a project on a domain itself, and redirect_from.
+{{ redirects | join(', ') }} {
 	import access_log
 	header {
 		Strict-Transport-Security "{{ caddy_hsts }}"

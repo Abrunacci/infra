@@ -9,7 +9,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
 | Resource alerts by email: CPU, memory or disk above 80 % for 5 minutes | `monitoring.tf` |
 | One Cloudflare zone per domain in `../projects.yml` (`domains`); the first one (`abrunacci.dev`) is the server's own | `dns.tf` |
-| A/AAAA records for `server` and `status` (on the first domain) and each project in `../projects.yml`, under its domain: the domain itself for a project on `"@"`, plus `www` | `dns.tf` |
+| A/AAAA records for `server` and `status` (on the first domain) and each project in `../projects.yml`, under its domain: the domain itself for a project on `"@"`, plus `www`; and each project's `redirect_from`, in the zone of its domain | `dns.tf` |
 | CAA records on every domain that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off on every zone, so Cloudflare adds no CAA records of its own | `dns.tf` |
 | DNSSEC: every zone signed by Cloudflare. For a domain registered with Cloudflare Registrar (`abrunacci.dev`, `epbstock.com`), Cloudflare publishes its DS record; for `epbstock.com.ar` it goes in by hand at NIC Argentina (output `dnssec_ds` has each domain's) | `dns.tf` |
@@ -156,7 +156,7 @@ The protection of `main` in every repository of the account (one ruleset each: p
 - **`projects.yml` is validated**, so a mistake fails instead of being read as zero projects, which would plan the deletion of every project's DNS records:
   - A missing file, invalid YAML, or a missing or empty top-level `domains` or `projects` key fails `terraform validate`. An entry without `subdomain` is an internal project (such as `data-pipeline`): it gets no DNS record.
   - Domains that are invalid, listed twice or under another listed domain, a project whose `domain` is not listed, and a domain without its zone ID in `TF_VAR_cloudflare_zone_ids` fail the plan.
-  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated within a domain or reserved (`server`, `status`, `www`) fail the plan. `"@"` is the domain itself; with `site: true` it adds `www`, which redirects to it.
+  - Subdomains that are not strings (unquoted `yes`, `true` or `0123`), invalid, duplicated within a domain or reserved (`server`, `status`, `www`) fail the plan. `"@"` is the domain itself; with `site: true` it adds `www`, which redirects to it. A `redirect_from` that is not a domain in `domains` or a name under one fails the plan too.
   - A registry with no project that has a subdomain fails the plan too, unless it is allowed on purpose, for that run only: `terraform plan -out=tfplan -var=allow_zero_projects=true`. Never put it in `.env`: the guard would stay off without anyone noticing. That also covers a key repeated in the file, such as a second `projects: []` left by a bad merge: YAML keeps the last one.
   - yamllint also rejects repeated keys (`key-duplicates`) in pre-commit and CI. A repeated key that still leaves some projects, or a repeated `subdomain`, is caught only there, so run `pre-commit run --all-files` before a local plan.
 - **`proxied = false`** is set explicitly on every record, so the Cloudflare proxy cannot be turned on by accident (see the DNS decision in the main README).
