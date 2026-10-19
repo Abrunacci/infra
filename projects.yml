@@ -13,6 +13,11 @@
 #              local parts Cloudflare Email Routing forwards to the inbox in
 #              terraform/.env (TF_VAR_email_forward_to), such as hello for
 #              hello@<domain>. Optional
+#   proton     Proton Mail hosts the domain's mail instead: verification is
+#              the value Proton shows for its TXT record (after
+#              protonmail-verification=). Optional, not with mail_forward.
+#              A domain with neither receives no mail and may send none
+#              (null MX, SPF -all)
 #
 # projects:
 #   name       directories, registry entry and, with a database, the database
@@ -100,6 +105,12 @@ domains:
     # hello is the public contact address; postmaster and abuse are the
     # addresses RFC 5321 and RFC 2142 expect.
     mail_forward: [hello, postmaster, abuse]
+  # EPB Stock's own domain. Its mail (contacto@) is in Proton Mail.
+  - name: epbstock.com.ar
+    proton:
+      verification: 1403d4dd875513c53e423cf0ece55313a73070a6
+  # Redirects to epbstock.com.ar; receives and sends no mail.
+  - name: epbstock.com
 
 projects:
   - name: cuanto-cuesta

@@ -58,7 +58,7 @@
   ansible.builtin.assert:
     that:
       - item is mapping
-      - item.keys() | difference(['name', 'mail_forward']) | length == 0
+      - item.keys() | difference(['name', 'mail_forward', 'proton']) | length == 0
       - item.name is string and item.name | length <= 253
       - item.name is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z')
       - projects_domain_names | select('equalto', item.name) | list | length == 1
@@ -69,9 +69,16 @@
             and item.mail_forward | unique | length == item.mail_forward | length
             and item.mail_forward | reject('string') | list | length == 0
             and item.mail_forward | reject('match', '^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?\Z') | list | length == 0)
+      # One set of MX records per domain: Email Routing's or Proton's.
+      - >-
+        item.proton is not defined
+        or (item.mail_forward is not defined and item.proton is mapping
+            and item.proton.keys() | list == ['verification']
+            and item.proton.verification is string and item.proton.verification is match('^[0-9a-f]{40}\Z'))
     fail_msg: >-
       projects.yml: invalid domain {{ item.name | default('(no name)') }}. Each one has a unique name (a lowercase
-      domain such as example.com.ar) and optionally mail_forward, a list of local parts. See projects.schema.json.
+      domain such as example.com.ar) and optionally either mail_forward, a list of local parts, or proton, with
+      its verification value. See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.domains }}"
   loop_control:

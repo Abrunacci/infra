@@ -1,11 +1,19 @@
-# Mail for the domains: Cloudflare Email Routing forwards the addresses each
-# domain lists in projects.yml (mail_forward) to one inbox
-# (var.email_forward_to), and Resend sends the projects' mail from
-# mail.<first domain> (records at the end). Nothing else sends from any domain.
+# Mail for the domains, each one in one of three ways (projects.yml, domains):
+#   mail_forward  Cloudflare Email Routing forwards the addresses listed to one
+#                 inbox (var.email_forward_to)
+#   proton        Proton Mail hosts the domain's mail: it receives, and sends
+#                 from, the domain's addresses
+#   neither       the domain receives no mail and sends none
+# Resend also sends the projects' mail from mail.<first domain> (records at
+# the end).
 
 locals {
   # The domains that receive mail, with the local parts each one forwards.
   mail_domains = { for d in local.registry.domains : d.name => d.mail_forward if lookup(d, "mail_forward", null) != null }
+  # The domains whose mail is in Proton, with their settings.
+  proton_domains = { for d in local.registry.domains : d.name => d.proton if lookup(d, "proton", null) != null }
+  # The domains with no mail at all.
+  no_mail_domains = [for d in local.domains : d if !contains(keys(local.mail_domains), d) && !contains(keys(local.proton_domains), d)]
   # Every forwarded address, such as hello@abrunacci.dev, with its domain.
   email_forwarded = merge([
     for domain, local_parts in local.mail_domains : { for l in local_parts : "${l}@${domain}" => domain }
@@ -86,12 +94,13 @@ resource "cloudflare_email_routing_catch_all" "this" {
   actions  = [{ type = "drop" }]
 }
 
-# Only Resend sends mail, from mail.<first domain>, and it passes DMARC
-# through its DKIM signature (records below). Any other message that claims to
-# come from one of the domains or a subdomain is forged: receivers must reject
-# it. The policy covers subdomains too, since there is no sp= tag. SPF on each
-# domain that receives mail comes from Email Routing (above) and does not
-# cover senders such as Gmail's "Send mail as".
+# Only Resend (from mail.<first domain>, through its DKIM signature, records
+# below) and Proton (from its domains, through SPF and its DKIM signature)
+# send mail. Any other message that claims to come from one of the domains or
+# a subdomain is forged: receivers must reject it. The policy covers
+# subdomains too, since there is no sp= tag. SPF on each domain that forwards
+# comes from Email Routing (above) and does not cover senders such as Gmail's
+# "Send mail as".
 resource "cloudflare_dns_record" "dmarc" {
   for_each = toset(local.domains)
 
@@ -100,6 +109,89 @@ resource "cloudflare_dns_record" "dmarc" {
   type    = "TXT"
   # Quoted, as Cloudflare stores TXT content; unquoted, every plan shows a diff.
   content = "\"v=DMARC1; p=reject\""
+  ttl     = 3600
+  proxied = false
+  comment = "Managed by Terraform (infra repo)"
+}
+
+# Proton Mail: the records its "Domain names" page asks for. The MX and SPF
+# values are the same for every Proton domain; the verification value is the
+# domain's own (projects.yml). Proton's DKIM keys are CNAMEs it shows only once
+# the domain is verified: until they are here, mail from the domain passes
+# DMARC through SPF alone.
+locals {
+  proton_mx = merge([
+    for d in keys(local.proton_domains) : {
+      "${d}/mail"    = { domain = d, priority = 10, content = "mail.protonmail.ch" }
+      "${d}/mailsec" = { domain = d, priority = 20, content = "mailsec.protonmail.ch" }
+    }
+  ]...)
+}
+
+resource "cloudflare_dns_record" "proton_mx" {
+  # Keyed <domain>/<server>, such as epbstock.com.ar/mail.
+  for_each = local.proton_mx
+
+  zone_id  = local.zone_ids[each.value.domain]
+  name     = each.value.domain
+  type     = "MX"
+  priority = each.value.priority
+  content  = each.value.content
+  ttl      = 3600
+  proxied  = false
+  comment  = "Managed by Terraform (infra repo)"
+
+  lifecycle {
+    precondition {
+      # One set of MX records per domain.
+      condition     = length(setintersection(keys(local.mail_domains), keys(local.proton_domains))) == 0
+      error_message = "projects.yml: a domain has both mail_forward and proton; it can have only one."
+    }
+  }
+}
+
+resource "cloudflare_dns_record" "proton_txt" {
+  # Keyed <domain>/<record>, such as epbstock.com.ar/spf.
+  for_each = merge([
+    for d, proton in local.proton_domains : {
+      "${d}/verification" = { domain = d, content = "protonmail-verification=${proton.verification}" }
+      "${d}/spf"          = { domain = d, content = "v=spf1 include:_spf.protonmail.ch ~all" }
+    }
+  ]...)
+
+  zone_id = local.zone_ids[each.value.domain]
+  name    = each.value.domain
+  type    = "TXT"
+  # Quoted, as Cloudflare stores TXT content (see the DMARC record above).
+  content = "\"${each.value.content}\""
+  ttl     = 3600
+  proxied = false
+  comment = "Managed by Terraform (infra repo)"
+}
+
+# A domain with no mail says so (RFC 7505 null MX, and SPF that allows no
+# sender), so senders bounce at once and receivers reject forged mail even
+# without checking DMARC.
+resource "cloudflare_dns_record" "null_mx" {
+  for_each = toset(local.no_mail_domains)
+
+  zone_id  = local.zone_ids[each.key]
+  name     = each.key
+  type     = "MX"
+  priority = 0
+  content  = "."
+  ttl      = 3600
+  proxied  = false
+  comment  = "Managed by Terraform (infra repo)"
+}
+
+resource "cloudflare_dns_record" "no_mail_spf" {
+  for_each = toset(local.no_mail_domains)
+
+  zone_id = local.zone_ids[each.key]
+  name    = each.key
+  type    = "TXT"
+  content = "\"v=spf1 -all\""
   ttl     = 3600
   proxied = false
   comment = "Managed by Terraform (infra repo)"
