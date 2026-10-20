@@ -336,7 +336,7 @@ Each backend logs to the systemd journal (Docker's `journald` driver), tagged `b
 
 ```sh
 sudo tail -f /var/log/caddy/access.log                      # follow it, one JSON line per request
-sudo grep -h '"host":"epb.abrunacci.dev"' /var/log/caddy/access.log | tail   # one site
+sudo grep -h '"host":"app.epbstock.com.ar"' /var/log/caddy/access.log | tail   # one site
 sudo ls -lh /var/log/caddy                                  # current file and rotated ones
 sudo sh -c 'zcat /var/log/caddy/access-*.log.gz' | grep -c '"status":429'   # the rotated ones
 ```
