@@ -248,6 +248,16 @@ projects:
         ANTHROPIC_API_KEY: optional
         # The model the analysis uses, if set; without it, EPB's own default.
         IMPORT_AI_MODEL: optional
+        # Mercado Pago (EPB #106): the Access Token of EPB's application
+        # (production credentials) charges the subscriptions; the API and the
+        # worker both get it. Without it, the «Suscripción» screen says payments
+        # are not set up, and nothing else changes. Both call
+        # api.mercadopago.com:443, so a future filter on the containers'
+        # outbound traffic must allow it.
+        MP_ACCESS_TOKEN: optional
+        # The webhook's secret key, in the same application: the API checks
+        # every notification against it, and refuses them all without it.
+        MP_WEBHOOK_SECRET: optional
       # Twice its peak, rounded up to 64m (issue #79): 131 MiB on 2026-10-16,
       # with a full real import going through the worker. `migrate` gets it too.
       memory: 320m
@@ -268,10 +278,14 @@ projects:
         memory: 512m
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
-        # The only secrets it gets, and the API no longer does. No SECRET_KEY,
-        # RESEND_API_KEY or SETUP_TOKEN: it signs nothing and sends no email.
-        # It also gets DATABASE_URL (the app's role, like the API).
+        # Secrets only it gets, and the API no longer does. No SECRET_KEY or
+        # SETUP_TOKEN: it signs nothing. It also gets DATABASE_URL (the app's
+        # role, like the API).
         secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
+        # Secrets it gets as well as the API: it sends the subscription's
+        # notices by email, and brings a new price to each subscription when
+        # Mercado Pago did not take it at once (EPB #106).
+        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY]
 
   # Internal: a scheduler that runs data jobs, with no public route. Its
   # image's HEALTHCHECK says whether it is alive.
