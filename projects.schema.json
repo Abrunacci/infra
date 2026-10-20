@@ -283,7 +283,7 @@
           "maximum": 1
         },
         "worker": {
-          "description": "A second process of the same image, without a port, such as a jobs queue: its own container (backend-PROJECT-worker), started, deployed and rolled back with the backend, always on the same release. It gets the backend's env, DATABASE_URL if the project has a database, and only the secrets it lists, which the backend then no longer gets. Its network only reaches the internet (and the project's database): neither Caddy nor any backend reaches it. Deploys, rollbacks and restarts wait for its health command, as for the backend's health path.",
+          "description": "A second process of the same image, without a port, such as a jobs queue: its own container (backend-PROJECT-worker), started, deployed and rolled back with the backend, always on the same release. It gets the backend's env, DATABASE_URL if the project has a database, the secrets it lists in secrets, which the backend then no longer gets, and the ones in shared_secrets, which both get. Its network only reaches the internet (and the project's database): neither Caddy nor any backend reaches it. Deploys, rollbacks and restarts wait for its health command, as for the backend's health path.",
           "type": "object",
           "required": ["command", "health", "memory"],
           "additionalProperties": false,
@@ -308,6 +308,13 @@
             },
             "secrets": {
               "description": "Names of the backend's secrets that only the worker gets (generated, manual or optional; not linked ones). They are still set with project-secret, on the project.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/env_name" }
+            },
+            "shared_secrets": {
+              "description": "Names of the backend's secrets that the worker also gets, while the backend keeps them (generated, manual or optional; not linked ones, and none of secrets). They are still set with project-secret, on the project.",
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,

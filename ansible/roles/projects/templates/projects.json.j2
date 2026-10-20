@@ -24,6 +24,7 @@
           'database_url_scheme': p.backend.database_url_scheme | default('postgresql'),
           'worker': {
             'secrets': p.backend.worker.secrets | default([]),
+            'shared_secrets': p.backend.worker.shared_secrets | default([]),
           } if p.backend.worker is defined else none,
         } if p.backend is defined else none,
       }) -%}

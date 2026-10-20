@@ -12,7 +12,9 @@
 #                                                 secrets (project-secret sync)
 # With a worker, secrets.env split in two before each start (backend_up):
 #   /etc/infra/secrets/projects/NAME/secrets-worker.env   the worker's secrets
-#   /etc/infra/secrets/projects/NAME/secrets-backend.env  all the others
+#                                                         and the shared ones
+#   /etc/infra/secrets/projects/NAME/secrets-backend.env  all the others, the
+#                                                         shared ones included
 #   /var/lib/infra/backends/NAME/release.env      what is deployed:
 #                                                 BACKEND_IMAGE, BACKEND_RELEASE
 #   /var/lib/infra/backends/NAME/releases         history, oldest first:
@@ -59,7 +61,8 @@ BACKEND_SHOW_LOGS=0
 # BACKEND_WORKER (true or false), BACKEND_URL_SCHEME, BACKEND_SECRETS (an array
 # of "KEY kind"), BACKEND_LINKS (an array of "KEY SOURCE SOURCE_KEY": its
 # secret KEY is a copy of project SOURCE's SOURCE_KEY) and
-# BACKEND_WORKER_SECRETS (an array of the keys only the worker gets).
+# BACKEND_WORKER_SECRETS (an array of the keys only the worker gets) and
+# BACKEND_SHARED_SECRETS (the keys both the backend and the worker get).
 # An internal backend (a project without a subdomain) has no port or health
 # path: both are empty, and the image's own HEALTHCHECK is its health.
 # The registry is written by Ansible from a checked projects.yml; every value
@@ -92,6 +95,9 @@ for p in json.load(open(registry))["projects"]:
         print("--")
         for key in sorted((b.get("worker") or {}).get("secrets") or []):
             print(key)
+        print("--")
+        for key in sorted((b.get("worker") or {}).get("shared_secrets") or []):
+            print(key)
         break
 PY
 )" || fail "cannot read the project registry"
@@ -101,7 +107,7 @@ PY
   BACKEND_REPO="${lines[1]}" BACKEND_PORT="${lines[2]}" BACKEND_HEALTH="${lines[3]}"
   BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
   BACKEND_WORKER="${lines[7]}"
-  BACKEND_SECRETS=() BACKEND_LINKS=() BACKEND_WORKER_SECRETS=()
+  BACKEND_SECRETS=() BACKEND_LINKS=() BACKEND_WORKER_SECRETS=() BACKEND_SHARED_SECRETS=()
   local i=8
   while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
     BACKEND_SECRETS+=("${lines[i]}")
@@ -114,7 +120,13 @@ PY
     ((i += 1))
   done
   [[ "${lines[i]:-}" == -- ]] || fail "invalid linked secrets in the registry"
-  BACKEND_WORKER_SECRETS=("${lines[@]:i+1}")
+  ((i += 1))
+  while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
+    BACKEND_WORKER_SECRETS+=("${lines[i]}")
+    ((i += 1))
+  done
+  [[ "${lines[i]:-}" == -- ]] || fail "invalid worker secrets in the registry"
+  BACKEND_SHARED_SECRETS=("${lines[@]:i+1}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
   if [[ -n "$BACKEND_PORT$BACKEND_HEALTH" ]]; then
     [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
@@ -131,7 +143,7 @@ PY
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
       || fail "invalid linked secret in the registry"
   done
-  for s in "${BACKEND_WORKER_SECRETS[@]}"; do
+  for s in "${BACKEND_WORKER_SECRETS[@]}" "${BACKEND_SHARED_SECRETS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || fail "invalid worker secret in the registry"
   done
 }
@@ -247,20 +259,25 @@ backend_compose() {
 
 # Writes the two secrets files of a backend with a worker from secrets.env:
 # secrets-worker.env with the keys the worker lists, secrets-backend.env with
-# all the others. Each one replaced in one rename, root only. Nothing to do
-# without a worker: the backend reads secrets.env itself.
+# all the others, and each shared key in both. Each one replaced in one rename,
+# root only. Nothing to do without a worker: the backend reads secrets.env
+# itself.
 backend_split_secrets() {
   local project="$1" dir="$SECRETS_DIR/$1" line key tmp_w tmp_b
   [[ "$BACKEND_WORKER" == true ]] || return 0
   [[ -f "$dir/secrets.env" ]] || fail "$dir/secrets.env is missing (run the playbook)"
-  declare -A worker_key=()
+  declare -A worker_key=() shared_key=()
   for key in "${BACKEND_WORKER_SECRETS[@]}"; do worker_key["$key"]=1; done
+  for key in "${BACKEND_SHARED_SECRETS[@]}"; do shared_key["$key"]=1; done
   tmp_w="$(mktemp "$dir/.secrets-worker.env.XXXXXX")" || return 1
   tmp_b="$(mktemp "$dir/.secrets-backend.env.XXXXXX")" || { rm -f "$tmp_w"; return 1; }
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
     if [[ -n "${worker_key[${line%%=*}]:-}" ]]; then
       printf '%s\n' "$line" >>"$tmp_w"
+    elif [[ -n "${shared_key[${line%%=*}]:-}" ]]; then
+      printf '%s\n' "$line" >>"$tmp_w"
+      printf '%s\n' "$line" >>"$tmp_b"
     else
       printf '%s\n' "$line" >>"$tmp_b"
     fi

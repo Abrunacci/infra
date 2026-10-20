@@ -262,8 +262,9 @@
   ansible.builtin.assert:
     that:
       - projects_worker is mapping
-      - projects_worker.keys() | difference(['command', 'health', 'memory', 'stop_grace_period', 'secrets'])
-        | length == 0
+      - >-
+        projects_worker.keys()
+        | difference(['command', 'health', 'memory', 'stop_grace_period', 'secrets', 'shared_secrets']) | length == 0
       - projects_commands | length == 2
       - projects_commands | reject('sequence') | list | length == 0
       - projects_commands | select('string') | list | length == 0
@@ -284,10 +285,18 @@
       - projects_worker_secrets | unique | length == projects_worker_secrets | length
       - projects_worker_secrets | reject('string') | list | length == 0
       - projects_worker_secrets | difference(projects_own_secrets) | length == 0
+      - projects_shared_secrets is sequence and projects_shared_secrets is not string
+      - projects_shared_secrets is not mapping
+      - projects_worker.shared_secrets is not defined or projects_shared_secrets | length > 0
+      - projects_shared_secrets | unique | length == projects_shared_secrets | length
+      - projects_shared_secrets | reject('string') | list | length == 0
+      - projects_shared_secrets | difference(projects_own_secrets) | length == 0
+      - projects_shared_secrets | intersect(projects_worker_secrets) | length == 0
     fail_msg: >-
       projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
       32 arguments), a memory from 64m to 512m, optionally a stop_grace_period from 1s to 120s, and optionally
-      secrets: names of the backend's own generated, manual or optional secrets, not linked ones.
+      secrets (only the worker gets them) and shared_secrets (both get them): names of the backend's own
+      generated, manual or optional secrets, not linked ones, each in one list at most.
       See projects.schema.json.
     quiet: true
   loop: >-
@@ -300,6 +309,7 @@
     projects_commands: >-
       {{ [projects_worker.command | default(none), projects_worker.health | default(none)] | reject('none') | list }}
     projects_worker_secrets: "{{ projects_worker.secrets | default([]) }}"
+    projects_shared_secrets: "{{ projects_worker.shared_secrets | default([]) }}"
     projects_own_secrets: >-
       {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
          | list }}
