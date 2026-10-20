@@ -213,6 +213,9 @@ projects:
     title: EPB Stock (landing)
     site: true
     database: false
+    # The landing's CI (EPB_Stock's secret LANDING_DEPLOY_SSH_KEY): it can only
+    # deploy this site.
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHFksYvfS1BuO4OQ875YBm4+iaTKvLqBFiYpjZZisqSJ epb-landing-deploy
     # The policy the landing documents (landing/README.md, "Deploy"): its own
     # origin, plus Turnstile (terraform/turnstile.tf), which loads a script and
     # a frame from challenges.cloudflare.com, and Web Analytics
