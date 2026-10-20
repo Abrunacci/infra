@@ -18,3 +18,19 @@ resource "cloudflare_turnstile_widget" "contact_form" {
     prevent_destroy = true
   }
 }
+
+# The same for EPB Stock's landing (epb-landing in projects.yml): its own
+# widget, so rotating or losing one pair of keys never touches the other form.
+# Invisible: no box is ever shown; the page asks for a token when the form is
+# sent. The landing's build takes the site key (EPB_Stock's repository variable
+# LANDING_TURNSTILE_SITE_KEY); the secret key is for its backend.
+resource "cloudflare_turnstile_widget" "epb_landing" {
+  account_id = var.cloudflare_account_id
+  name       = "epbstock.com.ar contact form"
+  domains    = ["epbstock.com.ar"]
+  mode       = "invisible"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

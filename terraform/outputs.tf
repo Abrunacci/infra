@@ -33,3 +33,19 @@ output "turnstile_secret_key" {
   value       = cloudflare_turnstile_widget.contact_form.secret
   sensitive   = true
 }
+
+output "epb_landing_turnstile_site_key" {
+  description = "Public site key of EPB Stock's landing Turnstile widget (EPB_Stock's repository variable LANDING_TURNSTILE_SITE_KEY)."
+  value       = cloudflare_turnstile_widget.epb_landing.sitekey
+}
+
+output "epb_landing_turnstile_secret_key" {
+  description = "Secret key of EPB Stock's landing Turnstile widget, for the landing's backend; read it with terraform output -raw epb_landing_turnstile_secret_key."
+  value       = cloudflare_turnstile_widget.epb_landing.secret
+  sensitive   = true
+}
+
+output "epb_landing_web_analytics_token" {
+  description = "Site token of EPB Stock's landing in Cloudflare Web Analytics (EPB_Stock's repository variable LANDING_CF_BEACON_TOKEN). Public: every visitor's browser gets it."
+  value       = cloudflare_web_analytics_site.epb_landing.site_token
+}

@@ -213,6 +213,15 @@ projects:
     title: EPB Stock (landing)
     site: true
     database: false
+    # The policy the landing documents (landing/README.md, "Deploy"): its own
+    # origin, plus Turnstile (terraform/turnstile.tf), which loads a script and
+    # a frame from challenges.cloudflare.com, and Web Analytics
+    # (terraform/analytics.tf), whose script reports to cloudflareinsights.com.
+    content_security_policy: >-
+      default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com;
+      style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self' https://cloudflareinsights.com;
+      frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; form-action 'self';
+      frame-ancestors 'none'
 
   - name: epb-stock
     subdomain: epb
