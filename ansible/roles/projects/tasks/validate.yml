@@ -27,14 +27,18 @@
       - projects_registry.projects is not mapping
       - projects_names | unique | length == projects_names | length
       - projects_hosts | unique | length == projects_hosts | length
+      # Each public project is a group on the status page (roles/gatus), named
+      # by its title: two with one title would mix their checks.
+      - projects_titles | unique | length == projects_titles | length
       # One key per project: a key must never deploy two projects.
       - projects_deploy_keys | unique | length == projects_deploy_keys | length
       # Database roles are shared by the whole cluster: project x-app's
       # database role (x_app) must not be project x's app role.
       - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
     fail_msg: >-
-      projects.yml: it must hold only a domains list and a projects list, with unique names, hostnames and
-      deploy keys, and no project with a database named like another one's plus -app.
+      projects.yml: it must hold only a domains list and a projects list, with unique names, hostnames, titles
+      (of the projects with a subdomain) and deploy keys, and no project with a database named like another
+      one's plus -app.
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
@@ -45,6 +49,11 @@
          | map(attribute='subdomain') | zip(projects_registry.projects | selectattr('subdomain', 'defined')
                                             | map(attribute='domain', default=projects_registry.domains[0].name))
          | map('join', '.') | list }}
+    projects_titles: >-
+      {{ projects_registry.projects | selectattr('subdomain', 'defined')
+         | map(attribute='title', default=none) | zip(projects_registry.projects | selectattr('subdomain', 'defined')
+                                                      | map(attribute='name'))
+         | map('select') | map('first') | list }}
     projects_db_names: >-
       {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database', 'true')
          | map(attribute='name') | select('string') | map('replace', '-', '_') | list }}
@@ -87,6 +96,37 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_domain_names: "{{ projects_registry.domains | map(attribute='name', default=none) | list }}"
+
+# redirect_from: each name is a domain in domains or under one, and no
+# hostname is served twice (a project, a www redirect, server or status).
+- name: Check the redirects
+  ansible.builtin.assert:
+    that:
+      - >-
+        projects_redirects | reject('string') | list | length == 0
+        and projects_redirects | reject('match', '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z') | list
+            | length == 0
+      - >-
+        projects_redirects | reject('in', projects_domain_names)
+        | reject('search', '\.(' ~ (projects_domain_names | map('regex_escape') | join('|')) ~ ')\Z') | list
+        | length == 0
+      - projects_all_hosts | unique | length == projects_all_hosts | length
+    fail_msg: >-
+      projects.yml: every redirect_from entry must be a list of hostnames, each a domain in domains or under
+      one, and no hostname may be used twice (by a project, its www redirect, a redirect_from, server or status).
+    quiet: true
+  vars:
+    projects_domain_names: "{{ projects_registry.domains | map(attribute='name') | list }}"
+    projects_redirects: >-
+      {{ projects_registry.projects | selectattr('redirect_from', 'defined') | map(attribute='redirect_from')
+         | flatten | list }}
+    projects_all_hosts: >-
+      {{ ['server', 'status'] | map('regex_replace', '$', '.' ~ domain) | list
+         + project_hosts.values() | list
+         + projects_registry.projects | selectattr('subdomain', 'defined') | selectattr('subdomain', 'equalto', '@')
+           | selectattr('site') | map(attribute='name') | map('extract', project_hosts)
+           | map('regex_replace', '^', 'www.') | list
+         + projects_redirects }}
 
 - name: Check each project
   ansible.builtin.assert:
@@ -166,7 +206,7 @@
             and item.backend.port is not defined and item.backend.health is not defined
             and item.backend.paths is not defined and item.backend.private_paths is not defined
             and item.backend.max_body is not defined
-            and item.permissions_policy is not defined
+            and item.permissions_policy is not defined and item.redirect_from is not defined
             and item.referrer_policy is not defined and item.content_security_policy is not defined)
       - >-
         item.subdomain is not defined or item.backend is not defined
@@ -204,8 +244,8 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, domain, subdomain, title, repo, site, database, permissions_policy,
-                            referrer_policy, content_security_policy, backend, deploy_key]
+    projects_allowed_keys: [name, domain, subdomain, redirect_from, title, repo, site, database,
+                            permissions_policy, referrer_policy, content_security_policy, backend, deploy_key]
     projects_referrer_policies: [no-referrer, no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin,
                                  strict-origin, strict-origin-when-cross-origin, unsafe-url]
     projects_csp_pattern: '^[a-z][a-z-]*( [^\s";{}\\]+)*(; [a-z][a-z-]*( [^\s";{}\\]+)*)*\Z'

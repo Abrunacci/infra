@@ -94,8 +94,15 @@
             }
           ]
         },
+        "redirect_from": {
+          "description": "Other hostnames that send visitors here with a permanent redirect (301), keeping the path and query string, such as another domain the project goes by. Each one is a domain in domains or a name under one (Terraform creates its A/AAAA records there). Unique hostnames are checked by the playbook and Terraform. Only with a subdomain.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/domain_name" }
+        },
         "title": {
-          "description": "Shown on the placeholder page. Defaults to name.",
+          "description": "Shown on the placeholder page, and the project's group on the status page, so unique among the projects with a subdomain (checked by the playbook). Defaults to name.",
           "type": "string",
           "minLength": 1,
           "maxLength": 80
@@ -162,7 +169,8 @@
               "anyOf": [
                 { "required": ["permissions_policy"] },
                 { "required": ["referrer_policy"] },
-                { "required": ["content_security_policy"] }
+                { "required": ["content_security_policy"] },
+                { "required": ["redirect_from"] }
               ]
             }
           }

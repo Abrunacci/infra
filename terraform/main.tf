@@ -22,6 +22,15 @@ locals {
   subdomains = [for p in local.public_projects : p.subdomain]
   reserved   = ["server", "status", "www"]
 
+  # Each project's redirect_from, in the zone of the domain it is, or is
+  # under ("" when none is: the precondition in dns.tf says so).
+  redirect_hosts = flatten([
+    for p in local.public_projects : [
+      for r in lookup(p, "redirect_from", []) :
+      { name = r, zone = concat([for d in local.domains : d if r == d || endswith(r, ".${d}")], [""])[0] }
+    ]
+  ])
+
   # Every hostname that points at the Droplet, with the domain whose zone
   # holds its records:
   #   server.<first domain> -> SSH/Ansible target, so no IP address is ever
@@ -29,7 +38,8 @@ locals {
   #   status.<first domain> -> Gatus status page
   #   one per public project: its subdomain under its domain, or the domain
   #   itself for "@"; plus www.<domain> when a project with a site is on the
-  #   domain itself (its redirect lives in that site's Caddy file)
+  #   domain itself, and each of its redirect_from (their redirects live in
+  #   that site's Caddy file)
   hostname_list = concat(
     [for h in ["server", "status"] : { name = "${h}.${local.primary_domain}", zone = local.primary_domain }],
     [
@@ -37,6 +47,7 @@ locals {
       { name = p.subdomain == "@" ? p.domain : "${p.subdomain}.${p.domain}", zone = p.domain }
     ],
     [for p in local.public_projects : { name = "www.${p.domain}", zone = p.domain } if p.subdomain == "@" && p.site],
+    local.redirect_hosts,
   )
   # distinct(): a repeated hostname must reach the preconditions in dns.tf,
   # which say what is wrong, instead of failing here as a duplicate key.

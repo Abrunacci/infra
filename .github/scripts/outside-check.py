@@ -9,7 +9,8 @@ the repo, so a new project needs no change here:
 
 - open ports: the tcp and udp inbound rules of terraform/firewall.tf;
 - sites: every project hostname in projects.yml, plus status (roles/caddy)
-  and www for each project with a site on a domain itself;
+  www for each project with a site on a domain itself, and each project's
+  redirect_from;
 - private paths: each backend's private_paths in projects.yml;
 - CAA records: terraform/dns.tf, on every domain in projects.yml; the DS
   record of the first one (the server's): the DNSSEC_DS variable.
@@ -109,6 +110,8 @@ def expected():
         sites.append(host)
         if subdomain == "@" and project.get("site"):
             redirects[f"www.{project_domain}"] = host
+        for name in project.get("redirect_from", []):
+            redirects[name] = host
         for pattern in project.get("backend", {}).get("private_paths", []):
             private.setdefault(host, set()).update(private_path_variants(pattern))
     ds = os.environ.get("DNSSEC_DS", "").strip()
