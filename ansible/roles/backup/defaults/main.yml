@@ -4,7 +4,7 @@
 
 # The same image and version used to test the bucket's lock (#17), pinned by
 # digest like every other image.
-backup_rclone_image: rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5
+backup_rclone_image: rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5
 backup_bucket: infra-backups
 # R2's S3 endpoint for the account; the account ID comes from terraform/.env,
 # loaded before running the playbook (see ansible/README.md, "Usage").
