@@ -203,7 +203,7 @@ projects:
       max_body: 64KB
 
   # EPB Stock's landing (landing/ in the EPB_Stock repository), on its own
-  # domain. The app stays on epb.abrunacci.dev for now.
+  # domain. The app is at app.epbstock.com.ar (epb-stock, below).
   - name: epb-landing
     domain: epbstock.com.ar
     subdomain: "@"
@@ -227,7 +227,13 @@ projects:
       frame-ancestors 'none'
 
   - name: epb-stock
-    subdomain: epb
+    domain: epbstock.com.ar
+    subdomain: app
+    # The app's first address, which old links, bookmarks and invitations
+    # still use: it redirects here until 2027-04-30, and then goes (issue #108).
+    # Never for Mercado Pago's webhook: a redirected notification is not
+    # delivered, so its URL is https://app.epbstock.com.ar/api/... itself.
+    redirect_from: [epb.abrunacci.dev]
     title: EPB Stock
     site: true
     database: true
@@ -253,13 +259,15 @@ projects:
       # largest: 7MB is 6.68 MiB, so no import the API accepts hits it.
       max_body: 7MB
       env:
-        PUBLIC_APP_URL: "https://epb.abrunacci.dev"
-        CORS_ORIGINS: "https://epb.abrunacci.dev"
+        # The links in its emails (invitations, password resets, the
+        # subscription's notices) and the only origin allowed to call the API.
+        PUBLIC_APP_URL: "https://app.epbstock.com.ar"
+        CORS_ORIGINS: "https://app.epbstock.com.ar"
         TRUST_FORWARDED_FOR: "true"
         MAIL_BACKEND: "resend"
         MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
         # Explicit, so a new default in an EPB release changes nothing here.
-        # No COOKIE_DOMAIN: without one, the cookie is epb.abrunacci.dev's only.
+        # No COOKIE_DOMAIN: without one, the cookie is app.epbstock.com.ar's only.
         COOKIE_SECURE: "true"
         DEBUG: "false"
         FEATURE_MANUFACTURING: "false"

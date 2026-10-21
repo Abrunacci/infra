@@ -1,7 +1,7 @@
 # body-limits
 
 Checks that a request body is cut where it should be, on EPB Stock's public
-API (`https://epb.abrunacci.dev/api/auth/session`), over HTTP/1.1, HTTP/2 and
+API (`https://app.epbstock.com.ar/api/auth/session`), over HTTP/1.1, HTTP/2 and
 HTTP/3:
 
 | Body | Expected | Why |
