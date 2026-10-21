@@ -11,7 +11,9 @@ resource "cloudflare_dns_record" "a" {
   zone_id = lookup(local.zone_ids, each.value.zone, "")
   name    = each.value.name
   type    = "A"
-  content = digitalocean_droplet.server.ipv4_address
+  # lookup(): a server with no Droplet gets "" here, and the precondition
+  # below says so.
+  content = lookup(local.server_ipv4, each.value.server, "")
   ttl     = 300
   proxied = false
   comment = "Managed by Terraform (infra repo)"
@@ -36,6 +38,23 @@ resource "cloudflare_dns_record" "a" {
     precondition {
       condition     = alltrue([for p in local.public_projects : contains(local.domains, p.domain)])
       error_message = "projects.yml: a project's domain is not in domains."
+    }
+    precondition {
+      condition     = length(distinct(local.servers)) == length(local.servers)
+      error_message = "projects.yml: a server is listed twice."
+    }
+    precondition {
+      condition     = alltrue([for s in local.servers : local.server_zones[s] != ""])
+      error_message = "projects.yml: every server must be a name under a domain in domains."
+    }
+    precondition {
+      # Internal projects too: they have no record, but they run somewhere.
+      condition     = alltrue([for p in local.projects : contains(local.servers, lookup(p, "server", local.primary_server))])
+      error_message = "projects.yml: a project's server is not in servers."
+    }
+    precondition {
+      condition     = alltrue([for s in local.servers : contains(keys(local.server_ipv4), s)])
+      error_message = "projects.yml lists a server with no Droplet in Terraform: ${join(", ", [for s in local.servers : s if !contains(keys(local.server_ipv4), s)])}. Add its Droplet (main.tf) first."
     }
     precondition {
       condition     = alltrue([for h in local.redirect_hosts : h.zone != ""])
@@ -79,7 +98,7 @@ resource "cloudflare_dns_record" "aaaa" {
   zone_id = lookup(local.zone_ids, each.value.zone, "")
   name    = each.value.name
   type    = "AAAA"
-  content = digitalocean_droplet.server.ipv6_address
+  content = lookup(local.server_ipv6, each.value.server, "")
   ttl     = 300
   proxied = false
   comment = "Managed by Terraform (infra repo)"

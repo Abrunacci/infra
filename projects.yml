@@ -4,10 +4,9 @@
 # and Ansible (roles/projects). Adding a project starts with a new entry here.
 # Schema: projects.schema.json.
 #
-# domains: every domain the server answers for, each a Cloudflare zone whose ID
-# is in terraform/.env (TF_VAR_cloudflare_zone_ids). The first one is the
-# server's own: server.<domain> and status.<domain> live there, and so does
-# every project without a domain.
+# domains: every domain the servers answer for, each a Cloudflare zone whose ID
+# is in terraform/.env (TF_VAR_cloudflare_zone_ids). The first one holds the
+# status page (status.<domain>), and every project without a domain.
 #   name       the domain, such as abrunacci.dev
 #   mail_forward
 #              local parts Cloudflare Email Routing forwards to the inbox in
@@ -22,9 +21,18 @@
 #              A domain with neither receives no mail and may send none
 #              (null MX, SPF -all)
 #
+# servers: every server (Droplet), by its hostname, the same name Ansible's
+# inventory uses. Each one is a name under one of the domains, where Terraform
+# creates its A/AAAA records, and has its own Droplet in Terraform. The first
+# one serves the status page and runs every project without a server.
+#   name       the hostname, such as server.abrunacci.dev
+#
 # projects:
 #   name       directories, registry entry and, with a database, the database
 #              and user (with - turned into _)
+#   server     one of the servers above (optional, defaults to the first): its
+#              DNS records point there, and only that server's playbook run
+#              sets the project up
 #   domain     one of the domains above (optional, defaults to the first)
 #   redirect_from
 #              other hostnames that send visitors to the project with a 301,
@@ -127,6 +135,10 @@ domains:
       dkim: dhxegrls23tlcj574wzw3n5ftazt6c6s24if73wzhzasdpqb3hxva
   # Redirects to epbstock.com.ar; receives and sends no mail.
   - name: epbstock.com
+
+servers:
+  # The one Droplet: every project runs here.
+  - name: server.abrunacci.dev
 
 projects:
   - name: cuanto-cuesta

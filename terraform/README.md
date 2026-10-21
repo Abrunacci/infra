@@ -9,7 +9,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | Cloud firewall: inbound TCP 22, 80 and 443, UDP 443 for HTTP/3, and ICMP/ICMPv6 | `firewall.tf` |
 | Resource alerts by email: CPU, memory or disk above 80 % for 5 minutes | `monitoring.tf` |
 | One Cloudflare zone per domain in `../projects.yml` (`domains`); the first one (`abrunacci.dev`) is the server's own | `dns.tf` |
-| A/AAAA records for `server` and `status` (on the first domain) and each project in `../projects.yml`, under its domain: the domain itself for a project on `"@"`, plus `www`; and each project's `redirect_from`, in the zone of its domain | `dns.tf` |
+| A/AAAA records for each server in `../projects.yml` (`servers`, pointing at its Droplet), `status` (on the first domain, at the first server) and each project, at its server (the first one by default), under its domain: the domain itself for a project on `"@"`, plus `www`; and each project's `redirect_from`, in the zone of its domain | `dns.tf` |
 | CAA records on every domain that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off on every zone, so Cloudflare adds no CAA records of its own | `dns.tf` |
 | DNSSEC: every zone signed by Cloudflare. For a domain registered with Cloudflare Registrar (`abrunacci.dev`, `epbstock.com`), Cloudflare publishes its DS record; for `epbstock.com.ar` it goes in by hand at NIC Argentina (output `dnssec_ds` has each domain's) | `dns.tf` |

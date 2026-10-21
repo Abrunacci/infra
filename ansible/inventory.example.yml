@@ -1,6 +1,8 @@
 ---
-# Copy to inventory.yml (git-ignored). The host is a hostname, never an IP:
-# Terraform creates its A/AAAA records (see terraform/outputs.tf, server_fqdn).
+# Copy to inventory.yml (git-ignored). Each host is a server's name in
+# projects.yml (servers), never an IP: Terraform creates its A/AAAA records
+# (see terraform/outputs.tf, server_hostnames), and the playbook sets up only
+# that server's projects on it.
 all:
   hosts:
     server.abrunacci.dev:

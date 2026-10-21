@@ -1,6 +1,7 @@
 ---
-# The server's own domain, the first in projects.yml (domains): server.<domain>
-# and status.<domain> live there, and so does every project without a domain.
+# The first domain in projects.yml (domains): status.<domain> lives there, and
+# so does every project without a domain. The server's own name is its
+# inventory host, one of projects.yml's servers.
 # projects_registry is loaded before any role (site.yml, pre_tasks).
 domain: "{{ projects_registry.domains[0].name }}"
 
