@@ -54,6 +54,12 @@
 		reverse_proxy {{ item.name }}-backend:{{ item.backend.port }} {
 			lb_try_duration 15s
 			lb_try_interval 250ms
+{%     if item.backend.client_ip_header is defined %}
+			# The visitor's address, in the header the backend reads it from
+			# (client_ip_header in projects.yml). Set, not added: whatever the
+			# visitor sent in it is replaced.
+			header_up {{ item.backend.client_ip_header }} {remote_host}
+{%     endif %}
 		}
 {%   endset %}
 {% endif %}
