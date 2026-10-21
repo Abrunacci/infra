@@ -61,6 +61,10 @@ resource "cloudflare_dns_record" "a" {
       error_message = "projects.yml: every redirect_from must be a domain in domains or a name under one."
     }
     precondition {
+      condition     = alltrue([for h in local.also_served_hosts : h.zone != ""])
+      error_message = "projects.yml: every also_serves name must be a domain in domains or a name under one."
+    }
+    precondition {
       condition     = alltrue([for d in local.domains : local.zone_ids[d] != ""])
       error_message = "TF_VAR_cloudflare_zone_ids has no zone ID for ${join(", ", [for d in local.domains : d if local.zone_ids[d] == ""])}: add it in .env (see \"Credentials\" in the README)."
     }
@@ -83,7 +87,7 @@ resource "cloudflare_dns_record" "a" {
     }
     precondition {
       condition     = length(distinct([for h in local.hostname_list : h.name])) == length(local.hostname_list)
-      error_message = "projects.yml: two projects use the same subdomain of the same domain."
+      error_message = "projects.yml: a hostname is used twice (by a server, status, a subdomain, a redirect_from or an also_serves name)."
     }
     precondition {
       condition     = length(setintersection(toset(local.subdomains), toset(local.reserved))) == 0

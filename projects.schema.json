@@ -123,6 +123,24 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/domain_name" }
         },
+        "also_serves": {
+          "description": "Other hostnames that serve the same site and backend as the project's own, with no redirect, such as a second name for the same app. Each one is a domain in domains or a name under one (Terraform creates its A/AAAA records there), with noindex: true to send X-Robots-Tag: noindex on that name only. Unique hostnames are checked by the playbook and Terraform. Only with a subdomain.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "$ref": "#/$defs/domain_name" },
+              "noindex": {
+                "description": "Search engines must not list the site under this name (X-Robots-Tag: noindex, nofollow).",
+                "type": "boolean"
+              }
+            }
+          }
+        },
         "title": {
           "description": "Shown on the placeholder page, and the project's group on the status page, so unique among the projects with a subdomain (checked by the playbook). Defaults to name.",
           "type": "string",
@@ -193,7 +211,8 @@
                 { "required": ["permissions_policy"] },
                 { "required": ["referrer_policy"] },
                 { "required": ["content_security_policy"] },
-                { "required": ["redirect_from"] }
+                { "required": ["redirect_from"] },
+                { "required": ["also_serves"] }
               ]
             }
           }

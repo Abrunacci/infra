@@ -82,7 +82,7 @@ Once a week, `.github/workflows/outside-check.yml` looks at the server from a Gi
 | TCP ports of `server.abrunacci.dev`, all of them, over IPv4 | open: the `tcp` inbound rules; everything else filtered | `terraform/firewall.tf` |
 | UDP ports | the `udp` inbound rules answer `open\|filtered` | `terraform/firewall.tf` |
 | TLS of every site | TLS 1.2 and 1.3 only, every cipher graded A by nmap | `projects.yml`, plus `status` and `www` |
-| Headers of every site | `caddy_hsts`, `nosniff`, `frame-ancestors`, no `Server`; `www` and each `redirect_from` redirect permanently to their project | `projects.yml`, `roles/caddy` |
+| Headers of every site | `caddy_hsts`, `nosniff`, `frame-ancestors`, no `Server`; `X-Robots-Tag: noindex` only on each `also_serves` name with `noindex`; `www` and each `redirect_from` redirect permanently to their project | `projects.yml`, `roles/caddy` |
 | Private paths | each one, and the usual ways around a path match (trailing or doubled slash, upper case, percent-encoding), answers 404 or 405 to a POST | `private_paths` in `projects.yml` |
 | CAA and DS records, from 1.1.1.1 | exactly the CAA records of the repo and the DS record of `DNSSEC_DS` | `terraform/dns.tf`, the workflow |
 

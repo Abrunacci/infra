@@ -39,6 +39,11 @@
 #              keeping the path, such as another domain it goes by. Each one
 #              a domain above or a name under one (optional, only with a
 #              subdomain)
+#   also_serves
+#              other hostnames that serve the same site and backend, with no
+#              redirect: a list of {name, noindex}. name: a domain above or a
+#              name under one; noindex: true sends X-Robots-Tag: noindex on
+#              that name only (optional, only with a subdomain)
 #   subdomain  DNS record and Caddy site, under the project's domain. "@"
 #              (quoted) is the domain itself; www then redirects to it.
 #              server, status and www are reserved. Optional: without it the
@@ -289,6 +294,11 @@ projects:
     # Never for Mercado Pago's webhook: a redirected notification is not
     # delivered, so its URL is https://app.epbstock.com.ar/api/... itself.
     redirect_from: [epb.abrunacci.dev]
+    # The demo's name, until production has its own server: the same app and
+    # database as app., kept out of search engines.
+    also_serves:
+      - name: stage.epbstock.com.ar
+        noindex: true
     title: EPB Stock
     site: true
     database: true
