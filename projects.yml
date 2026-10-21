@@ -92,6 +92,11 @@
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
+#                client_ip_header
+#                         a request header Caddy sets to the visitor's address,
+#                         replacing any the visitor sent, such as
+#                         CF-Connecting-IP for a backend that reads it there
+#                         (optional, only with a subdomain)
 #                cpus     share of the Droplet's CPU it may use, 0.1 to 1
 #                         (optional, defaults to 0.5), so one busy backend
 #                         cannot starve the others, Caddy or PostgreSQL
@@ -225,6 +230,44 @@ projects:
       style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self' https://cloudflareinsights.com;
       frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; form-action 'self';
       frame-ancestors 'none'
+    # The «Solicitá una demo» form (landing/backend in the EPB_Stock
+    # repository): it checks the Turnstile token and mails the request through
+    # Resend; it stores nothing and never talks to the app. Its log holds
+    # nothing a visitor typed.
+    backend:
+      image: ghcr.io/abrunacci/epb-landing-backend
+      port: 8080
+      health: /api/health
+      paths: ["/api/*"]
+      # The backend counts each visitor by this header (5 messages per address
+      # per hour) and passes it to Turnstile. The site does not go through
+      # Cloudflare's proxy, so nobody else sets it: without this line, every
+      # visitor would be Caddy's address, and one would be enough to use up
+      # the hour for everybody.
+      client_ip_header: CF-Connecting-IP
+      env:
+        # Explicit, so a new default in an EPB release changes nothing here.
+        CONTACT_TO: "contacto@epbstock.com.ar"
+        CONTACT_FROM: "EPB Stock <landing@mail.abrunacci.dev>"
+        # The hostname Turnstile must report for a token to count: the
+        # widget's only domain (terraform/turnstile.tf).
+        ALLOWED_HOSTNAME: "epbstock.com.ar"
+      secrets:
+        # The landing widget's secret key (terraform/turnstile.tf), from
+        # terraform output -raw epb_landing_turnstile_secret_key. The backend
+        # checks each form against challenges.cloudflare.com:443, so a future
+        # filter on the containers' outbound traffic must allow it.
+        TURNSTILE_SECRET_KEY: manual
+        # A Resend key with sending access only, on mail.abrunacci.dev
+        # (epb-landing-contact): not the app's, so either can be revoked alone.
+        # It calls api.resend.com:443.
+        RESEND_API_KEY: manual
+      # One small Python process: 41 MiB after a burst of submissions, in a
+      # test with the same limits as the server (2026-10-21).
+      memory: 128m
+      # The backend refuses bodies over 16 KB itself; Caddy stops anything
+      # past 20KB first.
+      max_body: 20KB
 
   - name: epb-stock
     domain: epbstock.com.ar

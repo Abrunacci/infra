@@ -161,7 +161,8 @@
                   { "not": { "required": ["health"] } },
                   { "not": { "required": ["paths"] } },
                   { "not": { "required": ["private_paths"] } },
-                  { "not": { "required": ["max_body"] } }
+                  { "not": { "required": ["max_body"] } },
+                  { "not": { "required": ["client_ip_header"] } }
                 ]
               }
             },
@@ -283,6 +284,11 @@
           "description": "Largest request body Caddy passes to the backend, in KB or MB, such as 64KB for a form. Larger ones get 413 without reaching it. Defaults to 10MB. Only with a subdomain.",
           "type": "string",
           "pattern": "^([1-9][0-9]{0,4}KB|[1-9][0-9]?MB)$"
+        },
+        "client_ip_header": {
+          "description": "A request header Caddy sets to the visitor's address before passing the request on, replacing any value the visitor sent, such as CF-Connecting-IP for a backend that reads the visitor there. Only with a subdomain.",
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"
         },
         "cpus": {
           "description": "CPU limit of the container, in CPUs, from 0.1 to 1 (the Droplet has one). Defaults to 0.5.",
