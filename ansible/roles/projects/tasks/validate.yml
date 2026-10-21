@@ -17,11 +17,15 @@
 - name: Check the registry as a whole
   ansible.builtin.assert:
     that:
-      - projects_registry.keys() | list | sort == ['domains', 'projects']
+      - projects_registry.keys() | list | sort == ['domains', 'projects', 'servers']
       - projects_registry.domains is sequence
       - projects_registry.domains is not string
       - projects_registry.domains is not mapping
       - projects_registry.domains | length > 0
+      - projects_registry.servers is sequence
+      - projects_registry.servers is not string
+      - projects_registry.servers is not mapping
+      - projects_registry.servers | length > 0
       - projects_registry.projects is sequence
       - projects_registry.projects is not string
       - projects_registry.projects is not mapping
@@ -36,9 +40,9 @@
       # database role (x_app) must not be project x's app role.
       - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
     fail_msg: >-
-      projects.yml: it must hold only a domains list and a projects list, with unique names, hostnames, titles
-      (of the projects with a subdomain) and deploy keys, and no project with a database named like another
-      one's plus -app.
+      projects.yml: it must hold only a domains list, a servers list and a projects list, with unique names,
+      hostnames, titles (of the projects with a subdomain) and deploy keys, and no project with a database named
+      like another one's plus -app.
     quiet: true
   vars:
     projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
@@ -97,8 +101,42 @@
   vars:
     projects_domain_names: "{{ projects_registry.domains | map(attribute='name', default=none) | list }}"
 
+# Each server is a hostname under one of the domains (Terraform creates its
+# records there), listed once.
+- name: Check each server
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | list == ['name']
+      - item.name is string and item.name | length <= 253
+      - item.name is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z')
+      - item.name is search('\.(' ~ (projects_domain_names | map('regex_escape') | join('|')) ~ ')\Z')
+      - projects_server_names | select('equalto', item.name) | list | length == 1
+    fail_msg: >-
+      projects.yml: every server must be a mapping with only a name, a hostname under one of the domains, listed
+      once ({{ item.name | default(item) }}).
+    quiet: true
+  loop: "{{ projects_registry.servers }}"
+  loop_control:
+    label: "{{ item.name | default(item) }}"
+  vars:
+    projects_domain_names: "{{ projects_registry.domains | map(attribute='name') | list }}"
+    projects_server_names: "{{ projects_registry.servers | map(attribute='name', default=none) | list }}"
+
+# Ansible connects to each server by the name projects.yml gives it (the
+# inventory's host): a host that is not listed would otherwise see no
+# projects at all, and take every one of them off.
+- name: Check that this host is a server in the registry
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in projects_registry.servers | map(attribute='name') | list
+    fail_msg: >-
+      {{ inventory_hostname }} is not in projects.yml's servers ({{ projects_registry.servers
+      | map(attribute='name') | join(', ') }}). The inventory's host must be the server's name there.
+    quiet: true
+
 # redirect_from: each name is a domain in domains or under one, and no
-# hostname is served twice (a project, a www redirect, server or status).
+# hostname is served twice (a project, a www redirect, a server or status).
 - name: Check the redirects
   ansible.builtin.assert:
     that:
@@ -113,7 +151,7 @@
       - projects_all_hosts | unique | length == projects_all_hosts | length
     fail_msg: >-
       projects.yml: every redirect_from entry must be a list of hostnames, each a domain in domains or under
-      one, and no hostname may be used twice (by a project, its www redirect, a redirect_from, server or status).
+      one, and no hostname may be used twice (by a project, its www redirect, a redirect_from, a server or status).
     quiet: true
   vars:
     projects_domain_names: "{{ projects_registry.domains | map(attribute='name') | list }}"
@@ -121,7 +159,8 @@
       {{ projects_registry.projects | selectattr('redirect_from', 'defined') | map(attribute='redirect_from')
          | flatten | list }}
     projects_all_hosts: >-
-      {{ ['server', 'status'] | map('regex_replace', '$', '.' ~ domain) | list
+      {{ projects_registry.servers | map(attribute='name') | list
+         + ['status.' ~ domain]
          + project_hosts.values() | list
          + projects_registry.projects | selectattr('subdomain', 'defined') | selectattr('subdomain', 'equalto', '@')
            | selectattr('site') | map(attribute='name') | map('extract', project_hosts)
@@ -136,6 +175,7 @@
       # restore-drill: its database would be backup-restore's scratch one.
       - item.name not in ['postgres', 'template0', 'template1', 'restore-drill']
       - item.domain is not defined or item.domain in projects_registry.domains | map(attribute='name') | list
+      - item.server is not defined or item.server in projects_registry.servers | map(attribute='name') | list
       # "@" is the domain itself; www is reserved for its redirect. Without a
       # subdomain the project is internal.
       - >-
@@ -248,7 +288,7 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, domain, subdomain, redirect_from, title, repo, site, database,
+    projects_allowed_keys: [name, server, domain, subdomain, redirect_from, title, repo, site, database,
                             permissions_policy, referrer_policy, content_security_policy, backend, deploy_key]
     projects_referrer_policies: [no-referrer, no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin,
                                  strict-origin, strict-origin-when-cross-origin, unsafe-url]
@@ -422,10 +462,13 @@
       - projects_source[0].backend is defined and projects_source[0].backend is mapping
       - projects_source[0].backend.port is defined
       - (projects_source[0].backend.secrets | default({})).get(item.link.key) in ['generated', 'manual']
+      # The value is copied, and the network shared, on one server.
+      - projects_source[0].server | default(projects_registry.servers[0].name) == projects_linking.server
+        | default(projects_registry.servers[0].name)
     fail_msg: >-
       projects.yml: {{ item.project }}'s secret {{ item.key }} links to {{ item.link.from | default('?') }}'s
-      {{ item.link.key | default('?') }}. It must be another project, with a backend that has a port, and that
-      declares that key as a generated or manual secret.
+      {{ item.link.key | default('?') }}. It must be another project on the same server, with a backend that has a
+      port, and that declares that key as a generated or manual secret.
     quiet: true
   loop: "{{ projects_links }}"
   loop_control:
@@ -433,6 +476,7 @@
   vars:
     projects_source: >-
       {{ projects_registry.projects | selectattr('name', 'equalto', item.link.from | default('')) | list }}
+    projects_linking: "{{ projects_registry.projects | selectattr('name', 'equalto', item.project) | first }}"
 
 # An env value that names another project's backend (http://PROJECT-backend:PORT/...)
 # only works over link-PROJECT: this backend must link to it with a secret,
@@ -456,6 +500,18 @@
     projects_targets: >-
       {{ (projects_registry.projects | selectattr('name', 'equalto', item.project) | first).backend.secrets
          | default({}) | dict2items | map(attribute='value') | select('mapping') | map(attribute='from') | list }}
+
+# From here on, and in every role, the registry is this server's: its projects
+# only, the ones whose server is this host (or, without one, the first
+# server). The rest of the file, already checked above, belongs to the other
+# servers' runs.
+- name: Keep this server's projects
+  ansible.builtin.set_fact:
+    projects_registry: >-
+      {{ projects_registry | combine({'projects': projects_registry.projects
+         | selectattr('server', 'defined') | selectattr('server', 'equalto', inventory_hostname) | list
+         + (projects_registry.projects | rejectattr('server', 'defined') | list
+            if inventory_hostname == projects_registry.servers[0].name else [])}) }}
 
 # Databases. The playbook never drops one, and a projects.yml that would leave
 # one without its project stops the play here, before any change: taking a

@@ -1,6 +1,6 @@
 output "server_fqdn" {
-  description = "Hostname to reach the server over SSH and from Ansible."
-  value       = "server.${local.primary_domain}"
+  description = "Hostname to reach the first server over SSH and from Ansible."
+  value       = local.primary_server
 }
 
 output "ipv4_address" {
@@ -14,8 +14,13 @@ output "ipv6_address" {
 }
 
 output "hostnames" {
-  description = "Every hostname that points at the Droplet."
+  description = "Every hostname that points at a Droplet."
   value       = sort(keys(local.hostnames))
+}
+
+output "server_hostnames" {
+  description = "The hostnames that point at each server, by server."
+  value       = { for srv in distinct(local.servers) : srv => sort([for h in values(local.hostnames) : h.name if h.server == srv]) }
 }
 
 output "dnssec_ds" {

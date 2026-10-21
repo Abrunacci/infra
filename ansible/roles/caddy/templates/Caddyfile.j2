@@ -43,8 +43,9 @@
 }
 
 # Serves no application. It gives Caddy a certificate to obtain right after
-# provisioning, which proves DNS, the CAA records and ports 80/443 work.
-server.{{ domain }} {
+# provisioning, which proves DNS, the CAA records and ports 80/443 work. The
+# server's own name, as projects.yml (servers) and the inventory give it.
+{{ inventory_hostname }} {
 	import access_log
 	respond 404
 }

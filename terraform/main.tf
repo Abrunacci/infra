@@ -5,48 +5,74 @@ locals {
   registry = yamldecode(file("${path.module}/../projects.yml"))
   projects = local.registry.projects
 
-  # Every domain, each a Cloudflare zone. The first one is the server's own:
-  # server and status live there, and so does every project without a domain.
+  # Every domain, each a Cloudflare zone. The first one holds the status page,
+  # and every project without a domain.
   domains        = [for d in local.registry.domains : d.name]
   primary_domain = local.domains[0]
+
+  # Every server, by its hostname. The first one serves the status page and
+  # runs every project without a server.
+  servers        = [for s in local.registry.servers : s.name]
+  primary_server = local.servers[0]
+  # The zone each server's records go in ("" when it is under none of the
+  # domains: the precondition in dns.tf says so). distinct(): a repeated
+  # server must reach the precondition, not fail here as a duplicate key.
+  server_zones = {
+    for s in distinct(local.servers) : s => concat([for d in local.domains : d if endswith(s, ".${d}")], [""])[0]
+  }
+  # Each server's Droplet, by hostname. A server in projects.yml with no
+  # Droplet here gets "" and the precondition in dns.tf says so.
+  server_ipv4 = { (local.primary_server) = digitalocean_droplet.server.ipv4_address }
+  server_ipv6 = { (local.primary_server) = digitalocean_droplet.server.ipv6_address }
   # Each domain's zone ID (TF_VAR_cloudflare_zone_ids), or "" when it is
   # missing: the preconditions in dns.tf then say which one.
   zone_ids = { for d in local.domains : d => lookup(var.cloudflare_zone_ids, d, "") }
 
-  # Public projects (the ones with a subdomain), each with its domain.
-  # Internal projects have no subdomain, and no DNS record.
+  # Public projects (the ones with a subdomain), each with its domain and its
+  # server. Internal projects have no subdomain, and no DNS record.
   public_projects = [
-    for p in local.projects : merge(p, { domain = lookup(p, "domain", local.primary_domain) })
+    for p in local.projects : merge(p, {
+      domain = lookup(p, "domain", local.primary_domain)
+      server = lookup(p, "server", local.primary_server)
+    })
     if lookup(p, "subdomain", null) != null
   ]
   subdomains = [for p in local.public_projects : p.subdomain]
   reserved   = ["server", "status", "www"]
 
   # Each project's redirect_from, in the zone of the domain it is, or is
-  # under ("" when none is: the precondition in dns.tf says so).
+  # under ("" when none is: the precondition in dns.tf says so), on the
+  # project's server, whose Caddy answers it.
   redirect_hosts = flatten([
     for p in local.public_projects : [
-      for r in lookup(p, "redirect_from", []) :
-      { name = r, zone = concat([for d in local.domains : d if r == d || endswith(r, ".${d}")], [""])[0] }
+      for r in lookup(p, "redirect_from", []) : {
+        name   = r
+        zone   = concat([for d in local.domains : d if r == d || endswith(r, ".${d}")], [""])[0]
+        server = p.server
+      }
     ]
   ])
 
-  # Every hostname that points at the Droplet, with the domain whose zone
-  # holds its records:
-  #   server.<first domain> -> SSH/Ansible target, so no IP address is ever
-  #                            written in the repo
-  #   status.<first domain> -> Gatus status page
+  # Every hostname that points at a Droplet, with the domain whose zone holds
+  # its records and the server it points at:
+  #   each server's own name -> SSH/Ansible target, so no IP address is ever
+  #                             written in the repo
+  #   status.<first domain>  -> Gatus status page, on the first server
   #   one per public project: its subdomain under its domain, or the domain
   #   itself for "@"; plus www.<domain> when a project with a site is on the
   #   domain itself, and each of its redirect_from (their redirects live in
-  #   that site's Caddy file)
+  #   that site's Caddy file); all on the project's server
   hostname_list = concat(
-    [for h in ["server", "status"] : { name = "${h}.${local.primary_domain}", zone = local.primary_domain }],
+    [for s in local.servers : { name = s, zone = local.server_zones[s], server = s }],
+    [{ name = "status.${local.primary_domain}", zone = local.primary_domain, server = local.primary_server }],
     [
       for p in local.public_projects :
-      { name = p.subdomain == "@" ? p.domain : "${p.subdomain}.${p.domain}", zone = p.domain }
+      { name = p.subdomain == "@" ? p.domain : "${p.subdomain}.${p.domain}", zone = p.domain, server = p.server }
     ],
-    [for p in local.public_projects : { name = "www.${p.domain}", zone = p.domain } if p.subdomain == "@" && p.site],
+    [
+      for p in local.public_projects : { name = "www.${p.domain}", zone = p.domain, server = p.server }
+      if p.subdomain == "@" && p.site
+    ],
     local.redirect_hosts,
   )
   # distinct(): a repeated hostname must reach the preconditions in dns.tf,

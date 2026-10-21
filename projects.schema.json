@@ -1,16 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Project registry (projects.yml)",
-  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names, hostnames and deploy keys, a project domain that is in domains) or several fields (health inside paths, a name in both env and secrets) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
+  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names, hostnames and deploy keys, a project domain that is in domains, a project server that is in servers) or several fields (health inside paths, a name in both env and secrets) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
   "type": "object",
-  "required": ["domains", "projects"],
+  "required": ["domains", "servers", "projects"],
   "additionalProperties": false,
   "properties": {
     "domains": {
-      "description": "Every domain the server answers for, each a Cloudflare zone. The first one is the server's own (server.<domain>, status.<domain>) and the default domain of every project. Unique names are checked by the playbook and Terraform.",
+      "description": "Every domain the servers answer for, each a Cloudflare zone. The first one holds the status page (status.<domain>) and is the default domain of every project. Unique names are checked by the playbook and Terraform.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/domain" }
+    },
+    "servers": {
+      "description": "Every server (Droplet), by its hostname, which Ansible's inventory uses too. The first one is the default server of every project, and serves the status page. Unique names, each under a domain in domains, are checked by the playbook and Terraform.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/server" }
     },
     "projects": {
       "type": "array",
@@ -61,6 +68,17 @@
         "required": ["mail_forward", "proton"]
       }
     },
+    "server": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "The server's hostname, such as server.abrunacci.dev: a name under one of the domains (Terraform creates its A/AAAA records there).",
+          "$ref": "#/$defs/domain_name"
+        }
+      }
+    },
     "label": {
       "description": "A lowercase DNS label.",
       "type": "string",
@@ -80,6 +98,10 @@
         },
         "domain": {
           "description": "One of the domains in domains (checked by the playbook and Terraform). Without it, the first one.",
+          "$ref": "#/$defs/domain_name"
+        },
+        "server": {
+          "description": "The server the project runs on: one of the names in servers (checked by the playbook and Terraform). Without it, the first one. Its DNS records point there, and only that server's playbook run deploys it.",
           "$ref": "#/$defs/domain_name"
         },
         "subdomain": {
