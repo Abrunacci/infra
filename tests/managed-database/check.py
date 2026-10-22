@@ -3,8 +3,8 @@
 Demo never touches the managed database (D21): no file of a server whose
 database is local names the cluster, its ports, its CA, its admin user, its
 client network or another server's bucket. The managed server's files do
-all of that instead, and nothing of the local PostgreSQL. Exits 1 on any
-difference, listing them.
+all of that instead, and nothing of the local PostgreSQL. Each server sets
+up only its own projects. Exits 1 on any difference, listing them.
 
     python3 check.py OUT_DIR PROJECTS_YML
 """
@@ -50,6 +50,24 @@ def check(out, registry):
         if facts["database_managed"] != is_managed:
             problems.append(f"{name}: database_managed is {facts['database_managed']}, expected {is_managed}")
         buckets[name] = facts["backup_bucket"]
+        # Each server sets up only its own projects (a project's server
+        # defaults to the first one) and their backends. render.yml's stand-in
+        # (subdomain stand-in) is not in projects.yml.
+        registered = json.loads((directory / "projects.json").read_text())["projects"]
+        stand_ins = {p["name"] for p in registered if p["subdomain"] == "stand-in"}
+        own = [p for p in registry["projects"] if p.get("server", first) == name]
+        expected = sorted(p["name"] for p in own)
+        found = sorted(p["name"] for p in registered if p["name"] not in stand_ins)
+        if found != expected:
+            problems.append(f"{name}: projects.json lists {found}, expected {expected}")
+        expected = sorted(p["name"] for p in own if "backend" in p)
+        found = sorted(
+            c.name.removesuffix(".compose.yml")
+            for c in (directory / "projects").glob("*.compose.yml")
+            if c.name.removesuffix(".compose.yml") not in stand_ins
+        )
+        if found != expected:
+            problems.append(f"{name}: backends rendered {found}, expected {expected}")
         conf = (directory / "database.conf").read_text()
         composes = list((directory / "projects").glob("*.compose.yml"))
         if not is_managed:
