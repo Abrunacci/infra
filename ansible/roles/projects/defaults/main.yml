@@ -60,18 +60,21 @@ projects_backend_default_max_body: 10MB
 projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]
 
 # Linked secrets ({from: PROJECT, key: KEY}), one item per secret:
-# {project, key, link}. Checked in validate.yml.
+# {project, server, key, link}. Checked in validate.yml.
+# A project without a server is on the first one.
 projects_links: >-
   {%- set links = [] -%}
   {%- for p in projects_registry.projects if p.backend is defined and p.backend is mapping -%}
   {%-   for key, kind in (p.backend.secrets | default({})).items() if kind is mapping -%}
-  {%-     set _ = links.append({'project': p.name, 'key': key, 'link': kind}) -%}
+  {%-     set _ = links.append({'project': p.name, 'server': p.server | default(projects_registry.servers[0].name),
+                                'key': key, 'link': kind}) -%}
   {%-   endfor -%}
   {%- endfor -%}
   {{ links }}
 # Env values that name another backend on the server
 # (http://PROJECT-backend[:PORT]/...), one item per value:
-# {project, key, value, host, port}. Checked in validate.yml.
+# {project, server, key, value, host, port, linked}, where linked is every
+# project this one links a secret from. Checked in validate.yml.
 projects_backend_url: '^https?://([a-z0-9-]+)-backend(?::([0-9]*))?(?:[/?#]|$)'
 projects_backend_urls: >-
   {%- set urls = [] -%}
@@ -79,7 +82,10 @@ projects_backend_urls: >-
   {%-   for key, value in (p.backend.env | default({})).items()
           if value is string and value is match(projects_backend_url) -%}
   {%-     set m = value | regex_search(projects_backend_url, '\\1', '\\2') -%}
-  {%-     set _ = urls.append({'project': p.name, 'key': key, 'value': value, 'host': m[0], 'port': m[1] or ''}) -%}
+  {%-     set _ = urls.append({'project': p.name, 'server': p.server | default(projects_registry.servers[0].name),
+                               'key': key, 'value': value, 'host': m[0], 'port': m[1] or '',
+                               'linked': (p.backend.secrets | default({})).values() | select('mapping')
+                                         | map(attribute='from') | list}) -%}
   {%-   endfor -%}
   {%- endfor -%}
   {{ urls }}

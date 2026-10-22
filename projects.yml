@@ -29,7 +29,10 @@
 #
 # projects:
 #   name       directories, registry entry and, with a database, the database
-#              and user (with - turned into _)
+#              and user (with - turned into _). Used once per server: a
+#              project on two servers is two entries with the same name, each
+#              with its own server (and its own hostnames, title and
+#              deploy_key, which are unique in the whole file)
 #   server     one of the servers above (optional, defaults to the first): its
 #              DNS records point there, and only that server's playbook run
 #              sets the project up

@@ -35,6 +35,11 @@ bans fail2ban made in the last 24 hours, per jail, from its log. It emails the
 counts (never the addresses) when a jail outside quiet_jails banned anyone:
 the SSH jail bans every day, the sites' jails should not.
 
+On any server but the first in projects.yml, server names it (the playbook
+writes it there) and every subject starts with it in brackets, so two
+servers' emails about one project can be told apart. The first server's
+subjects have no prefix, as before there were others.
+
 Emails go to the alerts' address through the alerts' channel (only email):
 the Resend key gatus-credentials stored, the same sender and recipient as
 Gatus. Every run then pushes its result to the status page's "Log alerts"
@@ -77,6 +82,7 @@ DIGEST_DAY = os.path.join(STATE_DIR, "bans-digest-day")
 # A ban restored after a restart says "Restore Ban" and is not counted again.
 BAN = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\S* fail2ban\.actions\s.*?NOTICE\s+\[([^\]]+)\] Ban (\S+)")
 PROJECT = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
+SERVER = re.compile(r"([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
 
 
 class Failed(Exception):
@@ -84,7 +90,7 @@ class Failed(Exception):
 
 
 def load_rules(path):
-    """Returns (rules, max_lines, digest), each rule with its patterns compiled."""
+    """Returns (rules, max_lines, digest, server), each rule with its patterns compiled."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -92,8 +98,11 @@ def load_rules(path):
         raise Failed(f"cannot read {path}: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
         raise Failed(f"{path}: no rules list")
-    if set(data) - {"rules", "max_lines", "bans_digest"}:
-        raise Failed(f"{path}: unknown keys {sorted(set(data) - {'rules', 'max_lines', 'bans_digest'})}")
+    if set(data) - {"rules", "max_lines", "bans_digest", "server"}:
+        raise Failed(f"{path}: unknown keys {sorted(set(data) - {'rules', 'max_lines', 'bans_digest', 'server'})}")
+    server = data.get("server")
+    if server is not None and (not isinstance(server, str) or not SERVER.match(server)):
+        raise Failed(f"{path}: server must be a hostname")
     max_lines = data.get("max_lines")
     if not isinstance(max_lines, int) or isinstance(max_lines, bool) or not 1 <= max_lines <= 200:
         raise Failed(f"{path}: max_lines must be a number from 1 to 200")
@@ -141,7 +150,7 @@ def load_rules(path):
                 "subject": load_subject(rule.get("subject"), where),
             }
         )
-    return rules, max_lines, load_digest(data.get("bans_digest"), path)
+    return rules, max_lines, load_digest(data.get("bans_digest"), path), server
 
 
 def load_digest(digest, path):
@@ -302,6 +311,12 @@ def compose(matches, max_lines):
     return subject, "\n".join(parts) + "\n"
 
 
+def tagged(mail, server):
+    """The (subject, body) with the server's name before the subject, when there is one."""
+    subject, body = mail
+    return (f"[{server}] {subject}" if server else subject), body
+
+
 def send(subject, body):
     conf = read_env(GATUS_CONF)
     if conf.get("GATUS_ALERT_CHANNEL") != "email":
@@ -422,7 +437,7 @@ def read_digest_day():
         return ""
 
 
-def bans_digest(digest):
+def bans_digest(digest, server):
     """Once a day, after digest's hour (UTC): emails the day's bans if a loud jail banned anyone."""
     utc = datetime.now(UTC)
     today = f"{utc:%Y-%m-%d}"
@@ -430,7 +445,7 @@ def bans_digest(digest):
         return
     mail = compose_digest(count_bans(digest, datetime.now(UTC)), digest)
     if mail:
-        send(*mail)
+        send(*tagged(mail, server))
         print("emailed the bans digest")
     os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".digest.")
@@ -439,7 +454,7 @@ def bans_digest(digest):
     os.replace(tmp, DIGEST_DAY)
 
 
-def run(rules, max_lines, digest):
+def run(rules, max_lines, digest, server):
     """One timer run. Returns how many lines were emailed."""
     cursor = read_cursor()
     if not rules or cursor is None:
@@ -451,17 +466,17 @@ def run(rules, max_lines, digest):
     else:
         matches, last = scan(rules, [f"--after-cursor={cursor}"])
         if matches:
-            send(*compose(matches, max_lines))
+            send(*tagged(compose(matches, max_lines), server))
             print(f"emailed {len(matches)} line(s)")
         if last:
             save_cursor(last)
         emailed = len(matches)
     if digest:
-        bans_digest(digest)
+        bans_digest(digest, server)
     return emailed
 
 
-def dry_run(rules, max_lines, digest, since):
+def dry_run(rules, max_lines, digest, server, since):
     if since is not None:
         position = [f"--since={since}"]
     else:
@@ -474,12 +489,13 @@ def dry_run(rules, max_lines, digest, since):
     if not matches:
         print("nothing to email")
     else:
-        subject, body = compose(matches, max_lines)
+        subject, body = tagged(compose(matches, max_lines), server)
         print(f"Subject: {subject}\n\n{body}", end="")
     if digest:
         # The digest as it would be now, whether or not today's was sent.
         counts = count_bans(digest, datetime.now(UTC))
         mail = compose_digest(counts, digest)
+        mail = mail and tagged(mail, server)
         print(f"\n--- bans digest (sent once a day after {digest['hour']:02d}:00 UTC) ---")
         if mail:
             print(f"Subject: {mail[0]}\n\n{mail[1]}", end="")
@@ -492,7 +508,7 @@ def main():
     args = sys.argv[1:]
     try:
         if len(args) == 2 and args[0] == "--check":
-            rules, _, _ = load_rules(args[1])
+            rules, _, _, _ = load_rules(args[1])
             print(f"{len(rules)} rule(s)")
             return 0
         if os.geteuid() != 0:

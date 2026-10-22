@@ -18,9 +18,12 @@ ui:
 
 # One group per public project (one with a subdomain): its site, its
 # backend's health path, or both. The certificate is checked on the first.
+{# Every server's projects (projects_registry_all), each host computed as in
+   group_vars' project_hosts, which only has this server's. #}
 endpoints:
-{% for p in projects_registry.projects if p.subdomain is defined %}
-{%   set host = project_hosts[p.name] %}
+{% for p in projects_registry_all.projects if p.subdomain is defined %}
+{%   set d = p.domain | default(domain) %}
+{%   set host = d if p.subdomain == '@' else p.subdomain ~ '.' ~ d %}
 {%   set checks = [] %}
 {%   if p.site %}
 {%     set _ = checks.append({'name': 'Site', 'path': '/', 'conditions': ['[STATUS] == 200']}) %}

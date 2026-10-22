@@ -16,5 +16,10 @@
 {%- endfor -%}
 {%- set digest = {'hour': gatus_log_alerts_bans_digest_hour | int, 'log': '/var/log/fail2ban.log',
                   'quiet_jails': gatus_log_alerts_bans_quiet_jails} -%}
-{{ {'rules': ns.rules, 'max_lines': gatus_log_alerts_max_lines | int, 'bans_digest': digest}
-   | to_nice_json(indent=2, ensure_ascii=False) }}
+{#- On any server but the first, its name, so its emails say where they come
+    from (the first one's subjects stay as they were). -#}
+{%- set settings = {'rules': ns.rules, 'max_lines': gatus_log_alerts_max_lines | int, 'bans_digest': digest} -%}
+{%- if inventory_hostname != projects_registry_all.servers[0].name -%}
+{%-   set _ = settings.update({'server': inventory_hostname}) -%}
+{%- endif -%}
+{{ settings | to_nice_json(indent=2, ensure_ascii=False) }}

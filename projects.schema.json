@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Project registry (projects.yml)",
-  "description": "Checked in pre-commit and CI. Rules that span several projects (unique names, hostnames and deploy keys, a project domain that is in domains, a project server that is in servers) or several fields (health inside paths, a name in both env and secrets) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
+  "description": "Checked in pre-commit and CI. Rules that span several projects (a name used once per server; unique hostnames, titles and deploy keys; a project domain that is in domains, a project server that is in servers) or several fields (health inside paths, a name in both env and secrets) are checked by the playbook (roles/projects/tasks/validate.yml); Terraform checks subdomains too.",
   "type": "object",
   "required": ["domains", "servers", "projects"],
   "additionalProperties": false,
@@ -90,7 +90,7 @@
       "additionalProperties": false,
       "properties": {
         "name": {
-          "description": "Directories, registry entry and, with a database, the database and user (with - turned into _).",
+          "description": "Directories, registry entry and, with a database, the database and user (with - turned into _). Used once per server: a project on two servers is two entries with the same name, each with its own server (checked by the playbook).",
           "allOf": [
             { "$ref": "#/$defs/label" },
             { "not": { "enum": ["postgres", "template0", "template1", "restore-drill"] } }

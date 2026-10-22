@@ -9,78 +9,100 @@
      target     the backup's maximum age in hours, the systemd unit, the
                 project, the drill's maximum age in days, the days of
                 warning before a credential expires (- for log-alerts)
+     server     the server that pushes it: gatus-heartbeats.conf.j2 keeps
+                this server's only, while Gatus waits for every server's
+   Every server has its own: the first one's groups are named as they always
+   were (Server, and a project's name), and another server's add its name
+   (Server - server.example.com), so their keys never meet. ASCII only: Gatus
+   keeps any other character in the key, which is pushed in a URL.
    The groups and names are on the public page: generic, nothing internal. #}
 {% macro key(group, name) -%}
 {{ group | lower | trim | regex_replace('[/_.,# +&]', '-') }}_{{ name | lower | trim | regex_replace('[/_.,# +&]', '-') }}
 {%- endmacro %}
-- group: Server
+{% set first = projects_registry_all.servers[0].name %}
+{% for server in projects_registry_all.servers | map(attribute='name') %}
+{%   set suffix = '' if server == first else ' - ' ~ server %}
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Nightly backup
-  key: {{ key('Server', 'Nightly backup') }}
+  key: {{ key('Server' ~ suffix, 'Nightly backup') }}
+  server: {{ server }}
   check: backup
   target: "{{ gatus_backup_max_age_hours }}"
   interval: {{ gatus_backup_max_age_hours }}h
   failure_threshold: 1
   success_threshold: 1
   description: The nightly backup failed, or has not succeeded for {{ gatus_backup_max_age_hours }} hours. On the server, see /var/lib/infra/backup/last-run and journalctl -t backup.
-- group: Server
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Monitoring agent
-  key: {{ key('Server', 'Monitoring agent') }}
+  key: {{ key('Server' ~ suffix, 'Monitoring agent') }}
+  server: {{ server }}
   check: service
   target: do-agent
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: do-agent is not running, so DigitalOcean's memory and disk alerts are blind. On the server, see systemctl status do-agent.
-- group: Server
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Log alerts
-  key: {{ key('Server', 'Log alerts') }}
+  key: {{ key('Server' ~ suffix, 'Log alerts') }}
+  server: {{ server }}
   check: log-alerts
   target: "-"
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: log-alerts could not read the logs or send its email, so the lines it watches (log_alerts in projects.yml, plus SSH logins, sudo failures, failed deploys and the bans digest) are not being emailed. On the server, see journalctl -u log-alerts.
-- group: Server
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Restore drill
-  key: {{ key('Server', 'Restore drill') }}
+  key: {{ key('Server' ~ suffix, 'Restore drill') }}
+  server: {{ server }}
   check: drill
   target: "{{ gatus_drill_max_days }}"
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: A project with a database has had no passing restore drill for {{ gatus_drill_max_days }} days. Have the age private key at hand; it is not on the server. On the server, run sudo backup-restore drill PROJECT (ansible/README.md, The restore drill, once a month).
-- group: Server
+{%   if server == first %}
+{#   The credentials are the repo's, not a server's: checked once. #}
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Credentials
-  key: {{ key('Server', 'Credentials') }}
+  key: {{ key('Server' ~ suffix, 'Credentials') }}
+  server: {{ server }}
   check: credentials
   target: "{{ gatus_credentials_warn_days }}"
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: A credential expires within {{ gatus_credentials_warn_days }} days. Rotate it, write its new date in terraform/README.md (Credentials) and run the playbook with --tags gatus.
-{% for p in projects_registry.projects if p.subdomain is not defined and p.backend is defined %}
+{%   endif %}
+{%   for p in projects_registry_all.projects if p.server | default(first) == server
+        and p.subdomain is not defined and p.backend is defined %}
 {#   Grouped by the project's name, not its title: the name is what the key
      needs (letters, digits and -), and it is already public in the repo. #}
-- group: {{ p.name }}
+- group: {{ (p.name ~ suffix) | to_json }}
   name: Health
-  key: {{ key(p.name, 'Health') }}
+  key: {{ key(p.name ~ suffix, 'Health') }}
+  server: {{ server }}
   check: container
   target: {{ p.name }}
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: The backend's container is not running or its HEALTHCHECK fails. On the server, see sudo backend-status {{ p.name }}.
-{% endfor %}
-{% for p in projects_registry.projects if p.backend is defined and p.backend.worker is defined %}
+{%   endfor %}
+{%   for p in projects_registry_all.projects if p.server | default(first) == server
+        and p.backend is defined and p.backend.worker is defined %}
 {#   A worker has no URL either: its health command, run by Docker. While it
      fails, the project keeps running without what the worker does. #}
-- group: {{ p.name }}
+- group: {{ (p.name ~ suffix) | to_json }}
   name: Worker
-  key: {{ key(p.name, 'Worker') }}
+  key: {{ key(p.name ~ suffix, 'Worker') }}
+  server: {{ server }}
   check: container
   target: {{ p.name }}/worker
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
   description: The worker's container is not running or its health command fails, so its jobs are not being done. On the server, see sudo backend-status {{ p.name }} and sudo journalctl -t backend.{{ p.name }}-worker.
+{%   endfor %}
 {% endfor %}
