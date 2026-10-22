@@ -327,7 +327,9 @@ projects:
         # The links in its emails (invitations, password resets, the
         # subscription's notices) and the only origin allowed to call the API.
         PUBLIC_APP_URL: "https://app.epbstock.com.ar"
-        CORS_ORIGINS: "https://app.epbstock.com.ar"
+        # Also the origins EPB accepts writes from (its same-origin check): every
+        # name in also_serves must be here, or logging in there is refused.
+        CORS_ORIGINS: "https://app.epbstock.com.ar,https://stage.epbstock.com.ar"
         TRUST_FORWARDED_FOR: "true"
         MAIL_BACKEND: "resend"
         MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
