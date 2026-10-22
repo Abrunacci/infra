@@ -27,10 +27,14 @@
       tags: [caddy, projects]
     # Also with --tags projects: PostgreSQL joins each database's network, so
     # adding a project with a database changes PostgreSQL too.
+    # Neither on a server whose database is managed (projects.yml, servers):
+    # its databases are in the cluster.
     - role: postgres
       tags: [postgres, projects]
+      when: not database_managed
     - role: db_tunnel
       tags: [db_tunnel]
+      when: not database_managed
     - role: projects
       tags: [projects]
     - role: deploy

@@ -50,8 +50,11 @@
 	respond 404
 }
 
-# The status page (roles/gatus). Read-only from outside: only GET and HEAD
-# reach Gatus, so nothing on the internet can push a result to it.
+{% if is_first_server %}
+# The status page (roles/gatus), on the first server only. Read-only from
+# outside: only GET and HEAD reach Gatus, plus the other servers' heartbeats,
+# each one a POST to one of their own endpoints, with their own token
+# (gatus-heartbeats). Nothing else on the internet can push a result to it.
 status.{{ domain }} {
 	import access_log
 	encode zstd gzip
@@ -66,7 +69,17 @@ status.{{ domain }} {
 		-Server
 	}
 
+{% if other_servers | length > 0 %}
+	@write {
+		not method GET HEAD
+		not {
+			method POST
+			path_regexp ^/api/v1/endpoints/[a-z0-9-]+---({{ other_servers | map('regex_replace', '[/_.,# +&]', '-') | join('|') }})_[a-z0-9-]+/external$
+		}
+	}
+{% else %}
 	@write not method GET HEAD
+{% endif %}
 	respond @write 405
 
 	# Gatus' alias on the edge network. While it restarts, requests wait for
@@ -76,6 +89,7 @@ status.{{ domain }} {
 		lb_try_interval 250ms
 	}
 }
+{% endif %}
 
 # One file per project, written by Ansible. An empty directory is not an error.
 import sites/*.caddy

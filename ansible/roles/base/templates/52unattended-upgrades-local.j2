@@ -3,3 +3,8 @@ Unattended-Upgrade::Automatic-Reboot "{{ base_auto_reboot | ternary('true', 'fal
 Unattended-Upgrade::Automatic-Reboot-Time "{{ base_auto_reboot_time }}";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
+{% if ssh_via_tailscale %}
+// Tailscale too (its apt repository, cloud-init): SSH reaches this server
+// through it, so its fixes go in like the system's.
+Unattended-Upgrade::Origins-Pattern:: "origin=Tailscale";
+{% endif %}

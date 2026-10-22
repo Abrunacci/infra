@@ -9,9 +9,11 @@
       - backup_age_recipients | length > 0
       - backup_age_recipients | reject('match', '^age1[0-9a-z]{58}\Z') | list | length == 0
       - backup_cloudflare_account_id is match('^[0-9a-f]{32}\Z')
+      - inventory_hostname in backup_buckets
     fail_msg: >-
       Backups need backup_age_recipients (age public keys, age1..., in group_vars/all/main.yml; see
-      ansible/README.md, "Backups") and TF_VAR_cloudflare_account_id from terraform/.env loaded in this shell.
+      ansible/README.md, "Backups"), TF_VAR_cloudflare_account_id from terraform/.env loaded in this shell, and
+      this server's bucket in backup_buckets (roles/backup defaults, and terraform/backup-bucket).
     quiet: true
 
 - name: Install age

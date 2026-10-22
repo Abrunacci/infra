@@ -7,3 +7,9 @@ all:
   hosts:
     server.abrunacci.dev:
       ansible_user: ops
+    # Production: SSH only through Tailscale (ssh: tailscale in projects.yml),
+    # so Ansible connects to its name in the tailnet (MagicDNS), not to the
+    # public address its DNS name has.
+    server.epbstock.com.ar:
+      ansible_user: ops
+      ansible_host: epb-prod-01

@@ -86,16 +86,61 @@
     - { src: deploy-backend, dest: /usr/local/sbin/deploy-backend, mode: "0755" }
     - { src: backend-rollback, dest: /usr/local/sbin/backend-rollback, mode: "0755" }
     - { src: project-db, dest: /usr/local/sbin/project-db, mode: "0755" }
+    # A managed database's admin password (DATABASE_MODE=managed only).
+    - { src: database-credentials, dest: /usr/local/sbin/database-credentials, mode: "0755" }
   loop_control:
     label: "{{ item.dest }}"
 
-- name: Write PostgreSQL's host for the backend commands
+# A managed database: its CA (public), which every connection to it checks
+# (verify-full), and the client image its commands run (--pull never).
+- name: Write the managed database's CA
+  ansible.builtin.copy:
+    content: "{{ projects_managed_db.ca | trim }}\n"
+    dest: "{{ projects_database_ca }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: database_managed
+
+- name: Pull the managed database's client image
+  community.docker.docker_image_pull:
+    name: "{{ projects_db_client_image }}"
+    pull: not_present
+  when: database_managed
+
+- name: Write the database's settings for the backend commands
   ansible.builtin.template:
     src: database.conf.j2
     dest: /etc/infra/database.conf
     owner: root
     group: root
     mode: "0644"
+
+# After database.conf names the new image: a command starting now asks for it.
+- name: Remove older client images
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/prune-images, "{{ projects_db_client_image }}"]
+  register: projects_client_prune
+  changed_when: projects_client_prune.stdout | length > 0
+  when: database_managed
+
+# Written by database-credentials on the server; never passes through Ansible.
+# Only needed once a project on this server has a database.
+- name: Look for the managed database's admin password
+  ansible.builtin.stat:
+    path: "{{ infra_secrets_dir }}/database-admin.env"
+  register: projects_database_admin
+  when: database_managed
+
+- name: Require the managed database's admin password
+  ansible.builtin.assert:
+    that: projects_database_admin.stat.exists
+    fail_msg: >-
+      A project on this server has a database, and the managed cluster's admin password is not here yet. On the
+      server, run: sudo database-credentials (see ansible/README.md, "A server with a managed database"), then run
+      the playbook again.
+    quiet: true
+  when: database_managed and projects_backends | selectattr('database') | list | length > 0
 
 # Created empty once and never replaced: its values are set on the server
 # (project-secret) and never pass through Ansible.

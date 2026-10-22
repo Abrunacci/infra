@@ -42,10 +42,13 @@
       # Database roles are shared by the whole cluster: project x-app's
       # database role (x_app) must not be project x's app role.
       - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
+      # One managed cluster (terraform/production.tf), for one server.
+      - projects_registry.servers | selectattr('database', 'defined') | selectattr('database', 'equalto', 'managed')
+        | list | length <= 1
     fail_msg: >-
       projects.yml: it must hold only a domains list, a servers list and a projects list, with each name used
-      once per server, unique hostnames, titles (of the projects with a subdomain) and deploy keys, and no project
-      with a database named like another one's plus -app.
+      once per server, unique hostnames, titles (of the projects with a subdomain) and deploy keys, no project
+      with a database named like another one's plus -app, and at most one server with database: managed.
     quiet: true
   vars:
     # Each project's name and its server (the first one when it names none).
@@ -109,19 +112,28 @@
     projects_domain_names: "{{ projects_registry.domains | map(attribute='name', default=none) | list }}"
 
 # Each server is a hostname under one of the domains (Terraform creates its
-# records there), listed once.
+# records there), listed once, and optionally says where its databases are,
+# how SSH reaches it and the most memory and CPU one container may have.
 - name: Check each server
   ansible.builtin.assert:
     that:
       - item is mapping
-      - item.keys() | list == ['name']
+      - item.keys() | difference(['name', 'database', 'ssh', 'max_memory', 'max_cpus']) | length == 0
+      - item.name is defined
       - item.name is string and item.name | length <= 253
       - item.name is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z')
       - item.name is search('\.(' ~ (projects_domain_names | map('regex_escape') | join('|')) ~ ')\Z')
       - projects_server_names | select('equalto', item.name) | list | length == 1
+      - item.database | default('local') in ['local', 'managed']
+      - item.ssh | default('public') in ['public', 'tailscale']
+      - item.max_memory is not defined or (item.max_memory is string and item.max_memory is match(projects_memory_re))
+      - >-
+        item.max_cpus is not defined
+        or (item.max_cpus is number and item.max_cpus is not boolean and item.max_cpus >= 0.1 and item.max_cpus <= 2)
     fail_msg: >-
-      projects.yml: every server must be a mapping with only a name, a hostname under one of the domains, listed
-      once ({{ item.name | default(item) }}).
+      projects.yml: every server must be a mapping with a name, a hostname under one of the domains, listed once,
+      and optionally database (local or managed), ssh (public or tailscale), max_memory (64m to 2048m) and
+      max_cpus (0.1 to 2) ({{ item.name | default(item) }}). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.servers }}"
   loop_control:
@@ -141,6 +153,36 @@
       {{ inventory_hostname }} is not in projects.yml's servers ({{ projects_registry.servers
       | map(attribute='name') | join(', ') }}). The inventory's host must be the server's name there.
     quiet: true
+
+# A server whose database is managed: the cluster's private host, port, admin
+# user and CA, from Terraform's output (projects_managed_db_terraform_output,
+# roles/projects defaults), read once. The host must be the private one, so
+# the traffic stays in the VPC, where the cluster's firewall lets in only this
+# server.
+- name: Read the managed database's settings from Terraform
+  ansible.builtin.set_fact:
+    projects_managed_db: "{{ projects_managed_db_terraform_output | from_json }}"
+  when: database_managed and projects_managed_db is not defined
+
+- name: Check the managed database's settings
+  ansible.builtin.assert:
+    that:
+      - projects_managed_db is mapping
+      - projects_managed_db.keys() | list | sort == ['ca', 'host', 'port', 'user']
+      - projects_managed_db.host is string
+      - projects_managed_db.host is match('^private-[a-z0-9-]+(\.[a-z0-9-]+)+\Z')
+      - projects_managed_db.port is integer and projects_managed_db.port is not boolean
+      - projects_managed_db.port >= 1 and projects_managed_db.port <= 65535
+      - projects_managed_db.port != projects_db_pool_port | int
+      - projects_managed_db.user is string and projects_managed_db.user is match('^[a-z_][a-z0-9_]{0,62}\Z')
+      - projects_managed_db.ca is string
+      - projects_managed_db.ca is match('^-----BEGIN CERTIFICATE-----\n')
+    fail_msg: >-
+      {{ inventory_hostname }}'s database is managed (projects.yml), and Terraform's output production_database
+      (terraform -chdir=terraform output -json production_database) must give its private host, port, admin
+      user and CA. Run the playbook with terraform/.env loaded, after terraform apply.
+    quiet: true
+  when: database_managed
 
 # also_serves: each entry is a mapping with a name and, optionally,
 # noindex. Its names join the hostnames checked just below.
@@ -216,7 +258,8 @@
       - item.keys() | difference(projects_allowed_keys) | length == 0
       - item.name is string and item.name is match(projects_label)
       # restore-drill: its database would be backup-restore's scratch one.
-      - item.name not in ['postgres', 'template0', 'template1', 'restore-drill']
+      # defaultdb: a managed cluster's own (DigitalOcean).
+      - item.name not in ['postgres', 'template0', 'template1', 'restore-drill', 'defaultdb']
       - item.domain is not defined or item.domain in projects_registry.domains | map(attribute='name') | list
       - item.server is not defined or item.server in projects_registry.servers | map(attribute='name') | list
       # "@" is the domain itself; www is reserved for its redirect. Without a
@@ -364,14 +407,17 @@
       - projects_env.values() | map('length') | select('gt', 1024) | list | length == 0
       - projects_secrets.values() | select('string') | difference(['generated', 'manual', 'optional']) | length == 0
       - projects_secrets.values() | reject('string') | reject('mapping') | list | length == 0
-      - projects_memory is string and projects_memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
-      - projects_cpus is number and projects_cpus is not boolean and projects_cpus >= 0.1 and projects_cpus <= 1
+      - projects_memory is string and projects_memory is match(projects_memory_re)
+      - projects_memory[:-1] | int <= projects_server_max_memory[:-1] | int
+      - projects_cpus is number and projects_cpus is not boolean and projects_cpus >= 0.1
+      - projects_cpus <= projects_server_max_cpus
     fail_msg: >-
       projects.yml: invalid backend env, secrets, memory or cpus for {{ item.name }}. Names are uppercase
       (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
       in secrets but not both; env values are quoted strings on one line; secrets are generated, manual,
-      optional or {from: PROJECT, key: KEY}; memory goes from 64m to 512m; cpus is a number from 0.1 to 1.
-      See projects.schema.json.
+      optional or {from: PROJECT, key: KEY}; memory goes from 64m to its server's max_memory
+      ({{ projects_server_max_memory }}); cpus is a number from 0.1 to its server's max_cpus
+      ({{ projects_server_max_cpus }}). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
   loop_control:
@@ -382,6 +428,13 @@
     projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
     projects_cpus: "{{ item.backend.cpus | default(projects_backend_default_cpus) }}"
     projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
+    # The project's server's own limits (projects_server_limits in defaults).
+    projects_server_max_memory: &projects_server_max_memory >-
+      {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_memory
+         | default(projects_server_default_max_memory) }}
+    projects_server_max_cpus: >-
+      {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_cpus
+         | default(projects_server_default_max_cpus) }}
 
 # A backend's worker: a second container of the same image and release,
 # with its own command, health command and memory. The secrets it lists are
@@ -402,7 +455,8 @@
       - projects_commands | flatten(levels=1) | reject('string') | list | length == 0
       - projects_commands | flatten(levels=1) | reject('match', '^[^$\n\r]{1,256}\Z') | list | length == 0
       - projects_worker.memory is string
-      - projects_worker.memory is match('^(6[4-9]|[7-9][0-9]|[1-4][0-9]{2}|50[0-9]|51[0-2])m\Z')
+      - projects_worker.memory is match(projects_memory_re)
+      - projects_worker.memory[:-1] | int <= projects_server_max_memory[:-1] | int
       - >-
         projects_worker.stop_grace_period is not defined
         or (projects_worker.stop_grace_period is string
@@ -422,7 +476,8 @@
       - projects_shared_secrets | intersect(projects_worker_secrets) | length == 0
     fail_msg: >-
       projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
-      32 arguments), a memory from 64m to 512m, optionally a stop_grace_period from 1s to 120s, and optionally
+      32 arguments), a memory from 64m to its server's max_memory ({{ projects_server_max_memory }}), optionally a
+      stop_grace_period from 1s to 120s, and optionally
       secrets (only the worker gets them) and shared_secrets (both get them): names of the backend's own
       generated, manual or optional secrets, not linked ones, each in one list at most.
       See projects.schema.json.
@@ -441,6 +496,7 @@
     projects_own_secrets: >-
       {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
          | list }}
+    projects_server_max_memory: *projects_server_max_memory
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
 # and a private network to that project's backend (link-PROJECT). The source
@@ -602,6 +658,26 @@
   ansible.builtin.shell:
     cmd: |
       set -eu
+      # A managed cluster: asked with the commands and settings installed by
+      # the last run, as the cluster's admin user. Until database-credentials
+      # stores its password (a new server) it cannot be asked: that is
+      # accepted only while projects.yml declares no database on this server
+      # (the check below).
+      if [ "$MODE" = managed ]; then
+        if [ ! -s /etc/infra/secrets/database-admin.env ] || [ ! -r /usr/local/lib/infra/backend.sh ] \
+          || ! grep -qx 'DATABASE_MODE=managed' /etc/infra/database.conf 2>/dev/null; then
+          echo nocredentials
+          exit 0
+        fi
+        if ! out="$(timeout 120 bash -c 'set -euo pipefail; . /usr/local/lib/infra/backend.sh
+            fail() { echo "$*" >&2; exit 1; }; db_container; db_list_json')"; then
+          echo "the managed database did not answer. Check its password and connection: sudo database-credentials" >&2
+          exit 1
+        fi
+        echo databases
+        [ -z "$out" ] || printf '%s\n' "$out"
+        exit 0
+      fi
       if ! command -v docker >/dev/null 2>&1; then
         if [ -e "/var/lib/docker/volumes/$VOLUME" ]; then
           echo "Docker is not installed, but PostgreSQL's data is still on disk" \
@@ -643,6 +719,7 @@
       echo databases
       [ -z "$out" ] || printf '%s\n' "$out"
   environment:
+    MODE: "{{ 'managed' if database_managed else 'local' }}"
     VOLUME: "{{ projects_postgres_volume }}"
     PROJECT: "{{ projects_postgres_compose_project }}"
     SERVICE: "{{ projects_postgres_compose_service }}"
@@ -658,11 +735,16 @@
   ansible.builtin.assert:
     that:
       - projects_databases_probe.rc is defined and projects_databases_probe.rc == 0
-      - projects_databases_probe.stdout_lines[:1] in [['none'], ['databases']]
+      - >-
+        projects_databases_probe.stdout_lines[:1] in [['none'], ['databases']]
+        or (projects_databases_probe.stdout_lines == ['nocredentials']
+            and projects_registry.projects | selectattr('database') | list | length == 0)
     fail_msg: >-
       Cannot tell which databases exist on the server:
-      {{ projects_databases_probe.stderr | default('', true) | trim
-         or projects_databases_probe.msg | default('unexpected output', true) }}
+      {{ 'the managed database has no admin password here yet. On the server, run: sudo database-credentials'
+         if projects_databases_probe.stdout_lines | default([]) == ['nocredentials']
+         else projects_databases_probe.stderr | default('', true) | trim
+              or projects_databases_probe.msg | default('unexpected output', true) }}
       Nothing was changed. See ansible/README.md, "When the databases cannot be listed".
     quiet: true
 

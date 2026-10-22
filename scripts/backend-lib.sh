@@ -26,6 +26,14 @@
 #                                                          APP_DB_USER (migrations)
 #   /var/lib/infra/backends/NAME/database         when the database was created
 #   /var/backups/infra/NAME/                      dumps taken before migrations
+#
+# The databases are either PostgreSQL's container on this server
+# (DATABASE_MODE=local in database.conf) or a managed cluster reached over the
+# VPC (managed: database: managed in projects.yml's servers). On a managed
+# one, every command runs in a one-off client container on the db-egress
+# network, which reaches the cluster's address and nothing else (db_egress),
+# with TLS verify-full, as the cluster's admin user (its password in
+# /etc/infra/secrets/database-admin.env, written by database-credentials).
 
 readonly REGISTRY=/etc/infra/projects.json
 readonly BACKENDS_DIR=/opt/infra/projects
@@ -48,8 +56,16 @@ readonly KEY_RE='^[A-Z][A-Z0-9_]{0,63}$'
 readonly DUMPS_DIR=/var/backups/infra
 readonly KEEP_DUMPS=3
 readonly MIGRATE_SECONDS=600
-# PostgreSQL's fixed address and Compose names (roles/projects writes it).
+# PostgreSQL's fixed address and Compose names, or the managed cluster's
+# (roles/projects writes it).
 readonly DATABASE_CONF=/etc/infra/database.conf
+# Managed only: the cluster's CA (roles/projects), the admin user's password
+# (database-credentials), the client's network and its firewall chain.
+readonly DATABASE_CA=/etc/infra/database-ca.crt
+readonly DATABASE_ADMIN_ENV=/etc/infra/secrets/database-admin.env
+readonly DATABASE_CA_IN_CONTAINER=/run/infra/database-ca.crt
+readonly DB_EGRESS_CHAIN=INFRA-DB-EGRESS
+readonly DB_EGRESS_LOCK=/run/infra-db-egress.lock
 # 1: also print a failed container's log. Only backend-rollback (run by the
 # admin in a terminal) sets it, after sourcing this file; never taken from the
 # environment. A deploy never prints it: its output goes to CI's logs, which
@@ -523,8 +539,9 @@ backend_secret_problems() {
 }
 
 # Runs PROJECT's migrations with IMAGE in a one-off container of its migrate
-# service (its db-<name> network only, the owner's connection, no app
-# secrets), for up to MIGRATE_SECONDS. Named, so it can be removed if it
+# service (its db-<name> network only, or on a managed database the db-egress
+# network, which reaches only the cluster: db_egress; the owner's connection,
+# no app secrets), for up to MIGRATE_SECONDS. Named, so it can be removed if it
 # outlives its time: timeout stops the Compose client, not the container. Its
 # output goes to the journal only (tag backend-migrate): it can hold
 # connection details. LABEL names the run in the journal. Returns 1 on
@@ -532,8 +549,13 @@ backend_secret_problems() {
 backend_migrate() {
   local project="$1" image="$2" label="$3" container rc=0 out
   container="backend-$project-migrate"
+  [[ -n "${DATABASE_MODE:-}" ]] || db_container
+  DB_HOST_IP="${DB_HOST_IP:-}"
+  if [[ "$DATABASE_MODE" == managed ]]; then db_egress; fi
   docker rm -f "$container" >/dev/null 2>&1 </dev/null 9>&- || true
-  out="$(cd / && BACKEND_IMAGE="$image" timeout --kill-after=10 "$MIGRATE_SECONDS" docker compose \
+  # DATABASE_HOST_IP: the cluster's address, for the container's /etc/hosts
+  # (the compose file's extra_hosts); unused with a local database.
+  out="$(cd / && BACKEND_IMAGE="$image" DATABASE_HOST_IP="$DB_HOST_IP" timeout --kill-after=10 "$MIGRATE_SECONDS" docker compose \
     --project-directory "$BACKENDS_DIR/$project" run --rm --no-deps -T --name "$container" migrate \
     </dev/null 2>&1 9>&-)" || rc=$?
   docker rm -f "$container" >/dev/null 2>&1 </dev/null 9>&- || true
@@ -556,27 +578,132 @@ db_names() {
   DB_APP="${DB_NAME}_app"
 }
 
-# Loads PostgreSQL's host and port and finds its container into PG_CONTAINER.
-db_container() {
+
+# Reads database.conf into DATABASE_MODE (local or managed), POSTGRES_HOST and
+# POSTGRES_PORT, and what the mode needs: DB_ADMIN (the role db_psql connects
+# as), DB_DEFAULT (the database it connects to without one) and DB_SYSTEM
+# (the databases that belong to no project, as an SQL list). Every value is
+# checked: they end up in commands.
+db_load_conf() {
   [[ -r "$DATABASE_CONF" ]] || fail "missing $DATABASE_CONF (run the playbook)"
   # shellcheck source=/dev/null
   . "$DATABASE_CONF"
-  : "${POSTGRES_HOST:?}" "${POSTGRES_PORT:?}" "${POSTGRES_COMPOSE_PROJECT:?}" "${POSTGRES_COMPOSE_SERVICE:?}"
+  : "${POSTGRES_HOST:?}" "${POSTGRES_PORT:?}"
+  DATABASE_MODE="${DATABASE_MODE:-local}"
+  [[ "$POSTGRES_HOST" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ && "$POSTGRES_PORT" =~ ^[1-9][0-9]{0,4}$ ]] \
+    || fail "invalid host or port in $DATABASE_CONF"
+  case "$DATABASE_MODE" in
+    local)
+      : "${POSTGRES_COMPOSE_PROJECT:?}" "${POSTGRES_COMPOSE_SERVICE:?}"
+      DB_ADMIN=postgres DB_DEFAULT=postgres
+      DB_SYSTEM="'postgres', 'template0', 'template1'"
+      ;;
+    managed)
+      : "${POSTGRES_POOL_PORT:?}" "${POSTGRES_ADMIN_USER:?}" "${DATABASE_CLIENT_IMAGE:?}"
+      : "${DATABASE_EGRESS_NETWORK:?}" "${DATABASE_EGRESS_SUBNET:?}"
+      [[ "$POSTGRES_POOL_PORT" =~ ^[1-9][0-9]{0,4}$ && "$POSTGRES_ADMIN_USER" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] \
+        || fail "invalid pool port or admin user in $DATABASE_CONF"
+      [[ "$DATABASE_EGRESS_SUBNET" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]] \
+        || fail "invalid egress subnet in $DATABASE_CONF"
+      DB_ADMIN="$POSTGRES_ADMIN_USER" DB_DEFAULT=defaultdb
+      # DigitalOcean's own: the default database and its monitoring's.
+      DB_SYSTEM="'postgres', 'template0', 'template1', 'defaultdb', '_dodb'"
+      ;;
+    *) fail "invalid DATABASE_MODE in $DATABASE_CONF" ;;
+  esac
+}
+
+# db_load_conf, and the database must be reachable: local, PostgreSQL's
+# container (into PG_CONTAINER); managed, the CA, the admin user's password
+# and the client's firewall (db_egress).
+db_container() {
+  db_load_conf
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    PG_CONTAINER=""
+    [[ -s "$DATABASE_CA" ]] || fail "missing $DATABASE_CA (run the playbook)"
+    [[ -s "$DATABASE_ADMIN_ENV" ]] || fail "no password for the database's admin user yet: sudo database-credentials"
+    db_egress
+    return
+  fi
   PG_CONTAINER="$(docker ps -q --filter "label=com.docker.compose.project=$POSTGRES_COMPOSE_PROJECT" \
     --filter "label=com.docker.compose.service=$POSTGRES_COMPOSE_SERVICE" \
     --filter label=com.docker.compose.oneoff=False 9>&-)"
   [[ -n "$PG_CONTAINER" && "$PG_CONTAINER" != *$'\n'* ]] || fail "the PostgreSQL container is not running"
 }
 
-# Runs psql as the superuser, over the container's local socket, reading SQL
-# from stdin (so passwords never appear in any command line). Prints the
-# unaligned output.
+# Managed only. What runs on the db-egress network (db_client, and the
+# migrations in backend_migrate) reaches the cluster's address on its two
+# ports, direct and pool, and nothing else: Docker sends the network's
+# packets through DOCKER-USER, which jumps to this chain, which rejects
+# everything else, DNS included (the containers get the cluster's address
+# in /etc/hosts instead: DB_HOST_IP). Run before every use, so a reboot,
+# which clears the rules, or a new address for the cluster never leaves the
+# network open. The chain is replaced in one iptables-restore, never emptied
+# first, and the jump is added if it is missing.
+db_egress() {
+  local ip
+  ip="$(getent ahostsv4 "$POSTGRES_HOST" | awk 'NR == 1 {print $1}')" || ip=""
+  [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "cannot resolve $POSTGRES_HOST"
+  DB_HOST_IP="$ip"
+  (
+    flock -w 30 7 || exit 1
+    printf '*filter\n:%s - [0:0]\n-A %s -d %s/32 -p tcp -m multiport --dports %s,%s -j RETURN\n-A %s -j REJECT\nCOMMIT\n' \
+      "$DB_EGRESS_CHAIN" "$DB_EGRESS_CHAIN" "$ip" "$POSTGRES_PORT" "$POSTGRES_POOL_PORT" "$DB_EGRESS_CHAIN" \
+      | iptables-restore --noflush || exit 1
+    iptables -C DOCKER-USER -s "$DATABASE_EGRESS_SUBNET" -j "$DB_EGRESS_CHAIN" 2>/dev/null \
+      || iptables -I DOCKER-USER 1 -s "$DATABASE_EGRESS_SUBNET" -j "$DB_EGRESS_CHAIN"
+  ) 7>"$DB_EGRESS_LOCK" 9>&- || fail "could not set the database client's firewall (iptables, chain $DB_EGRESS_CHAIN)"
+}
+
+# Managed only: runs COMMAND (psql, pg_dump, pg_restore) in a one-off
+# container of the pinned client image, connected as USER with the password
+# in ENV_FILE (PGPASSWORD=..., root only: never on a command line), on the
+# db-egress network, with TLS verify-full against the cluster's CA. stdin is
+# passed through. Needs db_egress first (db_container does it).
+# Usage: db_client ENV_FILE USER COMMAND...
+db_client() {
+  local password_file="$1" user="$2"
+  shift 2
+  docker run --rm -i --network "$DATABASE_EGRESS_NETWORK" --add-host "$POSTGRES_HOST:$DB_HOST_IP" \
+    --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --pull never \
+    --user postgres --memory 512m --pids-limit 64 \
+    --env-file "$password_file" -e PGHOST="$POSTGRES_HOST" -e PGPORT="$POSTGRES_PORT" -e PGUSER="$user" \
+    -e PGSSLMODE=verify-full -e PGSSLROOTCERT="$DATABASE_CA_IN_CONTAINER" -e PGCONNECT_TIMEOUT=15 \
+    -e PGAPPNAME=infra \
+    --mount "type=bind,source=$DATABASE_CA,target=$DATABASE_CA_IN_CONTAINER,readonly" \
+    "$DATABASE_CLIENT_IMAGE" "$@" 9>&-
+}
+
+# Runs psql as DB_ADMIN (the superuser over the container's local socket, or
+# the managed cluster's admin user), reading SQL from stdin (so passwords
+# never appear in any command line). Prints the unaligned output.
 db_psql() {
-  docker exec -i "$PG_CONTAINER" psql -U postgres -d "${1:-postgres}" -AtqX -v ON_ERROR_STOP=1 9>&-
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    db_client "$DATABASE_ADMIN_ENV" "$DB_ADMIN" psql -d "${1:-$DB_DEFAULT}" -AtqX -v ON_ERROR_STOP=1
+  else
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d "${1:-postgres}" -AtqX -v ON_ERROR_STOP=1 9>&-
+  fi
 }
 
 db_exists() {
   [[ "$(db_psql <<<"SELECT count(*) FROM pg_database WHERE datname = '$1'")" == 1 ]]
+}
+
+# Every project's database (any but DB_SYSTEM, including one made by hand),
+# one JSON string per line, so a name with a newline cannot pass for two.
+db_list_json() {
+  db_psql <<<"SELECT to_json(datname) FROM pg_database WHERE datname NOT IN ($DB_SYSTEM) ORDER BY datname"
+}
+
+# pg_dump -Fc of DATABASE to stdout: as the superuser, or on a managed
+# cluster as its admin user acting as the database's owner (the role of the
+# same name, db_names), which owns what the migrations made.
+db_pg_dump() {
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    db_client "$DATABASE_ADMIN_ENV" "$DB_ADMIN" pg_dump --role="$1" -Fc -d "$1"
+  else
+    docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$1" 9>&-
+  fi
 }
 
 # Dumps DATABASE (custom format) to DIR/LABEL.dump, root only, and keeps the
@@ -587,7 +714,7 @@ db_dump() {
   install -d -m 0700 -o root -g root "$DUMPS_DIR" "$dir"
   file="$dir/$label.dump"
   tmp="$dir/.$label.dump.$$"
-  if ! (umask 077 && docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$database" >"$tmp" 9>&-); then
+  if ! (umask 077 && db_pg_dump "$database" >"$tmp"); then
     rm -f "$tmp"
     return 1
   fi

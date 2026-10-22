@@ -1,7 +1,8 @@
-# Off-site backups: an R2 bucket that the server writes encrypted database
-# dumps and secrets to (the backup job lives in Ansible). R2 is a different
-# provider from DigitalOcean, so the backups survive the loss of the Droplet or
-# of the DigitalOcean account. A configuration of its own (README.md): only the
+# Off-site backups: one R2 bucket per server, which that server writes its
+# encrypted database dumps and secrets to (the backup job lives in Ansible),
+# each with its own S3 credentials, so a server never reads or lists
+# another's backups (D7a). R2 is a different provider from DigitalOcean, so
+# the backups survive the loss of a Droplet or of the DigitalOcean account. A configuration of its own (README.md): only the
 # backups admin token, kept out of every file, can change it.
 #
 # Retention is by prefix: the job writes a copy to daily/ every day, to weekly/
@@ -25,7 +26,12 @@
 # Terraform state.
 
 locals {
-  backup_bucket = "infra-backups"
+  # Bucket => the server that writes to it (projects.yml's servers; Ansible's
+  # roles/backup has the same map, backup_buckets).
+  backup_buckets = {
+    "infra-backups"          = "server.abrunacci.dev"
+    "epb-production-backups" = "server.epbstock.com.ar"
+  }
 
   # Days: [locked, deleted after].
   backup_retention = {
@@ -69,8 +75,10 @@ locals {
 }
 
 resource "cloudflare_r2_bucket" "backups" {
+  for_each = local.backup_buckets
+
   account_id = var.cloudflare_account_id
-  name       = local.backup_bucket
+  name       = each.key
   # A hint, not a guarantee: Western Europe, another continent from the
   # Droplet (nyc3), so one regional outage does not take both.
   location = "weur"
@@ -86,8 +94,10 @@ resource "cloudflare_r2_bucket" "backups" {
 }
 
 resource "cloudflare_r2_bucket_lock" "backups" {
+  for_each = cloudflare_r2_bucket.backups
+
   account_id  = var.cloudflare_account_id
-  bucket_name = cloudflare_r2_bucket.backups.name
+  bucket_name = each.value.name
 
   rules = [for prefix, days in local.backup_retention : {
     id      = "lock-${prefix}"
@@ -107,8 +117,10 @@ resource "cloudflare_r2_bucket_lock" "backups" {
 }
 
 resource "cloudflare_r2_bucket_lifecycle" "backups" {
+  for_each = cloudflare_r2_bucket.backups
+
   account_id  = var.cloudflare_account_id
-  bucket_name = cloudflare_r2_bucket.backups.name
+  bucket_name = each.value.name
 
   rules = local.backup_lifecycle_rules
 
@@ -125,4 +137,21 @@ resource "cloudflare_r2_bucket_lifecycle" "backups" {
       error_message = "backup_retention: every prefix must be deleted after its lock expires."
     }
   }
+}
+
+# The first bucket, from before there was one per server: the same objects,
+# now under its name.
+moved {
+  from = cloudflare_r2_bucket.backups
+  to   = cloudflare_r2_bucket.backups["infra-backups"]
+}
+
+moved {
+  from = cloudflare_r2_bucket_lock.backups
+  to   = cloudflare_r2_bucket_lock.backups["infra-backups"]
+}
+
+moved {
+  from = cloudflare_r2_bucket_lifecycle.backups
+  to   = cloudflare_r2_bucket_lifecycle.backups["infra-backups"]
 }

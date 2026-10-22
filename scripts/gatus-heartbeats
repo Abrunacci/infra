@@ -32,8 +32,9 @@
 #
 # Gatus alerts on failures, and on a heartbeat that gets no push for its
 # interval: if this timer stops, its heartbeats go red by themselves.
-# Pushes go to Gatus' loopback port with the token in push.env; the token is
-# passed to curl on stdin, never as an argument. Exits non-zero only when a
+# Pushes go to GATUS_PUSH_URL (gatus.conf) with the token in push.env: Gatus'
+# loopback port on the first server, its status page over HTTPS from any
+# other. The token is passed to curl on stdin, never as an argument. Exits non-zero only when a
 # push did not reach Gatus; a failing check is pushed, not an error.
 #
 # The ping URL is in healthchecks.env (stored by gatus-credentials

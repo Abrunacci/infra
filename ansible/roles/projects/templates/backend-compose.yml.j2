@@ -7,6 +7,10 @@ name: backend-{{ item.name }}
 {# The projects this backend links to (secrets {from: PROJECT, ...}). #}
 {% set link_targets = (item.backend.secrets | default({})).values() | select('mapping') | map(attribute='from') | unique | sort | list %}
 {% set worker = item.backend.worker | default(none) %}
+{# A managed database (projects.yml, servers): no db-<name> network. The
+   backend and the worker reach the cluster through their route out, and the
+   migrations through db-egress, which reaches only the cluster. #}
+{% set managed = item.database and database_managed %}
 
 services:
   backend:
@@ -49,9 +53,14 @@ services:
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/links.env
         format: raw
 {% if item.database %}
-      # DATABASE_URL, as the app's role (project-db).
+      # DATABASE_URL and DATABASE_DIRECT_URL, as the app's role (project-db).
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
         format: raw
+{% endif %}
+{% if managed %}
+    # The managed cluster's CA, which its URLs name (sslrootcert, verify-full).
+    volumes:
+      - {{ projects_database_ca }}:{{ projects_database_ca_in_container }}:ro
 {% endif %}
 {% if item.subdomain is defined %}
     # No published port: Caddy reaches it by this alias on the project's own
@@ -67,7 +76,7 @@ services:
     networks:
       outbound: {}
 {% endif %}
-{% if item.database %}
+{% if item.database and not managed %}
       # PostgreSQL, as {{ postgres_host }}, on this project's own network
       # (db-{{ item.name }}), which no other backend joins. Internal: no route out.
       db: {}
@@ -141,10 +150,14 @@ services:
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-app.env
         format: raw
 {% endif %}
+{% if managed %}
+    volumes:
+      - {{ projects_database_ca }}:{{ projects_database_ca_in_container }}:ro
+{% endif %}
     networks:
       # Its own network, only for its route out to the internet.
       worker-outbound: {}
-{% if item.database %}
+{% if item.database and not managed %}
       db: {}
 {% endif %}
     mem_limit: {{ worker.memory }}
@@ -165,7 +178,11 @@ services:
   # Run once per deploy by deploy-backend (docker compose run --rm migrate),
   # with the new image, before the backend switches to it. Only the public
   # env and the owner's connection: none of the app's secrets, and no route
+{% if managed %}
+  # out of {{ db_egress_network }}, which reaches only the managed cluster.
+{% else %}
   # out of the project's db-<name> network.
+{% endif %}
   migrate:
     image: ${BACKEND_IMAGE:?no image given}
     profiles:
@@ -187,8 +204,20 @@ services:
       # MIGRATION_DATABASE_URL (the owner) and APP_DB_USER (project-db).
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-migrate.env
         format: raw
+{% if managed %}
+    volumes:
+      - {{ projects_database_ca }}:{{ projects_database_ca_in_container }}:ro
+    # db-egress answers no DNS: the cluster's address, which deploy-backend
+    # resolves on the server just before (DATABASE_HOST_IP). Without it, an
+    # address nothing answers on (TEST-NET-1), so nothing is reached.
+    extra_hosts:
+      - "{{ projects_managed_db.host }}=${DATABASE_HOST_IP:-192.0.2.1}"
+    networks:
+      - egress
+{% else %}
     networks:
       - db
+{% endif %}
     mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
@@ -209,7 +238,12 @@ networks:
   # Created and removed by Compose with the backend (backend-{{ item.name }}_outbound).
   outbound: {}
 {% endif %}
-{% if item.database %}
+{% if managed %}
+  # Created by roles/docker.
+  egress:
+    name: {{ db_egress_network }}
+    external: true
+{% elif item.database %}
   # Created by roles/postgres.
   db:
     name: db-{{ item.name }}

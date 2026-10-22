@@ -98,22 +98,28 @@ WHERE g.oid IN (SELECT oid FROM owned)
 SQL
 }
 
-# Runs COMMAND in the PostgreSQL container connected as PROJECT's database
-# owner (over TCP, with its password), never as the superuser: what a backup
-# holds is restored with the owner's rights only. The password reaches the
-# container through an env file in the root-only directory DIR, never argv,
-# and the file is removed whatever COMMAND does. stdin is passed through.
+# Runs COMMAND connected as PROJECT's database owner (PGHOST, PGUSER and
+# PGPASSWORD are set for it), never as the superuser or the cluster's admin
+# user: what a backup holds is restored with the owner's rights only. In the
+# PostgreSQL container over TCP, or on a managed cluster in a client container
+# (db_client). The password reaches the container through an env file in the
+# root-only directory DIR, never argv, and the file is removed whatever
+# COMMAND does. stdin is passed through.
 # (The official image trusts TCP connections from inside the container itself,
-# so today the role, not the password, is what matters; the password is passed
-# anyway, so this keeps working if that setting changes.)
+# so today the role, not the password, is what matters there; the password is
+# passed anyway, so this keeps working if that setting changes.)
 # Usage: db_as_owner PROJECT DIR COMMAND...
 db_as_owner() {
-  local project="$1" dir="$2" envf rc=0
+  local project="$1" dir="$2" envf rc=0 owner="${1//-/_}"
   shift 2
   envf="$dir/.owner.env"
   printf 'PGPASSWORD=%s\n' "$(<"$SECRETS_DIR/$project/db-owner.password")" >"$envf"
   chmod 0600 "$envf"
-  docker exec -i --env-file "$envf" "$PG_CONTAINER" "$@" 9>&- || rc=$?
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    db_client "$envf" "$owner" "$@" || rc=$?
+  else
+    docker exec -i --env-file "$envf" -e PGHOST=127.0.0.1 -e PGUSER="$owner" "$PG_CONTAINER" "$@" 9>&- || rc=$?
+  fi
   rm -f "$envf"
   return "$rc"
 }
@@ -130,7 +136,8 @@ db_restore_roles() {
     [[ -z "$kind" ]] && continue
     if [[ "$kind" == role ]]; then
       [[ "$a" =~ $role_re && "$b" =~ ^[tf]$ && "$c" =~ ^[tf]$ && -z "$d" ]] || fail "invalid role line in the backup: $kind $a"
-      [[ "$a" != "$DB_OWNER" && "$a" != "$DB_APP" && "$a" != postgres && "$a" != pg_* ]] \
+      [[ "$a" != "$DB_OWNER" && "$a" != "$DB_APP" && "$a" != postgres && "$a" != pg_* \
+        && "$a" != "$DB_ADMIN" && "$a" != _dodb ]] \
         || fail "the backup lists a role it cannot own: $a"
       roles["$a"]=1
       local exists admin
@@ -153,5 +160,5 @@ db_restore_roles() {
   done <"$file"
   [[ -n "$sql" ]] || return 0
   printf 'SET client_min_messages = warning;\n%s' "$sql" \
-    | db_as_owner "$project" "$dir" psql -h 127.0.0.1 -U "$DB_OWNER" -d "$DB_NAME" -AtqX -v ON_ERROR_STOP=1 >/dev/null
+    | db_as_owner "$project" "$dir" psql -d "$DB_NAME" -AtqX -v ON_ERROR_STOP=1 >/dev/null
 }
