@@ -1,6 +1,7 @@
-# Resource alerts: DigitalOcean emails var.alert_email when the Droplet runs
-# short of CPU, memory or disk. Every project, PostgreSQL and Caddy share it,
-# so one of them taking the machine takes them all down.
+# Resource alerts: DigitalOcean emails var.alert_email when a Droplet runs
+# short of CPU, memory or disk: the first server (every project, PostgreSQL
+# and Caddy share it, so one of them taking the machine takes them all down)
+# and the production one (production.tf). The email names the Droplet.
 #
 # CPU is measured by the hypervisor. Memory and disk come from the monitoring
 # agent (do-agent), installed by Ansible (roles/monitoring): if it stops, those
@@ -30,12 +31,12 @@ locals {
 resource "digitalocean_monitor_alert" "resource" {
   for_each = local.resource_alerts
 
-  description = "${var.droplet_name}: ${each.value.description} above ${var.alert_thresholds[each.key]}% for 5 minutes (Terraform, infra repo)"
+  description = "${each.value.description} above ${var.alert_thresholds[each.key]}% for 5 minutes (Terraform, infra repo)"
   type        = each.value.type
   compare     = "GreaterThan"
   value       = var.alert_thresholds[each.key]
   window      = "5m"
-  entities    = [digitalocean_droplet.server.id]
+  entities    = [digitalocean_droplet.server.id, digitalocean_droplet.production.id]
   enabled     = true
 
   alerts {

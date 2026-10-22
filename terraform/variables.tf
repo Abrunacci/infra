@@ -26,6 +26,28 @@ variable "droplet_size" {
   }
 }
 
+variable "production_droplet_size" {
+  description = "DigitalOcean Droplet size slug of EPB Stock's production Droplet (production.tf)."
+  type        = string
+  default     = "s-2vcpu-4gb"
+
+  validation {
+    condition     = can(regex("^s-[0-9]+vcpu-[0-9]+gb", var.production_droplet_size))
+    error_message = "production_droplet_size must be a Basic Droplet slug such as s-2vcpu-4gb."
+  }
+}
+
+variable "production_db_size" {
+  description = "DigitalOcean database size slug of EPB Stock's production PostgreSQL cluster (production.tf)."
+  type        = string
+  default     = "db-s-1vcpu-1gb"
+
+  validation {
+    condition     = can(regex("^db-s-[0-9]+vcpu-[0-9]+gb$", var.production_db_size))
+    error_message = "production_db_size must be a database slug such as db-s-1vcpu-1gb."
+  }
+}
+
 variable "droplet_image" {
   description = "Base image slug. Changing it on an existing Droplet is ignored (see lifecycle in main.tf)."
   type        = string

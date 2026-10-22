@@ -1,6 +1,8 @@
 #cloud-config
 # Minimal bootstrap: just enough for Ansible to take over.
 # It runs only on the first boot; later changes are made by Ansible.
+# With a Tailscale key (a server whose SSH is reached only through
+# Tailscale, production.tf), it also joins the tailnet: Ansible's way in.
 
 users:
   - name: ${admin_user}
@@ -25,6 +27,23 @@ write_files:
       PermitRootLogin no
       PasswordAuthentication no
       KbdInteractiveAuthentication no
+%{ if tailscale_auth_key != "" ~}
+  # One use, and expired an hour after the apply; removed once used.
+  - path: /run/tailscale-auth-key
+    owner: root:root
+    permissions: "0600"
+    content: ${jsonencode(tailscale_auth_key)}
+%{ endif ~}
 
 runcmd:
   - [systemctl, try-reload-or-restart, ssh]
+%{ if tailscale_auth_key != "" ~}
+  # Tailscale's apt repository for Ubuntu 24.04 (noble), as its manual
+  # install instructions give it: packages signed with its key.
+  - [curl, -fsSL, -o, /usr/share/keyrings/tailscale-archive-keyring.gpg, "https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg"]
+  - [curl, -fsSL, -o, /etc/apt/sources.list.d/tailscale.list, "https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list"]
+  - [apt-get, update]
+  - [apt-get, install, -y, tailscale]
+  - [tailscale, up, "--auth-key=file:/run/tailscale-auth-key", "--hostname=${tailscale_hostname}"]
+  - [rm, -f, /run/tailscale-auth-key]
+%{ endif ~}
