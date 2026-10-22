@@ -16,9 +16,14 @@ resource "tailscale_acl" "this" {
   overwrite_existing_content = true
 
   acl = jsonencode({
+    # tag:terraform is the OAuth client's own tag (terraform/README.md,
+    # Credentials). A client with tags can only create keys that carry
+    # exactly its tags, or tags its tags own: owning tag:prod and tag:ci
+    # lets it create a key with only one of them.
     tagOwners = {
-      "tag:prod" = ["autogroup:admin"]
-      "tag:ci"   = ["autogroup:admin"]
+      "tag:terraform" = ["autogroup:admin"]
+      "tag:prod"      = ["autogroup:admin", "tag:terraform"]
+      "tag:ci"        = ["autogroup:admin", "tag:terraform"]
     }
     # Nothing else is allowed: with grants, every other connection is
     # refused. The Droplet answers, but never starts a connection.

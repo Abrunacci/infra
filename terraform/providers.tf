@@ -4,7 +4,7 @@
 #                            domain's zone only, and Email Routing Addresses and Turnstile (Edit) on the
 #                            account only
 #   TAILSCALE_OAUTH_CLIENT_ID, TAILSCALE_OAUTH_CLIENT_SECRET
-#                         -> OAuth client with Policy File and Auth Keys (write), tags tag:prod and tag:ci
+#                         -> OAuth client with Policy File and Auth Keys (write), tag tag:terraform
 provider "digitalocean" {}
 
 provider "cloudflare" {}
