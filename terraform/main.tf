@@ -157,6 +157,15 @@ resource "digitalocean_project" "portfolio" {
   description = "Portfolio projects infrastructure, managed by Terraform."
   purpose     = "Web Application"
   environment = "Production"
+  # No resources here: this attribute holds every resource in the project,
+  # and DigitalOcean also puts the managed database's own internal Droplet
+  # there. Terraform would try to move that one out on every apply, which
+  # DigitalOcean refuses. digitalocean_project_resources only assigns the
+  # resources it lists and leaves the rest alone.
+}
+
+resource "digitalocean_project_resources" "portfolio" {
+  project = digitalocean_project.portfolio.id
   resources = [
     digitalocean_droplet.server.urn,
     digitalocean_droplet.production.urn,
