@@ -5,6 +5,22 @@
 # projects_registry is loaded before any role (site.yml, pre_tasks).
 domain: "{{ projects_registry.domains[0].name }}"
 
+# This server's entry in projects.yml (servers), and what it says. The first
+# server serves the status page (roles/gatus) and runs every project without a
+# server. A server with database: managed has no PostgreSQL of its own: its
+# projects' databases are in a managed cluster (projects_managed_db, from
+# Terraform; roles/projects, validate.yml). With ssh: tailscale, SSH answers
+# only on the Tailscale interface (roles/hardening).
+first_server: "{{ projects_registry.servers[0].name }}"
+is_first_server: "{{ inventory_hostname == first_server }}"
+# The others push their heartbeats to the first one's status page over HTTPS
+# (roles/gatus).
+other_servers: "{{ projects_registry.servers[1:] | map(attribute='name') | list }}"
+server_entry: >-
+  {{ projects_registry.servers | selectattr('name', 'equalto', inventory_hostname) | first | default({}) }}
+database_managed: "{{ server_entry.database | default('local') == 'managed' }}"
+ssh_via_tailscale: "{{ server_entry.ssh | default('public') == 'tailscale' }}"
+
 # The hostname of each public project (one with a subdomain), by name: its
 # subdomain under its domain, or the domain itself for "@".
 project_hosts: >-
@@ -56,9 +72,12 @@ postgres_ipv4_address: 172.30.0.10
 # each one as postgres_host, the host in DATABASE_URL; Docker picks the
 # subnets. The db network above stays for the database bridge (db_tunnel).
 # Created by roles/postgres, which joins them all; removed by roles/projects.
+# None on a server whose database is managed: its backends reach the cluster
+# over their own networks' route out, and its migrations over db-egress
+# (roles/docker).
 database_networks: >-
-  {{ projects_registry.projects | selectattr('database', 'defined') | selectattr('database')
-     | map(attribute='name') | map('regex_replace', '^', 'db-') | list }}
+  {{ [] if database_managed else projects_registry.projects | selectattr('database', 'defined')
+     | selectattr('database') | map(attribute='name') | map('regex_replace', '^', 'db-') | list }}
 postgres_host: postgres
 
 # One network per public backend (a project with a subdomain and a backend),
@@ -87,6 +106,14 @@ link_networks: "{{ link_receivers | map('regex_replace', '^', 'link-') | list }}
 # Loopback port of the temporary PostgreSQL bridge (roles/db_tunnel), and the
 # only destination admin_user may forward to over SSH (roles/hardening).
 db_tunnel_port: 15432
+
+# A managed database's client network (roles/docker): the one-off containers
+# that connect to the cluster (project-db, the backups, the migrations) run on
+# it, and it reaches only the cluster's address (db_egress in
+# scripts/backend-lib.sh). Fixed, next to the db network's subnet, since the
+# firewall rule names it. Only on a server whose database is managed.
+db_egress_network: db-egress
+db_egress_subnet: 172.30.1.0/24
 
 # age public keys every backup is encrypted to (roles/backup). Public keys
 # are not secret; their private keys never go on the server: they live in the

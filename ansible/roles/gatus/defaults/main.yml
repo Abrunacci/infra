@@ -26,10 +26,33 @@ gatus_certificate_min_validity: 168h
 # Heartbeats: results the server itself pushes to Gatus (gatus-heartbeats),
 # for what Gatus cannot check from its container. Gatus alerts when one
 # reports a failure, and when none arrives for its interval. The list is
-# templates/heartbeats.yaml.j2. They reach Gatus on this loopback port only:
-# Caddy passes nothing but GET and HEAD from outside, and every push carries a
-# token generated on the server (push.env, root only).
+# templates/heartbeats.yaml.j2. The first server's reach Gatus on this
+# loopback port, with a token generated on the server (push.env, root only).
+# Every other server's reach it through the status page, where Caddy passes
+# nothing but GET and HEAD, and those servers' POSTs, each with its own token.
 gatus_push_port: 18080
+# Where gatus-heartbeats pushes: on the first server, Gatus' loopback port; on
+# any other, the first one's status page, which lets those pushes through
+# (roles/caddy, Caddyfile).
+gatus_push_url: >-
+  {{ ('http://127.0.0.1:' ~ gatus_push_port) if is_first_server else ('https://status.' ~ domain) }}
+# Every other server's token, derived from one secret in terraform/.env, so
+# the first server's Gatus and that server get the same one without either
+# reading the other: sha256 of "<secret>:<server>". Gatus reads each one from
+# the variable in gatus_remote_push_token_vars (servers-push.env).
+gatus_remote_push_secret: "{{ lookup('ansible.builtin.env', 'GATUS_REMOTE_PUSH_SECRET') | trim }}"
+gatus_remote_push_tokens: >-
+  {%- set tokens = {} -%}
+  {%- for server in other_servers -%}
+  {%-   set _ = tokens.update({server: (gatus_remote_push_secret ~ ':' ~ server) | hash('sha256')}) -%}
+  {%- endfor -%}
+  {{ tokens }}
+gatus_remote_push_token_vars: >-
+  {%- set names = {} -%}
+  {%- for server in other_servers -%}
+  {%-   set _ = names.update({server: 'GATUS_PUSH_TOKEN_' ~ (server | upper | regex_replace('[^A-Z0-9]', '_'))}) -%}
+  {%- endfor -%}
+  {{ names }}
 # The server's own checks (gatus-heartbeats.timer): the DigitalOcean agent and
 # the health of each internal backend (no subdomain, so no URL to check).
 # A systemd calendar: every 5 minutes.

@@ -5,7 +5,12 @@
 # The same image and version used to test the bucket's lock (#17), pinned by
 # digest like every other image.
 backup_rclone_image: rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5
-backup_bucket: infra-backups
+# One bucket per server (terraform/backup-bucket, backup_buckets), each with
+# its own S3 credentials: a server never lists or reads another's backups.
+backup_buckets:
+  server.abrunacci.dev: infra-backups
+  server.epbstock.com.ar: epb-production-backups
+backup_bucket: "{{ backup_buckets[inventory_hostname] }}"
 # R2's S3 endpoint for the account; the account ID comes from terraform/.env,
 # loaded before running the playbook (see ansible/README.md, "Usage").
 backup_cloudflare_account_id: "{{ lookup('ansible.builtin.env', 'TF_VAR_cloudflare_account_id') | trim }}"

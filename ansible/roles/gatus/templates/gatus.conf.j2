@@ -7,7 +7,8 @@ SMTP_HOST={{ gatus_smtp_host }}
 SMTP_PORT={{ gatus_smtp_port }}
 SMTP_USERNAME={{ gatus_smtp_username }}
 SMTP_FROM={{ gatus_email_from | regex_replace('^.*<(.*)>$', '\\1') }}
-# Where gatus-heartbeats pushes (published on loopback only).
-GATUS_PUSH_URL=http://127.0.0.1:{{ gatus_push_port }}
+# Where gatus-heartbeats pushes: Gatus on loopback, or the first server's
+# status page.
+GATUS_PUSH_URL={{ gatus_push_url }}
 # Where the server's check outside it lives (gatus-credentials healthchecks).
 HEALTHCHECKS_PING_BASE={{ gatus_healthchecks_ping_base }}

@@ -1,0 +1,129 @@
+---
+# Renders, for every server in projects.yml, the files the playbook writes
+# that depend on where its databases are (database.conf, each backend's
+# compose file, the backups' and Gatus' settings, Caddy's status page, the
+# firewall's rules), from the roles' own templates and variables, into
+# out_dir/<server>/. Used by ci.sh. The managed cluster's settings are made
+# up (a stand-in for Terraform's output), and the production server gets a
+# stand-in of EPB Stock with a database, so its compose file is rendered too.
+- name: Render each server's configuration
+  hosts: all
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../ansible/group_vars/all/main.yml
+    - ../../ansible/roles/base/defaults/main.yml
+    - ../../ansible/roles/docker/defaults/main.yml
+    - ../../ansible/roles/hardening/defaults/main.yml
+    - ../../ansible/roles/caddy/defaults/main.yml
+    - ../../ansible/roles/projects/defaults/main.yml
+    - ../../ansible/roles/backup/defaults/main.yml
+    - ../../ansible/roles/gatus/defaults/main.yml
+  vars:
+    out: "{{ out_dir }}/{{ inventory_hostname }}"
+    # A stand-in for terraform output -json production_database.
+    projects_managed_db:
+      host: private-stand-in-cluster-do-user-0-0.k.db.ondigitalocean.com
+      port: 25060
+      user: doadmin
+      ca: "-----BEGIN CERTIFICATE-----\nstand-in\n-----END CERTIFICATE-----\n"
+    gatus_remote_push_secret: "{{ '0' * 64 }}"
+    gatus_alert_email: alerts@example.com
+    backup_cloudflare_account_id: "{{ '0' * 32 }}"
+  tasks:
+    # As roles/projects/tasks/validate.yml loads it, and keeps this server's
+    # projects.
+    - name: Load the project registry
+      ansible.builtin.include_vars:
+        file: ../../projects.yml
+        name: projects_registry
+
+    - name: Keep this server's projects
+      ansible.builtin.set_fact:
+        projects_registry_all: "{{ projects_registry }}"
+        projects_registry: >-
+          {{ projects_registry | combine({'projects': projects_registry.projects
+             | selectattr('server', 'defined') | selectattr('server', 'equalto', inventory_hostname) | list
+             + (projects_registry.projects | rejectattr('server', 'defined') | list
+                if inventory_hostname == projects_registry.servers[0].name else [])}) }}
+
+    # Until EPB Stock moves there, production has no project: a stand-in of
+    # it, with its production limits (D13), on the server whose database is
+    # managed.
+    - name: Add a stand-in project with a database to the managed server
+      ansible.builtin.set_fact:
+        projects_registry: >-
+          {{ projects_registry | combine({'projects': projects_registry.projects + [stand_in]}) }}
+      vars:
+        epb: "{{ projects_registry_all.projects | selectattr('name', 'equalto', 'epb-stock') | first }}"
+        stand_in: >-
+          {{ epb | combine({'server': inventory_hostname, 'subdomain': 'stand-in',
+                            'backend': epb.backend | combine({'memory': '768m',
+                                       'worker': epb.backend.worker | combine({'memory': '1536m'})})}) }}
+      when: database_managed and projects_registry.projects | selectattr('database') | list | length == 0
+
+    - name: List the heartbeats
+      ansible.builtin.set_fact:
+        gatus_heartbeats: >-
+          {{ lookup('ansible.builtin.template', '../../ansible/roles/gatus/templates/heartbeats.yaml.j2') | from_yaml }}
+
+    - name: Create the output directories
+      ansible.builtin.file:
+        path: "{{ out }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [projects, gatus]
+
+    - name: Render the server's files
+      ansible.builtin.template:
+        src: "../../ansible/roles/{{ item.src }}"
+        dest: "{{ out }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - { src: projects/templates/database.conf.j2, dest: database.conf }
+        - { src: projects/templates/projects.json.j2, dest: projects.json }
+        - { src: backup/templates/backup.conf.j2, dest: backup.conf }
+        - { src: caddy/templates/Caddyfile.j2, dest: Caddyfile }
+        - { src: base/templates/52unattended-upgrades-local.j2, dest: 52unattended-upgrades-local }
+        - { src: gatus/templates/gatus.conf.j2, dest: gatus/gatus.conf }
+        - { src: gatus/templates/gatus-heartbeats.conf.j2, dest: gatus/gatus-heartbeats.conf }
+        - { src: gatus/templates/server-posture.json.j2, dest: gatus/server-posture.json }
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # Gatus itself runs on the first server only.
+    - name: Render Gatus' files
+      ansible.builtin.template:
+        src: "../../ansible/roles/gatus/templates/{{ item }}.j2"
+        dest: "{{ out }}/gatus/{{ item }}"
+        mode: "0644"
+      loop: [config.yaml, compose.yml]
+      when: is_first_server
+
+    - name: Render each backend's compose file
+      ansible.builtin.template:
+        src: ../../ansible/roles/projects/templates/backend-compose.yml.j2
+        dest: "{{ out }}/projects/{{ item.name }}.compose.yml"
+        mode: "0644"
+      loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # What the roles act on, besides templates: the networks roles/docker
+    # creates, the per-project database networks roles/postgres creates, the
+    # firewall's rules, and whether PostgreSQL and its bridge run here.
+    - name: Write the variables the roles act on
+      ansible.builtin.copy:
+        content: "{{ facts | to_nice_json }}\n"
+        dest: "{{ out }}/facts.json"
+        mode: "0644"
+      vars:
+        facts:
+          database_managed: "{{ database_managed | bool }}"
+          ssh_via_tailscale: "{{ ssh_via_tailscale | bool }}"
+          is_first_server: "{{ is_first_server | bool }}"
+          docker_networks: "{{ docker_networks | map(attribute='name') | list }}"
+          database_networks: "{{ database_networks }}"
+          ufw_rules: "{{ hardening_ufw_rules }}"
+          backup_bucket: "{{ backup_bucket }}"
+          gatus_push_url: "{{ gatus_push_url }}"

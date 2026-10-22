@@ -26,6 +26,18 @@
 # creates its A/AAAA records, and has its own Droplet in Terraform. The first
 # one serves the status page and runs every project without a server.
 #   name       the hostname, such as server.abrunacci.dev
+#   database   local: PostgreSQL in a container on the server (the default);
+#              managed: the managed cluster Terraform creates for it
+#              (terraform/production.tf), reached over the VPC through a
+#              PgBouncer pool per project, with TLS verify-full. Only one
+#              server may be managed, and the first server never touches its
+#              cluster (another VPC, outside the cluster's firewall)
+#   ssh        public: port 22 (the default); tailscale: SSH only on the
+#              Tailscale interface (DigitalOcean's firewall has no 22 either)
+#   max_memory the most memory one backend or worker may have, 64m to 2048m
+#              (optional, defaults to 512m)
+#   max_cpus   the most CPUs one backend may have, 0.1 to 2 (optional,
+#              defaults to 1)
 #
 # projects:
 #   name       directories, registry entry and, with a database, the database
@@ -104,7 +116,8 @@
 #                         copied by the server, plus a private network to that
 #                         project's backend (link-PROJECT), reached as
 #                         http://PROJECT-backend:PORT
-#                memory   64m to 512m (optional, defaults to 256m)
+#                memory   64m to its server's max_memory (optional, defaults
+#                         to 256m)
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
@@ -113,7 +126,8 @@
 #                         replacing any the visitor sent, such as
 #                         CF-Connecting-IP for a backend that reads it there
 #                         (optional, only with a subdomain)
-#                cpus     share of the Droplet's CPU it may use, 0.1 to 1
+#                cpus     share of the Droplet's CPU it may use, 0.1 to its
+#                         server's max_cpus
 #                         (optional, defaults to 0.5), so one busy backend
 #                         cannot starve the others, Caddy or PostgreSQL
 #                migrate  with a database: the migrations' command, run before
@@ -145,8 +159,17 @@ domains:
   - name: epbstock.com
 
 servers:
-  # The one Droplet: every project runs here.
+  # The first Droplet: the status page, and every project without a server.
+  # EPB Stock's demo.
   - name: server.abrunacci.dev
+  # EPB Stock's production (terraform/production.tf): 2 vCPU and 4 GB, its
+  # database in the managed cluster, SSH only through Tailscale. Its limits
+  # leave room for D13's 768m API and 1536m worker.
+  - name: server.epbstock.com.ar
+    database: managed
+    ssh: tailscale
+    max_memory: 1536m
+    max_cpus: 2
 
 projects:
   - name: cuanto-cuesta

@@ -30,19 +30,33 @@ docker_apt_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11
 #           subnet and dynamic range, so PostgreSQL keeps a fixed address
 #           (group_vars). Backends are not on it: each one reaches PostgreSQL
 #           on its own network (database_networks)
+#   db-egress
+#        -> instead of db, on a server whose database is managed: the one-off
+#           containers that connect to the cluster (project-db, backups,
+#           migrations). Not internal, since the cluster is outside the
+#           server, but its packets reach only the cluster's address
+#           (db_egress in scripts/backend-lib.sh). Fixed subnet: the firewall
+#           rule names it
 # Changing a network's settings (subnet, range, IPv6) recreates it, and the
 # docker role leaves its containers off the new one (tasks/main.yml). The
 # roles that run after it put them back: docker compose up recreates a
 # container that has lost a network, with its aliases and fixed address. So
 # such a change needs a full playbook run, not --tags docker alone.
-docker_networks:
+docker_networks: >-
+  {{ docker_edge_networks + (docker_egress_networks if database_managed else docker_db_networks) }}
+docker_edge_networks:
   - name: edge
     internal: false
     ipv6_subnet: "{{ docker_edge_ipv6_subnet }}"
+docker_db_networks:
   - name: db
     internal: true
     subnet: "{{ db_network_subnet }}"
     iprange: "{{ db_network_dynamic_range }}"
+docker_egress_networks:
+  - name: "{{ db_egress_network }}"
+    internal: false
+    subnet: "{{ db_egress_subnet }}"
 
 # IPv6 subnet of edge. Caddy publishes 80 and 443 through this network
 # (gw_priority in its compose file). Without IPv6 on it, Docker can only hand

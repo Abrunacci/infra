@@ -11,8 +11,8 @@
 #     backed up by DigitalOcean and by the nightly dumps), so it has no
 #     Droplet backups either.
 #
-# The Droplet goes into projects.yml's servers, and gets its A/AAAA records,
-# once Ansible can provision it (server_ipv4 in main.tf already maps it).
+# The Droplet is in projects.yml's servers (database: managed, ssh:
+# tailscale), so it gets its A/AAAA records like every server (dns.tf).
 
 locals {
   production_server  = "server.epbstock.com.ar"
@@ -132,6 +132,12 @@ resource "digitalocean_database_cluster" "production" {
     # Destroying it destroys the database and DigitalOcean's backups of it.
     # Removing it on purpose means a reviewed PR that drops this flag.
     prevent_destroy = true
+    precondition {
+      # Ansible's side (projects.yml, servers) must agree: the production
+      # server is the one whose database is this cluster, and the only one.
+      condition     = [for s in local.registry.servers : s.name if lookup(s, "database", "local") == "managed"] == [local.production_server]
+      error_message = "projects.yml: ${local.production_server} must be the only server with database: managed."
+    }
   }
 }
 
@@ -148,4 +154,30 @@ resource "digitalocean_database_firewall" "production" {
 # The cluster's CA, to connect with TLS verify-full (sslrootcert).
 data "digitalocean_database_ca" "production" {
   cluster_id = digitalocean_database_cluster.production.id
+}
+
+# The production server's projects with a database, by name: each one gets a
+# PgBouncer pool in front of its database, which project-db creates (Ansible).
+# A pool needs its database to exist: a project added here is first set up by
+# the playbook, and its pool is created by the next apply.
+locals {
+  production_databases = {
+    for p in local.projects : p.name => replace(p.name, "-", "_")
+    if lookup(p, "server", local.primary_server) == local.production_server && lookup(p, "database", false)
+  }
+}
+
+# Transaction mode (D20a): a server connection is the client's only for one
+# transaction, so 12 of them serve every connection the app and its worker
+# open. With no user, each client logs in as itself (the app's own role,
+# project-db). Named like the project: DATABASE_URL's database, on the pool
+# port.
+resource "digitalocean_database_connection_pool" "production" {
+  for_each = local.production_databases
+
+  cluster_id = digitalocean_database_cluster.production.id
+  name       = each.key
+  mode       = "transaction"
+  size       = 12
+  db_name    = each.value
 }

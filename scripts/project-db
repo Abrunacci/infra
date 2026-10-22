@@ -22,10 +22,26 @@
 #
 # Passwords are generated here once (/etc/infra/secrets/projects/PROJECT/,
 # root only) and written into the env files Compose passes to the containers:
-#   database-app.env      DATABASE_URL (as my_app_app)             the backend
+#   database-app.env      DATABASE_URL, DATABASE_DIRECT_URL        the backend
+#                         (as my_app_app)
 #   database-migrate.env  MIGRATION_DATABASE_URL (as my_app),       migrations
 #                         APP_DB_USER
 # They reach PostgreSQL through psql's stdin, never a command line.
+#
+# On a managed cluster (database.conf, DATABASE_MODE=managed) it runs as the
+# cluster's admin user, which is not a superuser, so:
+#   - DATABASE_URL goes through the project's PgBouncer pool (named like the
+#     project, Terraform creates it) and DATABASE_DIRECT_URL straight to the
+#     database, both with TLS verify-full; migrations connect directly;
+#   - the roles' NOSUPERUSER, NOREPLICATION and NOBYPASSRLS cannot be set, only
+#     checked: ensure fails if either role has one of them;
+#   - passwords are set as SCRAM verifiers computed here, never in clear: a
+#     failed statement, or the cluster's statement log, cannot show them;
+#   - the admin user is a member of the owner (INHERIT, SET), so it can create
+#     the database for it, dump it and drop it; its memberships are expected;
+#   - PUBLIC loses CONNECT on defaultdb only: postgres and template1 belong to
+#     DigitalOcean's superuser.
+# Without one, DATABASE_DIRECT_URL is the same as DATABASE_URL.
 #
 # ensure never creates an empty database where one existed: once created, a
 # marker stays in /var/lib/infra/backends/PROJECT/database (retire leaves it,
@@ -81,13 +97,31 @@ role_state() {
 
 # Memberships in ROLE that do not match what ensure sets: none at all for the
 # owner; for the app's role, only the owner's, with ADMIN and without INHERIT
-# or SET. Prints how many; a role that does not exist has none.
+# or SET. On a managed cluster, the admin user's are expected too (it created
+# both roles, and ensure makes it a member of the owner). Prints how many; a
+# role that does not exist has none.
 foreign_members() {
-  local role="$1" allowed="$2"
+  local role="$1" allowed="$2" admin=""
+  [[ "$DATABASE_MODE" == managed ]] && admin="$DB_ADMIN"
   db_psql <<<"SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
               WHERE r.rolname = '$role'
                 AND NOT ('$allowed' <> '' AND m.member = (SELECT oid FROM pg_roles WHERE rolname = '$allowed')
-                         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)"
+                         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+                AND NOT ('$admin' <> '' AND m.member = (SELECT oid FROM pg_roles WHERE rolname = '$admin'))"
+}
+
+# A SCRAM-SHA-256 verifier (what PostgreSQL stores) of the password on stdin,
+# with a new salt: how passwords are set on a managed cluster.
+scram_verifier() {
+  # shellcheck disable=SC2016 # Python, not shell.
+  python3 -I -c '
+import base64, hashlib, hmac, os, sys
+password, salt, iterations = sys.stdin.read().encode(), os.urandom(16), 4096
+salted = hashlib.pbkdf2_hmac("sha256", password, salt, iterations)
+stored = hashlib.sha256(hmac.new(salted, b"Client Key", "sha256").digest()).digest()
+server = hmac.new(salted, b"Server Key", "sha256").digest()
+b64 = lambda b: base64.b64encode(b).decode()
+print(f"SCRAM-SHA-256${iterations}:{b64(salt)}${b64(stored)}:{b64(server)}")'
 }
 
 # A password file, created once: 64 hex characters.
@@ -116,10 +150,68 @@ write_if_changed() {
   mv -f "$file.tmp" "$file"
 }
 
+# ensure's SQL as PostgreSQL's superuser. Reads owner_state, app_state,
+# db_owner, owner_pw and app_pw from cmd_ensure.
+ensure_sql_local() {
+  cat <<SQL
+-- If a statement fails, PostgreSQL would log its text, passwords included.
+SET log_min_error_statement = panic;
+SET client_min_messages = warning;
+$([[ "$owner_state" == "0|" ]] && echo "CREATE ROLE \"$DB_OWNER\" LOGIN;")
+COMMENT ON ROLE "$DB_OWNER" IS '$(owner_comment)';
+ALTER ROLE "$DB_OWNER" LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$owner_pw';
+ALTER ROLE "$DB_OWNER" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_OWNER" RESET ALL;
+$([[ "$app_state" == "0|" ]] && echo "CREATE ROLE \"$DB_APP\" LOGIN;")
+COMMENT ON ROLE "$DB_APP" IS '$(app_comment)';
+ALTER ROLE "$DB_APP" LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$app_pw';
+ALTER ROLE "$DB_APP" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_APP" RESET ALL;
+GRANT "$DB_APP" TO "$DB_OWNER" WITH ADMIN OPTION, INHERIT FALSE, SET FALSE;
+$([[ -z "$db_owner" ]] && echo "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_OWNER\";")
+ALTER ROLE "$DB_OWNER" IN DATABASE "$DB_NAME" RESET ALL;
+ALTER ROLE "$DB_APP" IN DATABASE "$DB_NAME" RESET ALL;
+REVOKE ALL ON DATABASE "$DB_NAME" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$DB_NAME" TO "$DB_APP";
+REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
+SQL
+}
+
+# The same as the managed cluster's admin user (see the header): no
+# superuser-only attributes or settings, passwords as SCRAM verifiers, and
+# the admin user a member of the owner, so it can create the database for it.
+ensure_sql_managed() {
+  local owner_verifier app_verifier
+  owner_verifier="$(printf '%s' "$owner_pw" | scram_verifier)" || fail "could not compute a password verifier"
+  app_verifier="$(printf '%s' "$app_pw" | scram_verifier)" || fail "could not compute a password verifier"
+  cat <<SQL
+SET client_min_messages = warning;
+$([[ "$owner_state" == "0|" ]] && echo "CREATE ROLE \"$DB_OWNER\" LOGIN;")
+COMMENT ON ROLE "$DB_OWNER" IS '$(owner_comment)';
+ALTER ROLE "$DB_OWNER" LOGIN NOCREATEDB CREATEROLE PASSWORD '$owner_verifier';
+ALTER ROLE "$DB_OWNER" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_OWNER" RESET ALL;
+$([[ "$app_state" == "0|" ]] && echo "CREATE ROLE \"$DB_APP\" LOGIN;")
+COMMENT ON ROLE "$DB_APP" IS '$(app_comment)';
+ALTER ROLE "$DB_APP" LOGIN INHERIT NOCREATEDB NOCREATEROLE PASSWORD '$app_verifier';
+ALTER ROLE "$DB_APP" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
+ALTER ROLE "$DB_APP" RESET ALL;
+GRANT "$DB_APP" TO "$DB_OWNER" WITH ADMIN OPTION, INHERIT FALSE, SET FALSE;
+GRANT "$DB_OWNER" TO "$DB_ADMIN" WITH INHERIT TRUE, SET TRUE;
+$([[ -z "$db_owner" ]] && echo "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_OWNER\";")
+ALTER ROLE "$DB_OWNER" IN DATABASE "$DB_NAME" RESET ALL;
+ALTER ROLE "$DB_APP" IN DATABASE "$DB_NAME" RESET ALL;
+REVOKE ALL ON DATABASE "$DB_NAME" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$DB_NAME" TO "$DB_APP";
+REVOKE CONNECT, TEMPORARY ON DATABASE defaultdb FROM PUBLIC;
+SQL
+}
+
 cmd_list() {
   printf '%-32s %-32s %s\n' DATABASE OWNER SIZE
   db_psql <<<"SELECT datname || '|' || pg_get_userbyid(datdba) || '|' || pg_size_pretty(pg_database_size(oid))
-              FROM pg_database WHERE datname NOT IN ('postgres', 'template0', 'template1') ORDER BY 1" \
+              FROM pg_database WHERE datname NOT IN ($DB_SYSTEM) ORDER BY 1" \
     | while IFS='|' read -r d o z; do printf '%-32s %-32s %s\n' "$d" "$o" "$z"; done
 }
 
@@ -164,37 +256,35 @@ cmd_ensure() {
 
   # Attributes, passwords, expiry, connection limits and per-role settings are
   # set on every run, so a migration cannot leave them changed.
-  # If a statement fails, PostgreSQL would log its text, passwords included.
-  db_psql >/dev/null <<SQL
-SET log_min_error_statement = panic;
-SET client_min_messages = warning;
-$([[ "$owner_state" == "0|" ]] && echo "CREATE ROLE \"$DB_OWNER\" LOGIN;")
-COMMENT ON ROLE "$DB_OWNER" IS '$(owner_comment)';
-ALTER ROLE "$DB_OWNER" LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$owner_pw';
-ALTER ROLE "$DB_OWNER" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
-ALTER ROLE "$DB_OWNER" RESET ALL;
-$([[ "$app_state" == "0|" ]] && echo "CREATE ROLE \"$DB_APP\" LOGIN;")
-COMMENT ON ROLE "$DB_APP" IS '$(app_comment)';
-ALTER ROLE "$DB_APP" LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$app_pw';
-ALTER ROLE "$DB_APP" VALID UNTIL 'infinity' CONNECTION LIMIT -1;
-ALTER ROLE "$DB_APP" RESET ALL;
-GRANT "$DB_APP" TO "$DB_OWNER" WITH ADMIN OPTION, INHERIT FALSE, SET FALSE;
-$([[ -z "$db_owner" ]] && echo "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_OWNER\";")
-ALTER ROLE "$DB_OWNER" IN DATABASE "$DB_NAME" RESET ALL;
-ALTER ROLE "$DB_APP" IN DATABASE "$DB_NAME" RESET ALL;
-REVOKE ALL ON DATABASE "$DB_NAME" FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE "$DB_NAME" TO "$DB_APP";
-REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
-REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
-SQL
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    ensure_sql_managed
+  else
+    ensure_sql_local
+  fi | db_psql >/dev/null
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    # Only a superuser sets these, so only one could have: DigitalOcean's.
+    [[ "$(db_psql <<<"SELECT count(*) FROM pg_roles WHERE rolname IN ('$DB_OWNER', '$DB_APP')
+                       AND (rolsuper OR rolreplication OR rolbypassrls)")" == 0 ]] \
+      || fail "role $DB_OWNER or $DB_APP is a superuser, or has REPLICATION or BYPASSRLS; the backend must not use it"
+  fi
   [[ -f "$marker" && -n "$db_owner" ]] || date -u '+%F %H:%M UTC' >"$marker"
 
-  local base="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_HOST:$POSTGRES_PORT/$DB_NAME"
+  # The app's URL and the direct one; the owner's, for the migrations, is
+  # always direct. Through a pool, the database is named after the pool.
+  local tls="" app_port="$POSTGRES_PORT" app_db="$DB_NAME"
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    tls="?sslmode=verify-full&sslrootcert=$DATABASE_CA_IN_CONTAINER"
+    app_port="$POSTGRES_POOL_PORT" app_db="$project"
+  fi
+  local direct="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_HOST:$POSTGRES_PORT/$DB_NAME$tls"
+  local app="$BACKEND_URL_SCHEME://%s:%s@$POSTGRES_HOST:$app_port/$app_db$tls"
   # shellcheck disable=SC2059
-  write_if_changed "$secrets/database-app.env" "DATABASE_URL=$(printf "$base" "$DB_APP" "$app_pw")" && changed=1
+  write_if_changed "$secrets/database-app.env" \
+    "$(printf 'DATABASE_URL=%s\nDATABASE_DIRECT_URL=%s' "$(printf "$app" "$DB_APP" "$app_pw")" \
+      "$(printf "$direct" "$DB_APP" "$app_pw")")" && changed=1
   # shellcheck disable=SC2059
   write_if_changed "$secrets/database-migrate.env" \
-    "$(printf 'MIGRATION_DATABASE_URL=%s\nAPP_DB_USER=%s' "$(printf "$base" "$DB_OWNER" "$owner_pw")" "$DB_APP")" \
+    "$(printf 'MIGRATION_DATABASE_URL=%s\nAPP_DB_USER=%s' "$(printf "$direct" "$DB_OWNER" "$owner_pw")" "$DB_APP")" \
     && changed=1
 
   if ((created)); then
@@ -246,9 +336,13 @@ cmd_retire() {
       || fail "the final dump failed; nothing was dropped"
     echo "Final dump: $file ($(du -h "$file" | cut -f1)). Copy it off the server."
   fi
+  # On a managed cluster the admin user does not administer the roles the
+  # migrations created: the owner, which does, drops them.
   {
     ((exists)) && echo "DROP DATABASE \"$DB_NAME\" WITH (FORCE);"
+    [[ "$DATABASE_MODE" == managed && "$state" != "0|" ]] && echo "SET ROLE \"$DB_OWNER\";"
     while read -r r; do [[ -n "$r" ]] && echo "DROP ROLE IF EXISTS \"$r\";"; done <<<"$roles"
+    [[ "$DATABASE_MODE" == managed && "$state" != "0|" ]] && echo "RESET ROLE;"
     [[ "$state" == "0|" ]] || echo "DROP ROLE \"$DB_OWNER\";"
   } | db_psql >/dev/null
   rm -f "$secrets/db-owner.password" "$secrets/db-app.password" \

@@ -1,8 +1,26 @@
-# Managed by Ansible (roles/projects). Read by project-db and deploy-backend
-# (/usr/local/lib/infra/backend.sh), which source it as shell: every value is
-# quoted.
-# The host in DATABASE_URL: PostgreSQL's name on each project's db-<name>.
+# Managed by Ansible (roles/projects). Read by project-db, deploy-backend and
+# the backup commands (/usr/local/lib/infra/backend.sh), which source it as
+# shell: every value is quoted.
+{% if database_managed %}
+# A managed cluster (projects.yml: database: managed), reached over the VPC
+# with TLS verify-full against /etc/infra/database-ca.crt: the host in
+# DATABASE_URL (through the pool) and DATABASE_DIRECT_URL, and the admin user
+# project-db and the backups connect as (its password: database-credentials).
+DATABASE_MODE=managed
+POSTGRES_HOST={{ projects_managed_db.host | quote }}
+POSTGRES_PORT={{ projects_managed_db.port | int }}
+POSTGRES_POOL_PORT={{ projects_db_pool_port | int }}
+POSTGRES_ADMIN_USER={{ projects_managed_db.user | quote }}
+# The client those commands run in, on db-egress (roles/docker).
+DATABASE_CLIENT_IMAGE={{ projects_db_client_image | quote }}
+DATABASE_EGRESS_NETWORK={{ db_egress_network | quote }}
+DATABASE_EGRESS_SUBNET={{ db_egress_subnet | quote }}
+{% else %}
+# PostgreSQL's container on this server (roles/postgres). The host in
+# DATABASE_URL: PostgreSQL's name on each project's db-<name>.
+DATABASE_MODE=local
 POSTGRES_HOST={{ postgres_host | quote }}
 POSTGRES_PORT=5432
 POSTGRES_COMPOSE_PROJECT={{ projects_postgres_compose_project | quote }}
 POSTGRES_COMPOSE_SERVICE={{ projects_postgres_compose_service | quote }}
+{% endif %}

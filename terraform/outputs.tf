@@ -74,3 +74,24 @@ output "production_db_ca" {
   description = "CA certificate of the production PostgreSQL cluster, to connect with sslmode=verify-full. Not a secret."
   value       = data.digitalocean_database_ca.production.certificate
 }
+
+output "production_database" {
+  description = "What Ansible needs of the production cluster (ansible/roles/projects, projects_managed_db): its private host, port, admin user and CA. No secret in it."
+  value = {
+    host = digitalocean_database_cluster.production.private_host
+    port = digitalocean_database_cluster.production.port
+    user = digitalocean_database_cluster.production.user
+    ca   = data.digitalocean_database_ca.production.certificate
+  }
+}
+
+output "production_db_password" {
+  description = "Password of the production cluster's admin user. Only for sudo database-credentials on the production server: terraform output -raw production_db_password."
+  value       = digitalocean_database_cluster.production.password
+  sensitive   = true
+}
+
+output "production_db_pools" {
+  description = "The PgBouncer pools of the production cluster, by project (none until a project with a database is on the production server)."
+  value       = { for name, pool in digitalocean_database_connection_pool.production : name => { port = pool.port, mode = pool.mode, size = pool.size } }
+}

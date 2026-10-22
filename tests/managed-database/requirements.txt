@@ -1,0 +1,4 @@
+# What ci.sh needs: ansible-playbook, to render every server's files from the
+# roles' own templates, and PyYAML (with it) for check.py.
+ansible-core==2.21.5
+pyyaml==6.0.3

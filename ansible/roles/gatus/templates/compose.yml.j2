@@ -19,8 +19,11 @@ services:
         format: raw
       - path: {{ gatus_secrets_dir }}/{{ gatus_alert_channel }}.env
         format: raw
-      # GATUS_PUSH_TOKEN, which every heartbeat push must carry.
+      # GATUS_PUSH_TOKEN, which every heartbeat push from this server must carry.
       - path: {{ gatus_secrets_dir }}/push.env
+        format: raw
+      # The other servers' tokens, one variable each (roles/gatus defaults).
+      - path: {{ gatus_secrets_dir }}/servers-push.env
         format: raw
     volumes:
       # The directory, not the file: templating replaces the file.

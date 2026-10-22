@@ -50,14 +50,15 @@ endpoints:
 {%   endfor %}
 {% endfor %}
 
-# Heartbeats (templates/heartbeats.yaml.j2): the server pushes their results
-# with gatus-heartbeats, on loopback, with this token. A heartbeat with no
-# push for its interval fails on its own.
+# Heartbeats (templates/heartbeats.yaml.j2): each server pushes its own with
+# gatus-heartbeats, with its own token: this one's on loopback
+# (GATUS_PUSH_TOKEN), every other one's through the status page
+# (servers-push.env). A heartbeat with no push for its interval fails on its own.
 external-endpoints:
 {% for h in gatus_heartbeats %}
   - name: {{ h.name | to_json }}
     group: {{ h.group | to_json }}
-    token: "${GATUS_PUSH_TOKEN}"
+    token: "${{ '{' ~ ('GATUS_PUSH_TOKEN' if h.server == inventory_hostname else gatus_remote_push_token_vars[h.server]) ~ '}' }}"
     heartbeat:
       interval: {{ h.interval }}
     alerts:

@@ -42,6 +42,18 @@
     validate: /usr/sbin/sshd -t -f %s
   notify: Reload ssh
 
+# SSH only through Tailscale: the session running this playbook comes in on
+# its interface, which must be up before ufw allows 22 there alone.
+- name: Check that Tailscale is up
+  ansible.builtin.assert:
+    that:
+      - hardening_tailscale_interface in ansible_facts.interfaces
+    fail_msg: >-
+      {{ inventory_hostname }}'s SSH is reached through Tailscale (projects.yml, ssh: tailscale), and it has no
+      {{ hardening_tailscale_interface }} interface. Check it in the Recovery Console: sudo tailscale status.
+    quiet: true
+  when: ssh_via_tailscale
+
 # The allow rules go in before ufw is enabled, so the SSH session running this
 # playbook is never cut off.
 - name: Allow inbound SSH and HTTP(S)
@@ -49,10 +61,12 @@
     rule: allow
     port: "{{ item.port }}"
     proto: "{{ item.proto }}"
+    interface: "{{ item.interface | default(omit) }}"
+    direction: "{{ 'in' if item.interface is defined else omit }}"
     comment: "{{ item.comment }}"
   loop: "{{ hardening_ufw_rules }}"
   loop_control:
-    label: "{{ item.port }}/{{ item.proto }}"
+    label: "{{ item.port }}/{{ item.proto }}{{ (' on ' ~ item.interface) if item.interface is defined else '' }}"
 
 - name: Deny any other inbound traffic
   community.general.ufw:

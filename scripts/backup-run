@@ -73,7 +73,10 @@ backup_load
 exec 8>"$BACKUP_LOCK"
 # Not recorded as a failure: the run holding the lock records its own result.
 flock -n 8 || { echo "backup-run: another backup-run (or a restore) is running" >&2; exit 1; }
-db_container
+mapfile -t with_database < <(backup_projects_with_database)
+# Only when there is a database to back up: a server without one (a new one,
+# whose managed cluster has no credentials here yet) still backs up its secrets.
+((${#with_database[@]} == 0)) || db_container
 
 work="$(mktemp -d /var/tmp/infra-backup.XXXXXX)"
 recipients=(-R "$BACKUP_RECIPIENTS")
@@ -89,13 +92,13 @@ while read -r project; do
     missing+=("$project")
     continue
   fi
-  docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$DB_NAME" 9>&- \
+  db_pg_dump "$DB_NAME" \
     | age "${recipients[@]}" -o "$work/$project.dump.age" \
     || fail "pg_dump or age failed for $project"
   db_roles_tsv "$project" | age "${recipients[@]}" -o "$work/$project.roles.tsv.age" \
     || fail "could not export the roles of $project"
   projects+=("$project")
-done < <(backup_projects_with_database)
+done < <(printf '%s\n' "${with_database[@]}")
 
 if [[ -d "$SECRETS_DIR" ]]; then
   tar -C "$(dirname "$SECRETS_DIR")" -c "$(basename "$SECRETS_DIR")" \

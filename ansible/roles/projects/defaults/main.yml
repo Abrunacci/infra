@@ -48,6 +48,16 @@ projects_registry_config_dir: "{{ infra_secrets_dir }}/registry"
 # (10004). No login, no home, owns no file on the host.
 projects_backends_uid: 10005
 projects_backend_default_memory: 256m
+# memory, and each server's max_memory in projects.yml: 64m to 2048m. A
+# container's memory goes up to its server's max_memory, 512m by default (the
+# first Droplet's size); max_cpus likewise caps cpus, 1 by default.
+projects_memory_re: '^(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m\Z'
+projects_server_default_max_memory: 512m
+projects_server_default_max_cpus: 1
+# Each server's entry by name (a server named twice is refused in validate.yml).
+projects_server_limits: >-
+  {{ dict(projects_registry.servers | selectattr('name', 'defined') | map(attribute='name')
+          | zip(projects_registry.servers | selectattr('name', 'defined'))) }}
 # Half of the Droplet's one CPU: a backend under load (a flood of requests,
 # a hot loop) slows down itself instead of starving the other backends,
 # Caddy and PostgreSQL. PostgreSQL has no limit.
@@ -57,7 +67,26 @@ projects_backend_default_cpus: 0.5
 projects_backend_default_max_body: 10MB
 # Env names the infrastructure sets itself (per-project databases): a project
 # cannot set them in env or secrets.
-projects_backend_reserved_env: [DATABASE_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]
+projects_backend_reserved_env:
+  [DATABASE_URL, DATABASE_DIRECT_URL, MIGRATION_DATABASE_URL, APP_DB_USER, APP_DB_PASSWORD]
+
+# A managed database (projects.yml, servers: database: managed). Its host,
+# port, admin user and CA come from Terraform (validate.yml, projects_managed_db);
+# the pool's port is DigitalOcean's for every pool.
+projects_db_pool_port: 25061
+# Read from Terraform's outputs on the machine running the playbook (with
+# terraform/.env loaded, as for every run): only once, and only for a server
+# whose database is managed (validate.yml).
+projects_managed_db_terraform_output: >-
+  {{ lookup('ansible.builtin.pipe', 'terraform -chdir=' ~ (playbook_dir ~ '/../terraform') | quote
+     ~ ' output -json production_database') }}
+# The cluster's CA, where the backends, the migrations and the client find it.
+projects_database_ca: /etc/infra/database-ca.crt
+projects_database_ca_in_container: /run/infra/database-ca.crt
+# psql, pg_dump and pg_restore for a managed database, in one-off containers:
+# the same image as roles/postgres (postgres_image), the cluster's major
+# version. Renovate updates both lines.
+projects_db_client_image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
 
 # Linked secrets ({from: PROJECT, key: KEY}), one item per secret:
 # {project, server, key, link}. Checked in validate.yml.

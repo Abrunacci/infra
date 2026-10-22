@@ -154,7 +154,7 @@ download() {
 # Restores the dump on stdin into DATABASE, connected as PROJECT's owner.
 restore_dump() {
   local project="$1" database="$2"
-  db_as_owner "$project" "$work" pg_restore -h 127.0.0.1 -U "$DB_OWNER" -d "$database" --no-owner --exit-on-error
+  db_as_owner "$project" "$work" pg_restore -d "$database" --no-owner --exit-on-error
 }
 
 # Table sizes of DATABASE, "schema.table count" per line.

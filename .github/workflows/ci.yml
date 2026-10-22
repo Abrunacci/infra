@@ -128,3 +128,22 @@ jobs:
       # either fails here, before it reaches the server.
       - name: Body limits
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" PYTHON="$RUNNER_TEMP/venv/bin/python" tests/body-limits/ci.sh
+
+  managed-database:
+    name: Test (managed database)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the test tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -r tests/managed-database/requirements.txt
+      # Every server's files rendered from projects.yml with the roles' own
+      # templates: a server whose database is local must never name the
+      # managed cluster (D21), and the managed one nothing of the local
+      # PostgreSQL. Nothing here reaches a server or a cluster.
+      - name: Managed database
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" PYTHON="$RUNNER_TEMP/venv/bin/python" tests/managed-database/ci.sh

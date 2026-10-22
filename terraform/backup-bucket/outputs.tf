@@ -1,4 +1,4 @@
-output "bucket_name" {
-  description = "Bucket the server's backup job writes to."
-  value       = cloudflare_r2_bucket.backups.name
+output "bucket_names" {
+  description = "Each server's backups bucket, by server: the one its backup job writes to."
+  value       = { for name, server in local.backup_buckets : server => cloudflare_r2_bucket.backups[name].name }
 }

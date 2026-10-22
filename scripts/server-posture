@@ -9,11 +9,14 @@ Run every hour by server-posture.timer. What is expected is
 /etc/infra/server-posture.json, written by Ansible (roles/gatus) from the
 roles that set each thing up:
 
-- listening sockets on public addresses, IPv4 and IPv6 (ss): only SSH and
-  Docker's proxy for Caddy's ports (hardening_ufw_rules);
+- listening sockets on public addresses, IPv4 and IPv6 (ss): only SSH,
+  Docker's proxy for Caddy's ports and, on a server reached through
+  Tailscale, tailscaled on its port and on its own addresses
+  (hardening_ufw_rules);
 - ports Docker publishes: only Caddy on public addresses, only Gatus on
-  loopback;
-- ufw: active, deny incoming, exactly its rules in v4 and v6;
+  loopback (on the first server, the only one that runs it);
+- ufw: active, deny incoming, exactly its rules in v4 and v6 (SSH only on
+  Tailscale's interface, on a server reached through it);
 - sshd's effective settings (sshd -T);
 - fail2ban: running, with exactly its jails;
 - unattended-upgrades running, no reboot pending for long, and only Docker's
@@ -52,6 +55,9 @@ CONF = pathlib.Path("/etc/infra/server-posture.json")
 REGISTRY = pathlib.Path("/etc/infra/projects.json")
 PING_ENV = pathlib.Path("/etc/infra/secrets/gatus/server-posture.env")
 REBOOT_REQUIRED = pathlib.Path("/var/run/reboot-required")
+# Tailscale's own addresses (CGNAT and its ULA): tailscaled listens on them
+# for its peers only.
+TAILSCALE_NETWORKS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # Caddy answers these for a private path (respond 404), or 405 for a method
 # the site does not take: either way the request never reached the backend.
 PRIVATE_PATH_OK = {404, 405}
@@ -70,7 +76,15 @@ def public(address):
     return not ipaddress.ip_address(address).is_loopback
 
 
-def check_listeners(want):
+def tailscale_address(address):
+    address = address.split("%")[0].strip("[]")
+    if address == "*":
+        return False
+    ip = ipaddress.ip_address(address)
+    return any(ip.version == net.version and ip in net for net in TAILSCALE_NETWORKS)
+
+
+def check_listeners(want, tailscale=False):
     """ss -tulpn: every socket listening on a public address must be expected."""
     code, out = run("ss", "-H", "-tulpn")
     if code:
@@ -84,6 +98,8 @@ def check_listeners(want):
         if not public(address):
             continue
         processes = set(re.findall(r'\(\("([^"]+)"', line)) or {"unknown"}
+        if tailscale and processes == {"tailscaled"} and tailscale_address(address):
+            continue
         key = (proto, int(port))
         if key in allowed and processes <= allowed[key]:
             seen.add(key)
@@ -135,10 +151,20 @@ def check_ufw(want):
         differences.append("ufw does not deny incoming by default")
     rules = set()
     for line in out.split("\n--", 1)[-1].splitlines():
-        match = re.match(r"(\S+)( \(v6\))?\s+(ALLOW|DENY|REJECT|LIMIT)( IN| OUT)?\s+(\S+( \(v6\))?)", line.strip("-"))
+        match = re.match(
+            r"(\S+)( \(v6\))?( on \S+)?\s+(ALLOW|DENY|REJECT|LIMIT)( IN| OUT)?\s+(\S+( \(v6\))?)", line.strip("-")
+        )
         if match:
-            rules.add(f"{match.group(1)}{match.group(2) or ''} {match.group(3)}{match.group(4) or ''} {match.group(5)}")
-    expected = {f"{port} ALLOW IN Anywhere" for port in want} | {f"{port} (v6) ALLOW IN Anywhere (v6)" for port in want}
+            rules.add(
+                f"{match.group(1)}{match.group(2) or ''}{match.group(3) or ''} "
+                f"{match.group(4)}{match.group(5) or ''} {match.group(6)}"
+            )
+    # A rule is "PORT/PROTO", or "PORT/PROTO on INTERFACE".
+    expected = set()
+    for rule in want:
+        port, _, interface = rule.partition(" on ")
+        on = f" on {interface}" if interface else ""
+        expected |= {f"{port}{on} ALLOW IN Anywhere", f"{port} (v6){on} ALLOW IN Anywhere (v6)"}
     differences += [f"ufw rule missing: {rule}" for rule in sorted(expected - rules)]
     differences += [f"ufw rule not expected: {rule}" for rule in sorted(rules - expected)]
     return differences
@@ -272,6 +298,7 @@ KEYS = {
     "fail2ban_jails": list,
     "reboot_required_max_hours": int,
     "held_packages": list,
+    "tailscale": bool,
 }
 
 
@@ -285,7 +312,7 @@ def load(path):
 
 def differences(want):
     found = []
-    found += check_listeners(want["listeners"])
+    found += check_listeners(want["listeners"], want["tailscale"])
     found += check_published(want["published"])
     found += check_ufw(want["ufw"])
     found += check_sshd(want["sshd"])
