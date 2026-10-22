@@ -3,7 +3,7 @@
 # stops the play before anything changes. projects.schema.json checks the
 # same file in pre-commit and CI; this repeats its rules, so a run without
 # pre-commit is still protected, and adds the ones a schema cannot express
-# (unique names and hostnames, a project's domain among the domains, health
+# (a name used once per server, unique hostnames, a project's domain among the domains, health
 # inside paths). One gap is inherent:
 # Ansible reads YAML 1.1, so an unquoted `yes` becomes true here, while the
 # schema (YAML 1.2) rejects it. Regexes end with \Z: in Python, $ also
@@ -29,6 +29,9 @@
       - projects_registry.projects is sequence
       - projects_registry.projects is not string
       - projects_registry.projects is not mapping
+      # One name per server: a project on two servers (its demo and its
+      # production) is two entries with one name. Everything that is global
+      # (hostnames, titles, deploy keys) stays unique in the whole file.
       - projects_names | unique | length == projects_names | length
       - projects_hosts | unique | length == projects_hosts | length
       # Each public project is a group on the status page (roles/gatus), named
@@ -40,12 +43,16 @@
       # database role (x_app) must not be project x's app role.
       - projects_db_names | intersect(projects_db_names | map('regex_replace', '$', '_app') | list) | length == 0
     fail_msg: >-
-      projects.yml: it must hold only a domains list, a servers list and a projects list, with unique names,
-      hostnames, titles (of the projects with a subdomain) and deploy keys, and no project with a database named
-      like another one's plus -app.
+      projects.yml: it must hold only a domains list, a servers list and a projects list, with each name used
+      once per server, unique hostnames, titles (of the projects with a subdomain) and deploy keys, and no project
+      with a database named like another one's plus -app.
     quiet: true
   vars:
-    projects_names: "{{ projects_registry.projects | map(attribute='name') | list }}"
+    # Each project's name and its server (the first one when it names none).
+    projects_names: >-
+      {{ projects_registry.projects | map(attribute='name')
+         | zip(projects_registry.projects | map(attribute='server', default=projects_registry.servers[0].name))
+         | map('join', ' ') | list }}
     # Internal projects have none. Each project's subdomain under its domain
     # (the domain is checked per project, below).
     projects_hosts: >-
@@ -183,13 +190,24 @@
          | flatten | list
          + projects_registry.projects | selectattr('also_serves', 'defined') | map(attribute='also_serves')
            | flatten | map(attribute='name') | list }}
+    # Each public project's hostname, as in group_vars (project_hosts), but
+    # from every entry: project_hosts is keyed by name, and here a name may
+    # still be on two servers.
+    projects_public_hosts: >-
+      {%- set hosts = [] -%}
+      {%- for p in projects_registry.projects if p.subdomain is defined -%}
+      {%-   set d = p.domain | default(domain) -%}
+      {%-   set host = d if p.subdomain == '@' else p.subdomain ~ '.' ~ d -%}
+      {%-   set _ = hosts.append(host) -%}
+      {%-   if p.subdomain == '@' and p.site -%}
+      {%-     set _ = hosts.append('www.' ~ host) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ hosts }}
     projects_all_hosts: >-
       {{ projects_registry.servers | map(attribute='name') | list
          + ['status.' ~ domain]
-         + project_hosts.values() | list
-         + projects_registry.projects | selectattr('subdomain', 'defined') | selectattr('subdomain', 'equalto', '@')
-           | selectattr('site') | map(attribute='name') | map('extract', project_hosts)
-           | map('regex_replace', '^', 'www.') | list
+         + projects_public_hosts
          + projects_redirects }}
 
 - name: Check each project
@@ -488,9 +506,6 @@
       - projects_source[0].backend is defined and projects_source[0].backend is mapping
       - projects_source[0].backend.port is defined
       - (projects_source[0].backend.secrets | default({})).get(item.link.key) in ['generated', 'manual']
-      # The value is copied, and the network shared, on one server.
-      - projects_source[0].server | default(projects_registry.servers[0].name) == projects_linking.server
-        | default(projects_registry.servers[0].name)
     fail_msg: >-
       projects.yml: {{ item.project }}'s secret {{ item.key }} links to {{ item.link.from | default('?') }}'s
       {{ item.link.key | default('?') }}. It must be another project on the same server, with a backend that has a
@@ -500,9 +515,15 @@
   loop_control:
     label: "{{ item.project }} {{ item.key }}"
   vars:
+    # Looked for on the linking project's server only: the value is copied,
+    # and the network shared, on one server.
     projects_source: >-
-      {{ projects_registry.projects | selectattr('name', 'equalto', item.link.from | default('')) | list }}
-    projects_linking: "{{ projects_registry.projects | selectattr('name', 'equalto', item.project) | first }}"
+      {%- set found = [] -%}
+      {%- for p in projects_registry.projects if p.name == item.link.from | default('')
+            and p.server | default(projects_registry.servers[0].name) == item.server -%}
+      {%-   set _ = found.append(p) -%}
+      {%- endfor -%}
+      {{ found }}
 
 # An env value that names another project's backend (http://PROJECT-backend:PORT/...)
 # only works over link-PROJECT: this backend must link to it with a secret,
@@ -510,7 +531,7 @@
 - name: Check each backend's addresses of other backends
   ansible.builtin.assert:
     that:
-      - item.host in projects_targets
+      - item.host in item.linked
       - item.port | length > 0
       - (item.port | int) == projects_target.backend.port
     fail_msg: >-
@@ -522,17 +543,23 @@
   loop_control:
     label: "{{ item.project }} {{ item.key }}"
   vars:
-    projects_target: "{{ projects_registry.projects | selectattr('name', 'equalto', item.host) | first }}"
-    projects_targets: >-
-      {{ (projects_registry.projects | selectattr('name', 'equalto', item.project) | first).backend.secrets
-         | default({}) | dict2items | map(attribute='value') | select('mapping') | map(attribute='from') | list }}
+    # Both on the server of the project whose env this is.
+    projects_target: >-
+      {%- set found = [] -%}
+      {%- for p in projects_registry.projects if p.name == item.host
+            and p.server | default(projects_registry.servers[0].name) == item.server -%}
+      {%-   set _ = found.append(p) -%}
+      {%- endfor -%}
+      {{ found | first }}
 
 # From here on, and in every role, the registry is this server's: its projects
 # only, the ones whose server is this host (or, without one, the first
 # server). The rest of the file, already checked above, belongs to the other
-# servers' runs.
+# servers' runs. The whole file stays in projects_registry_all, for what
+# watches every server (the status page, in roles/gatus).
 - name: Keep this server's projects
   ansible.builtin.set_fact:
+    projects_registry_all: "{{ projects_registry }}"
     projects_registry: >-
       {{ projects_registry | combine({'projects': projects_registry.projects
          | selectattr('server', 'defined') | selectattr('server', 'equalto', inventory_hostname) | list
