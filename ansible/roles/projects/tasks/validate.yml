@@ -135,8 +135,30 @@
       | map(attribute='name') | join(', ') }}). The inventory's host must be the server's name there.
     quiet: true
 
-# redirect_from: each name is a domain in domains or under one, and no
-# hostname is served twice (a project, a www redirect, a server or status).
+# also_serves: each entry is a mapping with a name and, optionally,
+# noindex. Its names join the hostnames checked just below.
+- name: Check the other names of each project
+  ansible.builtin.assert:
+    that:
+      - item.also_serves is sequence and item.also_serves is not string and item.also_serves is not mapping
+      - item.also_serves | length > 0
+      - item.also_serves | reject('mapping') | list | length == 0
+      - item.also_serves | map('dict2items') | flatten | map(attribute='key') | difference(['name', 'noindex'])
+        | length == 0
+      - item.also_serves | selectattr('name', 'undefined') | list | length == 0
+      - item.also_serves | selectattr('noindex', 'defined') | map(attribute='noindex') | reject('boolean') | list
+        | length == 0
+    fail_msg: >-
+      projects.yml: {{ item.name }}'s also_serves must be a list of mappings, each with a name (a hostname) and,
+      optionally, noindex (true or false).
+    quiet: true
+  loop: "{{ projects_registry.projects | selectattr('also_serves', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# redirect_from and also_serves: each name is a domain in domains or under
+# one, and no hostname is served twice (a project, a www redirect, another
+# name of a project, a server or status).
 - name: Check the redirects
   ansible.builtin.assert:
     that:
@@ -150,14 +172,17 @@
         | length == 0
       - projects_all_hosts | unique | length == projects_all_hosts | length
     fail_msg: >-
-      projects.yml: every redirect_from entry must be a list of hostnames, each a domain in domains or under
-      one, and no hostname may be used twice (by a project, its www redirect, a redirect_from, a server or status).
+      projects.yml: every redirect_from entry and also_serves name must be a hostname, each a domain in domains
+      or under one, and no hostname may be used twice (by a project, its www redirect, a redirect_from, an
+      also_serves name, a server or status).
     quiet: true
   vars:
     projects_domain_names: "{{ projects_registry.domains | map(attribute='name') | list }}"
     projects_redirects: >-
       {{ projects_registry.projects | selectattr('redirect_from', 'defined') | map(attribute='redirect_from')
-         | flatten | list }}
+         | flatten | list
+         + projects_registry.projects | selectattr('also_serves', 'defined') | map(attribute='also_serves')
+           | flatten | map(attribute='name') | list }}
     projects_all_hosts: >-
       {{ projects_registry.servers | map(attribute='name') | list
          + ['status.' ~ domain]
@@ -251,6 +276,7 @@
             and item.backend.paths is not defined and item.backend.private_paths is not defined
             and item.backend.max_body is not defined and item.backend.client_ip_header is not defined
             and item.permissions_policy is not defined and item.redirect_from is not defined
+            and item.also_serves is not defined
             and item.referrer_policy is not defined and item.content_security_policy is not defined)
       - >-
         item.subdomain is not defined or item.backend is not defined
@@ -288,7 +314,7 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, server, domain, subdomain, redirect_from, title, repo, site, database,
+    projects_allowed_keys: [name, server, domain, subdomain, redirect_from, also_serves, title, repo, site, database,
                             permissions_policy, referrer_policy, content_security_policy, backend, deploy_key]
     projects_referrer_policies: [no-referrer, no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin,
                                  strict-origin, strict-origin-when-cross-origin, unsafe-url]

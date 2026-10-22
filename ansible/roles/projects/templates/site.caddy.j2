@@ -1,8 +1,21 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
-{{ project_hosts[item.name] }} {
+{# also_serves: other names served exactly like the project's own. #}
+{% set noindex = item.also_serves | default([]) | selectattr('noindex', 'defined') | selectattr('noindex')
+                 | map(attribute='name') | list %}
+{{ ([project_hosts[item.name]] + item.also_serves | default([]) | map(attribute='name') | list) | join(', ') }} {
 	# Defined in the main Caddyfile (roles/caddy).
 	import access_log
 	encode zstd gzip
+{% if noindex %}
+
+	# Search engines must not list these names (also_serves with noindex in
+	# projects.yml): the same site is indexed under its own name.
+	@noindex host {{ noindex | join(' ') }}
+	header @noindex {
+		defer
+		X-Robots-Tag "noindex, nofollow"
+	}
+{% endif %}
 
 	# Applied after the response is written (defer), so they replace a
 	# backend's own values instead of being added next to them. The ones with

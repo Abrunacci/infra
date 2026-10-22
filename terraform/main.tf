@@ -53,6 +53,19 @@ locals {
     ]
   ])
 
+  # Each project's also_serves: other names that serve the same site, in the
+  # zone of the domain they are, or are under ("" when none is: the
+  # precondition in dns.tf says so), on the project's server.
+  also_served_hosts = flatten([
+    for p in local.public_projects : [
+      for a in lookup(p, "also_serves", []) : {
+        name   = a.name
+        zone   = concat([for d in local.domains : d if a.name == d || endswith(a.name, ".${d}")], [""])[0]
+        server = p.server
+      }
+    ]
+  ])
+
   # Every hostname that points at a Droplet, with the domain whose zone holds
   # its records and the server it points at:
   #   each server's own name -> SSH/Ansible target, so no IP address is ever
@@ -61,7 +74,8 @@ locals {
   #   one per public project: its subdomain under its domain, or the domain
   #   itself for "@"; plus www.<domain> when a project with a site is on the
   #   domain itself, and each of its redirect_from (their redirects live in
-  #   that site's Caddy file); all on the project's server
+  #   that site's Caddy file), and each of its also_serves (served by the
+  #   same site); all on the project's server
   hostname_list = concat(
     [for s in local.servers : { name = s, zone = local.server_zones[s], server = s }],
     [{ name = "status.${local.primary_domain}", zone = local.primary_domain, server = local.primary_server }],
@@ -74,6 +88,7 @@ locals {
       if p.subdomain == "@" && p.site
     ],
     local.redirect_hosts,
+    local.also_served_hosts,
   )
   # distinct(): a repeated hostname must reach the preconditions in dns.tf,
   # which say what is wrong, instead of failing here as a duplicate key.

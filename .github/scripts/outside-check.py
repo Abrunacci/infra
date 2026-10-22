@@ -8,9 +8,10 @@ Run weekly by .github/workflows/outside-check.yml. What is expected comes from
 the repo, so a new project needs no change here:
 
 - open ports: the tcp and udp inbound rules of terraform/firewall.tf;
-- sites: every project hostname in projects.yml, plus status (roles/caddy)
-  www for each project with a site on a domain itself, and each project's
-  redirect_from;
+- sites: every project hostname in projects.yml, and each of its
+  also_serves (with X-Robots-Tag: noindex only where it says noindex), plus
+  status (roles/caddy) www for each project with a site on a domain itself,
+  and each project's redirect_from;
 - private paths: each backend's private_paths in projects.yml;
 - CAA records: terraform/dns.tf, on every domain in projects.yml; the DS
   record of the first one (the server's): the DNSSEC_DS variable.
@@ -100,20 +101,23 @@ def expected():
     # The server's own domain (ansible/group_vars/all/main.yml, domain).
     domain = domains[0]
     # Each redirect, by its hostname: where it must send visitors.
-    sites, redirects, private = [f"status.{domain}"], {}, {}
+    sites, redirects, private, noindex = [f"status.{domain}"], {}, {}, []
     for project in registry["projects"]:
         subdomain = project.get("subdomain")
         if subdomain is None:
             continue
         project_domain = project.get("domain", domain)
         host = project_domain if subdomain == "@" else f"{subdomain}.{project_domain}"
-        sites.append(host)
+        others = project.get("also_serves", [])
+        sites += [host] + [other["name"] for other in others]
+        noindex += [other["name"] for other in others if other.get("noindex")]
         if subdomain == "@" and project.get("site"):
             redirects[f"www.{project_domain}"] = host
         for name in project.get("redirect_from", []):
             redirects[name] = host
         for pattern in project.get("backend", {}).get("private_paths", []):
-            private.setdefault(host, set()).update(private_path_variants(pattern))
+            for name in [host] + [other["name"] for other in others]:
+                private.setdefault(name, set()).update(private_path_variants(pattern))
     ds = os.environ.get("DNSSEC_DS", "").strip()
     return {
         "domain": domain,
@@ -121,6 +125,7 @@ def expected():
         "server": f"server.{domain}",
         "ports": firewall_ports((ROOT / "terraform/firewall.tf").read_text()),
         "sites": sorted(sites),
+        "noindex": sorted(noindex),
         "redirects": dict(sorted(redirects.items())),
         "hsts": caddy_hsts(),
         "private_paths": {host: sorted(paths) for host, paths in sorted(private.items())},
@@ -202,7 +207,7 @@ def request(host, method, path):
         connection.close()
 
 
-def check_headers(host, hsts):
+def check_headers(host, hsts, noindex):
     try:
         headers = request(host, "GET", "/").headers
     except (OSError, http.client.HTTPException, ssl.SSLError) as error:
@@ -216,6 +221,10 @@ def check_headers(host, hsts):
         differences.append(f"{host}: Content-Security-Policy without frame-ancestors")
     if "Server" in headers:
         differences.append(f"{host}: sends a Server header")
+    if ("noindex" in (headers.get("X-Robots-Tag") or "")) != noindex:
+        differences.append(
+            f"{host}: X-Robots-Tag {headers.get('X-Robots-Tag')!r}, expected {'noindex' if noindex else 'none'}"
+        )
     return differences
 
 
@@ -302,7 +311,7 @@ def run():
                 differences += check_tls(host, workdir)
                 checks += 1
         for host in want["sites"]:
-            differences += check_headers(host, want["hsts"])
+            differences += check_headers(host, want["hsts"], host in want["noindex"])
             checks += 1
         for host, target in want["redirects"].items():
             differences += check_redirect(host, target, want["hsts"])
