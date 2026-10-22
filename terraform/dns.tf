@@ -168,22 +168,38 @@ resource "cloudflare_universal_ssl_setting" "this" {
 
 # DNSSEC: Cloudflare signs each zone, so a resolver that validates (1.1.1.1,
 # 8.8.8.8, most ISPs') rejects forged answers for the domain. For a domain
-# registered with Cloudflare Registrar (abrunacci.dev), Cloudflare publishes
-# the DS record in the parent zone by itself; for any other, the DS from
-# terraform output dnssec_ds goes in by hand at the registrar. The status
-# reads "pending" until it is there, then "active".
+# registered with Cloudflare Registrar (abrunacci.dev, epbstock.com),
+# Cloudflare publishes the DS record in the parent zone by itself; for any
+# other, the DS from terraform output dnssec_ds goes in by hand at the
+# registrar. The status reads "pending" until it is there, then "active".
 # Never removed by mistake: turning DNSSEC off while the DS record is still in
-# .dev makes the whole domain fail to resolve on those resolvers, for as long
-# as the DS stays cached (up to a day). To turn it off, do it in the
-# dashboard (DNS → Settings → Disable DNSSEC), which removes the DS first, and
-# only then drop this block (prevent_destroy first, then terraform state rm).
+# the parent zone makes the whole domain fail to resolve on those resolvers,
+# for as long as the DS stays cached (up to a day). To turn it off on a
+# domain whose DS is published, do it in the dashboard (DNS → Settings →
+# Disable DNSSEC), which removes the DS first, and only then add the domain
+# to dnssec_off below.
+locals {
+  # Domains whose zone is not signed. epbstock.com.ar: NIC Argentina's
+  # delegation page only takes name servers, so its DS can never be loaded
+  # and the zone stayed "pending" forever (one change in every plan). Its DS
+  # was never in .com.ar, so turning DNSSEC off here was safe. If NIC
+  # Argentina starts taking DS records, take it out of this list, apply, and
+  # load the DS from terraform output dnssec_ds at NIC.
+  dnssec_off = ["epbstock.com.ar"]
+}
+
 resource "cloudflare_zone_dnssec" "this" {
   for_each = toset(local.domains)
 
   zone_id = local.zone_ids[each.key]
-  status  = "active"
+  status  = contains(local.dnssec_off, each.key) ? "disabled" : "active"
 
   lifecycle {
     prevent_destroy = true
+
+    precondition {
+      condition     = alltrue([for d in local.dnssec_off : contains(local.domains, d)])
+      error_message = "dnssec_off (terraform/dns.tf) names a domain that is not in projects.yml."
+    }
   }
 }
