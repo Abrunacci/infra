@@ -253,11 +253,6 @@ projects:
   # EPB Stock's landing (landing/ in the EPB_Stock repository), on its own
   # domain. The app is at app.epbstock.com.ar (epb-stock, below).
   - name: epb-landing
-    # The production server, which its CI reaches through Tailscale. The
-    # first server loses only this project's Caddy site, container and deploy
-    # key: its files, secrets and releases stay until the cleanup, so moving
-    # back is taking this line out.
-    server: server.epbstock.com.ar
     domain: epbstock.com.ar
     subdomain: "@"
     redirect_from: [epbstock.com, www.epbstock.com]
