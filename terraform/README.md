@@ -12,7 +12,7 @@ Creates everything the platform needs in DigitalOcean and Cloudflare:
 | A/AAAA records for each server in `../projects.yml` (`servers`, pointing at its Droplet), `status` (on the first domain, at the first server) and each project, at its server (the first one by default), under its domain: the domain itself for a project on `"@"`, plus `www`; and each project's `redirect_from` and `also_serves`, in the zone of its domain | `dns.tf` |
 | CAA records on every domain that allow only Let's Encrypt and ZeroSSL | `dns.tf` |
 | Universal SSL turned off on every zone, so Cloudflare adds no CAA records of its own | `dns.tf` |
-| DNSSEC: every zone signed by Cloudflare. For a domain registered with Cloudflare Registrar (`abrunacci.dev`, `epbstock.com`), Cloudflare publishes its DS record; for `epbstock.com.ar` it goes in by hand at NIC Argentina (output `dnssec_ds` has each domain's) | `dns.tf` |
+| DNSSEC: every zone signed by Cloudflare except those in `dnssec_off`. For a domain registered with Cloudflare Registrar (`abrunacci.dev`, `epbstock.com`), Cloudflare publishes its DS record (output `dnssec_ds` has each domain's). `epbstock.com.ar` is not signed: NIC Argentina takes no DS records; it can be turned back on if it ever does (see `dnssec_off`) | `dns.tf` |
 | Google Search Console verification TXT record on `abrunacci.dev` | `dns.tf` |
 | Email Routing, on each domain with `mail_forward` in `../projects.yml` (`hello@`, `postmaster@` and `abuse@abrunacci.dev`): those addresses forwarded to one inbox, every other address rejected | `email.tf` |
 | Proton Mail's MX, SPF, verification and DKIM records, on each domain with `proton` in `../projects.yml` (`epbstock.com.ar`) | `email.tf` |

@@ -24,8 +24,8 @@ output "server_hostnames" {
 }
 
 output "dnssec_ds" {
-  description = "Each domain's DS record, which goes in its parent zone: Cloudflare Registrar publishes it by itself; other registrars, by hand (compare with dig DS)."
-  value       = { for d, dnssec in cloudflare_zone_dnssec.this : d => dnssec.ds }
+  description = "Each signed domain's DS record, which goes in its parent zone: Cloudflare Registrar publishes it by itself; other registrars, by hand (compare with dig DS). Domains in dnssec_off (dns.tf) have none."
+  value       = { for d, dnssec in cloudflare_zone_dnssec.this : d => dnssec.ds if !contains(local.dnssec_off, d) }
 }
 
 output "turnstile_site_key" {
