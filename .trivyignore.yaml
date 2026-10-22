@@ -11,8 +11,13 @@ misconfigurations:
     statement: >-
       Inbound from anywhere is the point of the firewall: HTTP and HTTPS for the sites, ICMP, and SSH, which
       takes keys only and has fail2ban (README.md, "Firewall: SSH, HTTP(S) and ICMP only").
+  - id: DIG-0001
+    paths: [terraform/production.tf]
+    statement: >-
+      The production Droplet's firewall: HTTP and HTTPS for the sites, ICMP, and UDP 41641, where only
+      Tailscale (WireGuard, authenticated peers) answers. No SSH from the internet.
   - id: DIG-0003
-    paths: [terraform/firewall.tf]
+    paths: [terraform/firewall.tf, terraform/production.tf]
     statement: >-
       Outbound to anywhere: certificates, images, backups, email and the backends' own calls need it.
       Restricting the backends' egress is a later step of the security audit (step 11).

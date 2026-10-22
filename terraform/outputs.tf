@@ -54,3 +54,23 @@ output "epb_landing_web_analytics_token" {
   description = "Site token of EPB Stock's landing in Cloudflare Web Analytics (EPB_Stock's repository variable LANDING_CF_BEACON_TOKEN). Public: every visitor's browser gets it."
   value       = cloudflare_web_analytics_site.epb_landing.site_token
 }
+
+output "production_droplet" {
+  description = "Name of EPB Stock's production Droplet, and of its device in Tailscale: reach it over SSH as <name>.<tailnet>.ts.net (MagicDNS), never by its public address."
+  value       = digitalocean_droplet.production.name
+}
+
+output "production_db_host" {
+  description = "Private hostname of the production PostgreSQL cluster, reachable only from the production Droplet, over the VPC."
+  value       = digitalocean_database_cluster.production.private_host
+}
+
+output "production_db_port" {
+  description = "Port of the production PostgreSQL cluster."
+  value       = digitalocean_database_cluster.production.port
+}
+
+output "production_db_ca" {
+  description = "CA certificate of the production PostgreSQL cluster, to connect with sslmode=verify-full. Not a secret."
+  value       = data.digitalocean_database_ca.production.certificate
+}

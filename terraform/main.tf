@@ -22,8 +22,14 @@ locals {
   }
   # Each server's Droplet, by hostname. A server in projects.yml with no
   # Droplet here gets "" and the precondition in dns.tf says so.
-  server_ipv4 = { (local.primary_server) = digitalocean_droplet.server.ipv4_address }
-  server_ipv6 = { (local.primary_server) = digitalocean_droplet.server.ipv6_address }
+  server_ipv4 = {
+    (local.primary_server)    = digitalocean_droplet.server.ipv4_address
+    (local.production_server) = digitalocean_droplet.production.ipv4_address
+  }
+  server_ipv6 = {
+    (local.primary_server)    = digitalocean_droplet.server.ipv6_address
+    (local.production_server) = digitalocean_droplet.production.ipv6_address
+  }
   # Each domain's zone ID (TF_VAR_cloudflare_zone_ids), or "" when it is
   # missing: the preconditions in dns.tf then say which one.
   zone_ids = { for d in local.domains : d => lookup(var.cloudflare_zone_ids, d, "") }
@@ -130,6 +136,8 @@ resource "digitalocean_droplet" "server" {
   user_data = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     admin_user           = var.admin_user
     admin_ssh_public_key = trimspace(var.admin_ssh_public_key)
+    tailscale_auth_key   = ""
+    tailscale_hostname   = ""
   })
 
   lifecycle {
@@ -149,5 +157,9 @@ resource "digitalocean_project" "portfolio" {
   description = "Portfolio projects infrastructure, managed by Terraform."
   purpose     = "Web Application"
   environment = "Production"
-  resources   = [digitalocean_droplet.server.urn]
+  resources = [
+    digitalocean_droplet.server.urn,
+    digitalocean_droplet.production.urn,
+    digitalocean_database_cluster.production.urn,
+  ]
 }
