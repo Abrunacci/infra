@@ -183,6 +183,8 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 Use the file only if they match. With it, the workflow checks the server's identity (`StrictHostKeyChecking=yes`) instead of trusting whatever answers.
 
+A server with `ssh: tailscale` (production) has no SSH on its public address: scan it from a device in the tailnet, by its name there (`ssh-keyscan -t ed25519 epb-prod-01`), and compare with its recovery console. Its CI connects to `deploy@epb-prod-01` from a runner in the tailnet with the tag `tag:ci`, which reaches only port 22 of the production server (`terraform/tailscale.tf`).
+
 ### 3. The GitHub environment
 
 In the project's repository, go to **Settings → Environments → New environment**, and name it `production`. Then:
@@ -291,7 +293,7 @@ sudo docker --config /etc/infra/secrets/registry login ghcr.io -u Abrunacci --pa
 # paste the token, press Enter, then Ctrl-D
 ```
 
-It prints `Login Succeeded`. The credentials stay in `/etc/infra/secrets/registry/config.json` (root only), used only by `deploy-backend` and `backend-rollback`; they never leave the server. Before the token expires, create a new one and run the same command. A token that expired makes new deploys fail with `cannot pull ...: unauthorized`; what is running keeps running.
+Each server has a token of its own, so either can be revoked alone. It prints `Login Succeeded`. The credentials stay in `/etc/infra/secrets/registry/config.json` (root only), used only by `deploy-backend` and `backend-rollback`; they never leave the server. Before the token expires, create a new one and run the same command. A token that expired makes new deploys fail with `cannot pull ...: unauthorized`; what is running keeps running.
 
 ### Backend secrets
 
@@ -396,6 +398,33 @@ sudo docker image ls --digests <image>      # then: sudo docker image rm <image>
 ```
 
 A project with a database cannot be removed this way: see "Retiring a project with a database".
+
+### Moving a project to another server
+
+A project without a database moves by setting its `server` in `projects.yml`: the new server's playbook sets it up, Terraform points its hostnames there, and the old server's playbook takes it out as in "Removing a project's backend" (its Caddy site, container and deploy key go; its site files, secrets, releases and images stay). Nothing is down if it goes in this order:
+
+1. **The new server first.** Merge, then run the playbook there only (`--limit <new server>`). Not `terraform apply` yet: Caddy there cannot get the certificates until the DNS points at it, and keeps retrying.
+2. **Its secrets and its first deploy, there.** Set the manual secrets (`sudo project-secret <project> check` says `ok`), log in to GHCR if the image is private ("Pulling private images"), deploy the backend and the site (CI with the new host, or `deploy.sh` by hand) and check them from the server.
+3. **The DNS.** `terraform apply` in `terraform/`: only the project's records change, in place. Then restart Caddy on the new server (`sudo docker restart caddy-caddy-1`) so it asks for the certificates at once instead of at its next retry (its other sites, if any, are down for a second). Whoever still resolves the old address is served by the old server, which still has everything.
+4. **The old server last.** Wait two TTLs (10 minutes) and check that public resolvers give the new address (`dig +short @1.1.1.1 <host>`), then run the playbook there (`--limit <old server>`).
+
+Moving back is the same with the old `server`. A project with a database cannot move this way: its data would stay behind.
+
+**A secret whose value nobody kept**, such as a provider's key shown only once, is copied from one server to the other without being shown, from your machine. The value only passes through the pipe; sudo asks for each server's password once:
+
+```sh
+read -rs "FROM_PW?sudo password on the old server: "; echo
+read -rs "TO_PW?sudo password on the new server: "; echo
+# Both passwords first: a wrong one would make sudo read the value as a password.
+printf '%s\n' "$FROM_PW" | ssh ops@<old server> 'sudo -S -p "" true' && echo "old: ok"
+printf '%s\n' "$TO_PW" | ssh ops@<new server> 'sudo -S -p "" true' && echo "new: ok"
+{ printf '%s\n' "$TO_PW"
+  printf '%s\n' "$FROM_PW" | ssh ops@<old server> 'sudo -S -p "" sed -n "s/^KEY=//p" /etc/infra/secrets/projects/<project>/secrets.env'
+} | ssh ops@<new server> 'sudo -S -p "" project-secret <project> set KEY'
+unset FROM_PW TO_PW
+```
+
+Expected: `old: ok`, `new: ok`, then `Set KEY for <project>. ...`. If the old server has no value for `KEY`, `project-secret` says `no value on stdin` and changes nothing.
 
 ## A server with a managed database
 
