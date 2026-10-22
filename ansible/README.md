@@ -289,8 +289,9 @@ A backend may have a `worker` in `projects.yml`: a second process of the same im
 A public image needs nothing. For private images in GHCR, the server logs in once with a GitHub personal access token (classic) whose only scope is `read:packages`, with an expiration date. Fine-grained tokens do not work with GHCR. Create it in **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**, write its expiration date in `terraform/README.md` ("Credentials"), and on the server:
 
 ```sh
-sudo docker --config /etc/infra/secrets/registry login ghcr.io -u Abrunacci --password-stdin
-# paste the token, press Enter, then Ctrl-D
+read -rsp 'Token: ' T; echo     # paste the token; nothing shows
+printf '%s\n' "$T" | sudo docker --config /etc/infra/secrets/registry login ghcr.io -u Abrunacci --password-stdin
+unset T
 ```
 
 Each server has a token of its own, so either can be revoked alone. It prints `Login Succeeded`. The credentials stay in `/etc/infra/secrets/registry/config.json` (root only), used only by `deploy-backend` and `backend-rollback`; they never leave the server. Before the token expires, create a new one and run the same command. A token that expired makes new deploys fail with `cannot pull ...: unauthorized`; what is running keeps running.
