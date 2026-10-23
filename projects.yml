@@ -253,10 +253,8 @@ projects:
   # EPB Stock's landing (landing/ in the EPB_Stock repository), on its own
   # domain. The app is at app.epbstock.com.ar (epb-stock, below).
   - name: epb-landing
-    # The production server, which its CI reaches through Tailscale. The
-    # first server loses only this project's Caddy site, container and deploy
-    # key: its files, secrets and releases stay until the cleanup, so moving
-    # back is taking this line out.
+    # The production server, which its CI reaches through Tailscale. Moved
+    # from the first server on 2026-10-23, which no longer has any of it.
     server: server.epbstock.com.ar
     domain: epbstock.com.ar
     subdomain: "@"
@@ -266,8 +264,9 @@ projects:
     title: EPB Stock (landing)
     site: true
     database: false
-    # The landing's CI (LANDING_DEPLOY_SSH_KEY, in EPB_Stock's environment
-    # production): it can only deploy this site and its backend.
+    # The landing's CI (EPB_Stock's repository secret LANDING_DEPLOY_SSH_KEY,
+    # with LANDING_PROD_KNOWN_HOSTS): it can only deploy this site and its
+    # backend.
     deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHFksYvfS1BuO4OQ875YBm4+iaTKvLqBFiYpjZZisqSJ epb-landing-deploy
     # The policy the landing documents (landing/README.md, "Deploy"): its own
     # origin, plus Turnstile (terraform/turnstile.tf), which loads a script and

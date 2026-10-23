@@ -408,6 +408,15 @@ A project without a database moves by setting its `server` in `projects.yml`: th
 2. **Its secrets and its first deploy, there.** Set the manual secrets (`sudo project-secret <project> check` says `ok`), log in to GHCR if the image is private ("Pulling private images"), deploy the backend and the site (CI with the new host, or `deploy.sh` by hand) and check them from the server.
 3. **The DNS.** `terraform apply` in `terraform/`: only the project's records change, in place. Then restart Caddy on the new server (`sudo docker restart caddy-caddy-1`) so it asks for the certificates at once instead of at its next retry (its other sites, if any, are down for a second). Whoever still resolves the old address is served by the old server, which still has everything.
 4. **The old server last.** Wait two TTLs (10 minutes) and check that public resolvers give the new address (`dig +short @1.1.1.1 <host>`), then run the playbook there (`--limit <old server>`).
+5. **The old server's leftovers, once sure.** The playbook leaves the project's site files, secrets, release history and images there, so moving back stays quick. When the move is not going back, remove them on the old server, after checking that its playbook no longer sets the project up:
+
+   ```sh
+   sudo grep -c '"name": "<project>"' /etc/infra/projects.json     # 0
+   sudo docker ps -a --filter "label=com.docker.compose.project=backend-<project>" -q | wc -l     # 0
+   sudo rm -r /srv/sites/<project> /etc/infra/secrets/projects/<project> /var/lib/infra/backends/<project>
+   sudo rm -rf /opt/infra/projects/<project>
+   sudo docker image ls --digests <image>      # then: sudo docker image rm <image>@<digest> for each
+   ```
 
 Moving back is the same with the old `server`. A project with a database cannot move this way: its data would stay behind.
 
