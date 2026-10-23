@@ -490,8 +490,8 @@ projects:
         UVICORN_ACCESS_LOG: "false"
       secrets:
         SECRET_KEY: generated
-        # A Resend key of its own (epb-stock-production), so either server's can
-        # be revoked alone.
+        # The demo's Resend key, copied from the first server without being
+        # shown (terraform/README.md, "Credentials").
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
