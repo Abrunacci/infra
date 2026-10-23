@@ -315,6 +315,7 @@
         or (item.permissions_policy is string and item.permissions_policy | length <= 1024
             and item.permissions_policy is match('^[a-z][a-z-]*=(\*|\((self)?\))(, [a-z][a-z-]*=(\*|\((self)?\)))*\Z'))
       - item.referrer_policy is not defined or item.referrer_policy in projects_referrer_policies
+      - item.noindex is not defined or item.noindex is boolean
       # Directives separated by "; ", frame-ancestors among them; no double
       # quotes (the Caddyfile quotes it), backslashes or braces (placeholders).
       - >-
@@ -337,7 +338,7 @@
             and item.backend.paths is not defined and item.backend.private_paths is not defined
             and item.backend.max_body is not defined and item.backend.client_ip_header is not defined
             and item.permissions_policy is not defined and item.redirect_from is not defined
-            and item.also_serves is not defined
+            and item.also_serves is not defined and item.noindex is not defined
             and item.referrer_policy is not defined and item.content_security_policy is not defined)
       - >-
         item.subdomain is not defined or item.backend is not defined
@@ -375,8 +376,9 @@
     label: "{{ item.name | default('(no name)') }}"
   vars:
     projects_label: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
-    projects_allowed_keys: [name, server, domain, subdomain, redirect_from, also_serves, title, repo, site, database,
-                            permissions_policy, referrer_policy, content_security_policy, backend, deploy_key]
+    projects_allowed_keys: [name, server, domain, subdomain, redirect_from, also_serves, noindex, title, repo, site,
+                            database, permissions_policy, referrer_policy, content_security_policy, backend,
+                            deploy_key]
     projects_referrer_policies: [no-referrer, no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin,
                                  strict-origin, strict-origin-when-cross-origin, unsafe-url]
     projects_csp_pattern: '^[a-z][a-z-]*( [^\s";{}\\]+)*(; [a-z][a-z-]*( [^\s";{}\\]+)*)*\Z'

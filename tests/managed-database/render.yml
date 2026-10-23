@@ -4,8 +4,7 @@
 # compose file, the backups' and Gatus' settings, Caddy's status page, the
 # firewall's rules), from the roles' own templates and variables, into
 # out_dir/<server>/. Used by ci.sh. The managed cluster's settings are made
-# up (a stand-in for Terraform's output), and the production server gets a
-# stand-in of EPB Stock with a database, so its compose file is rendered too.
+# up (a stand-in for Terraform's output).
 - name: Render each server's configuration
   hosts: all
   connection: local
@@ -46,21 +45,6 @@
              | selectattr('server', 'defined') | selectattr('server', 'equalto', inventory_hostname) | list
              + (projects_registry.projects | rejectattr('server', 'defined') | list
                 if inventory_hostname == projects_registry.servers[0].name else [])}) }}
-
-    # Until EPB Stock moves there, production has no project: a stand-in of
-    # it, with its production limits (D13), on the server whose database is
-    # managed.
-    - name: Add a stand-in project with a database to the managed server
-      ansible.builtin.set_fact:
-        projects_registry: >-
-          {{ projects_registry | combine({'projects': projects_registry.projects + [stand_in]}) }}
-      vars:
-        epb: "{{ projects_registry_all.projects | selectattr('name', 'equalto', 'epb-stock') | first }}"
-        stand_in: >-
-          {{ epb | combine({'server': inventory_hostname, 'subdomain': 'stand-in',
-                            'backend': epb.backend | combine({'memory': '768m',
-                                       'worker': epb.backend.worker | combine({'memory': '1536m'})})}) }}
-      when: database_managed and projects_registry.projects | selectattr('database') | list | length == 0
 
     - name: List the heartbeats
       ansible.builtin.set_fact:

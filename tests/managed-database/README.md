@@ -19,9 +19,8 @@ follow where its databases are (`database` in `projects.yml`, servers):
   server's pushes.
 
 `render.yml` renders those files from the roles' own templates and variables,
-with a made-up cluster in place of Terraform's `production_database` output and
-a stand-in EPB Stock on the production server, so its compose file exists
-before PR 7 adds the real one. `check.py` compares them and lists every
+with a made-up cluster in place of Terraform's `production_database` output.
+`check.py` compares them and lists every
 difference.
 
 CI runs it on every pull request ("Test (managed database)"). Locally, from the

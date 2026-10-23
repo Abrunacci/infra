@@ -59,6 +59,8 @@
 #              redirect: a list of {name, noindex}. name: a domain above or a
 #              name under one; noindex: true sends X-Robots-Tag: noindex on
 #              that name only (optional, only with a subdomain)
+#   noindex    true: X-Robots-Tag: noindex on the project's own name too, such
+#              as a demo's (optional, only with a subdomain)
 #   subdomain  DNS record and Caddy site, under the project's domain. "@"
 #              (quoted) is the domain itself; www then redirects to it.
 #              server, status and www are reserved. Optional: without it the
@@ -318,7 +320,122 @@ projects:
       # past 20KB first.
       max_body: 20KB
 
+  # EPB Stock's demo, on the first server: every merge is deployed here first
+  # (EPB_Stock's «Publish and deploy to demo»), and its data is not real. The
+  # same name as production's entry below (D21), with its own database, keys
+  # and limits.
   - name: epb-stock
+    domain: epbstock.com.ar
+    subdomain: stage
+    # Out of search engines: production is the one they list.
+    noindex: true
+    title: EPB Stock (demo)
+    site: true
+    database: true
+    # Invitation links carry ?token=: not even the origin goes to another site.
+    referrer_policy: no-referrer
+    # The policy EPB documents (docs/production-environment.md, "Headers the
+    # site needs"): everything from the site's own origin, nothing inline.
+    content_security_policy: >-
+      default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self';
+      connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+    # Demo's CI (EPB_Stock's DEPLOY_SSH_KEY): it can only deploy this server's
+    # epb-stock.
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMB6oIcQR/2AStIyAJjIVXcGkgxd4sKd2S0+9lOo54w/ epb-stock-deploy
+    backend:
+      image: ghcr.io/abrunacci/epb-stock-backend
+      port: 8000
+      health: /api/health
+      paths: ["/api/*"]
+      # The API's documentation, if a release turns it on: never public. Each
+      # path also with /*: Caddy's `path /api/redoc` does not match /api/redoc/.
+      private_paths: ["/api/docs", "/api/docs/*", "/api/redoc", "/api/redoc/*", "/api/openapi.json",
+                      "/api/openapi.json/*"]
+      # The API takes up to 6 MiB on its import routes and 1 MB elsewhere,
+      # counting the bytes it reads. Caddy is the first line, just above the
+      # largest: 7MB is 6.68 MiB, so no import the API accepts hits it.
+      max_body: 7MB
+      env:
+        # The links in its emails (invitations, password resets, the
+        # subscription's notices) and the only origin allowed to call the API.
+        PUBLIC_APP_URL: "https://stage.epbstock.com.ar"
+        # Also the origins EPB accepts writes from (its same-origin check): every
+        # name in also_serves must be here, or logging in there is refused.
+        CORS_ORIGINS: "https://stage.epbstock.com.ar"
+        # A band on every screen and [Demo] in every mail's subject (EPB_Stock
+        # #269), so nobody takes it for production.
+        APP_ENVIRONMENT: "demo"
+        TRUST_FORWARDED_FOR: "true"
+        MAIL_BACKEND: "resend"
+        MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
+        # Explicit, so a new default in an EPB release changes nothing here.
+        # No COOKIE_DOMAIN: without one, the cookie is this name's only.
+        COOKIE_SECURE: "true"
+        DEBUG: "false"
+        FEATURE_MANUFACTURING: "false"
+        # uvicorn's access log is off: it logs each URL whole, ?token= included,
+        # with Caddy's address. Caddy's access log is the one: the visitor's
+        # address, query strings cut, kept 14 days (roles/caddy).
+        UVICORN_ACCESS_LOG: "false"
+      secrets:
+        SECRET_KEY: generated
+        RESEND_API_KEY: manual
+        SETUP_TOKEN: generated
+        # The import's suggestions: a Claude API key (epb-produccion) from EPB's
+        # own Anthropic workspace, which has a spending limit. Without it, EPB
+        # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
+        # Only the worker gets it (below), and calls api.anthropic.com:443, so
+        # a future filter on the containers' outbound traffic must allow it.
+        ANTHROPIC_API_KEY: optional
+        # The model the analysis uses, if set; without it, EPB's own default.
+        IMPORT_AI_MODEL: optional
+        # Mercado Pago (EPB #106): here, the test credentials of EPB's
+        # application (TEST-...), never the production ones; the API and the
+        # worker both get it. Without it, the «Suscripción» screen says payments
+        # are not set up, and nothing else changes. Both call
+        # api.mercadopago.com:443, so a future filter on the containers'
+        # outbound traffic must allow it.
+        MP_ACCESS_TOKEN: optional
+        # The webhook's secret key, in the same application: the API checks
+        # every notification against it, and refuses them all without it. The
+        # test application's webhook is https://stage.epbstock.com.ar/api/...
+        MP_WEBHOOK_SECRET: optional
+      # Its peak was 131 MiB on 2026-10-16, with a full real import going
+      # through the worker (issue #79); demo's imports are tests, and the first
+      # server needs the room. `migrate` gets it too.
+      memory: 192m
+      migrate: [alembic, upgrade, head]
+      database_url_scheme: postgresql+psycopg
+      # The jobs process (EPB issue #209): the import's AI analysis and its
+      # final step, off the API. Same image and release as the API, so every
+      # deploy and rollback moves both. While it is down, the API sees no
+      # signal from it and does that work itself, without the analysis.
+      worker:
+        command: [python, -m, epb_stock.jobs]
+        # Exits 0 if the worker left its signal in the database in the last
+        # 30 s (it does every 10 s). Deploys wait for it, and the status
+        # page's "epb-stock / Worker" heartbeat alerts when it fails.
+        health: [python, -m, epb_stock.jobs, check]
+        # The largest import is its work: 232 MiB peak on 2026-10-16 with a
+        # full real import (issue #79), under 320m.
+        memory: 320m
+        # Room to finish a job; one still running then goes back to the queue.
+        stop_grace_period: 30s
+        # Secrets only it gets, and the API no longer does. No SECRET_KEY or
+        # SETUP_TOKEN: it signs nothing. It also gets DATABASE_URL (the app's
+        # role, like the API).
+        secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
+        # Secrets it gets as well as the API: it sends the subscription's
+        # notices by email, and brings a new price to each subscription when
+        # Mercado Pago did not take it at once (EPB #106).
+        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY]
+
+  # EPB Stock's production (D22c): app., and the redirect from its first
+  # address. Its database is in the managed cluster, through its PgBouncer
+  # pool (D20a), and started empty. Deployed only by promoting a digest that
+  # ran in demo (EPB_Stock's «Promote to production»).
+  - name: epb-stock
+    server: server.epbstock.com.ar
     domain: epbstock.com.ar
     subdomain: app
     # The app's first address, which old links, bookmarks and invitations
@@ -326,11 +443,6 @@ projects:
     # Never for Mercado Pago's webhook: a redirected notification is not
     # delivered, so its URL is https://app.epbstock.com.ar/api/... itself.
     redirect_from: [epb.abrunacci.dev]
-    # The demo's name, until production has its own server: the same app and
-    # database as app., kept out of search engines.
-    also_serves:
-      - name: stage.epbstock.com.ar
-        noindex: true
     title: EPB Stock
     site: true
     database: true
@@ -341,7 +453,9 @@ projects:
     content_security_policy: >-
       default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self';
       connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
-    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMB6oIcQR/2AStIyAJjIVXcGkgxd4sKd2S0+9lOo54w/ epb-stock-deploy
+    # Production's CI (PROD_DEPLOY_SSH_KEY, in EPB_Stock's environment
+    # production, main only): it can only deploy this server's epb-stock.
+    deploy_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMKjemzKw0bgPSGnG9L0gnXPAINruVvF/Wp6fWiyFac epb-stock-prod-deploy
     backend:
       image: ghcr.io/abrunacci/epb-stock-backend
       port: 8000
@@ -361,7 +475,7 @@ projects:
         PUBLIC_APP_URL: "https://app.epbstock.com.ar"
         # Also the origins EPB accepts writes from (its same-origin check): every
         # name in also_serves must be here, or logging in there is refused.
-        CORS_ORIGINS: "https://app.epbstock.com.ar,https://stage.epbstock.com.ar"
+        CORS_ORIGINS: "https://app.epbstock.com.ar"
         TRUST_FORWARDED_FOR: "true"
         MAIL_BACKEND: "resend"
         MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
@@ -376,6 +490,8 @@ projects:
         UVICORN_ACCESS_LOG: "false"
       secrets:
         SECRET_KEY: generated
+        # A Resend key of its own (epb-stock-production), so either server's can
+        # be revoked alone.
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
@@ -396,9 +512,8 @@ projects:
         # The webhook's secret key, in the same application: the API checks
         # every notification against it, and refuses them all without it.
         MP_WEBHOOK_SECRET: optional
-      # Twice its peak, rounded up to 64m (issue #79): 131 MiB on 2026-10-16,
-      # with a full real import going through the worker. `migrate` gets it too.
-      memory: 320m
+      # D13: room to grow on the production server. `migrate` gets it too.
+      memory: 768m
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -411,9 +526,9 @@ projects:
         # 30 s (it does every 10 s). Deploys wait for it, and the status
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
-        # The largest import is now its work: 232 MiB peak on 2026-10-16 with a
-        # full real import (issue #79), under the 256 MiB that 512m allows.
-        memory: 512m
+        # D13: the largest import is its work (232 MiB peak on 2026-10-16,
+        # issue #79), several at once.
+        memory: 1536m
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
         # Secrets only it gets, and the API no longer does. No SECRET_KEY or
