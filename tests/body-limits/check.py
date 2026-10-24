@@ -41,6 +41,9 @@ from aioquic.quic.events import ConnectionTerminated, StreamReset
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PROJECT = "epb-stock"
+# The project's entry on this server: production, where its users are (the
+# demo has an entry with the same name on the first server).
+SERVER = "server.epbstock.com.ar"
 PATH = "/api/auth/session"
 TIMEOUT = 120
 # The API answers 413 before reading the whole body and closes the connection;
@@ -59,7 +62,8 @@ def max_body_bytes(value):
 def target():
     """The project's URL and max_body in bytes, from projects.yml."""
     registry = yaml.safe_load((ROOT / "projects.yml").read_text())
-    project = next(p for p in registry["projects"] if p["name"] == PROJECT)
+    first = registry["servers"][0]["name"]
+    project = next(p for p in registry["projects"] if p["name"] == PROJECT and p.get("server", first) == SERVER)
     # The first domain is every project's default (group_vars, project_hosts).
     domain = project.get("domain", registry["domains"][0]["name"])
     host = domain if project["subdomain"] == "@" else f"{project['subdomain']}.{domain}"

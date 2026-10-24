@@ -22,7 +22,9 @@ cleanup() {
 trap 'cleanup' EXIT
 
 mkdir -p "$work/conf/sites" "$work/log"
-ansible-playbook -i localhost, "$here/render.yml" -e out_dir="$work" -e ansible_python_interpreter="$(command -v "$python")" >/dev/null
+# The server check.py targets (SERVER), as the inventory host.
+server="$("$python" -c 'import sys; sys.path.insert(0, sys.argv[1]); import check; print(check.SERVER)' "$here")"
+ansible-playbook -i "$server," "$here/render.yml" -e out_dir="$work" -e ansible_python_interpreter="$(command -v "$python")" >/dev/null
 # Caddy's own CA instead of Let's Encrypt, and no HTTP to HTTPS redirect.
 sed -i '0,/^{$/s//{\n\tlocal_certs\n\tauto_https disable_redirects/' "$work/conf/Caddyfile"
 

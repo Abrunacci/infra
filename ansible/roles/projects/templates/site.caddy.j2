@@ -1,6 +1,8 @@
 # Managed by Ansible (roles/projects), from projects.yml: {{ item.name }}.
-{# also_serves: other names served exactly like the project's own. #}
-{% set noindex = item.also_serves | default([]) | selectattr('noindex', 'defined') | selectattr('noindex')
+{# also_serves: other names served exactly like the project's own. noindex:
+   the project's own name, or those of its also_serves that say so. #}
+{% set noindex = ([project_hosts[item.name]] if item.noindex | default(false) else [])
+                 + item.also_serves | default([]) | selectattr('noindex', 'defined') | selectattr('noindex')
                  | map(attribute='name') | list %}
 {{ ([project_hosts[item.name]] + item.also_serves | default([]) | map(attribute='name') | list) | join(', ') }} {
 	# Defined in the main Caddyfile (roles/caddy).
@@ -8,8 +10,8 @@
 	encode zstd gzip
 {% if noindex %}
 
-	# Search engines must not list these names (also_serves with noindex in
-	# projects.yml): the same site is indexed under its own name.
+	# Search engines must not list these names (noindex in projects.yml, on
+	# the project or on an also_serves name).
 	@noindex host {{ noindex | join(' ') }}
 	header @noindex {
 		defer

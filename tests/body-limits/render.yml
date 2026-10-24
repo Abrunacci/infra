@@ -1,9 +1,10 @@
 ---
 # Renders the Caddyfile and every site file the way roles/caddy and
 # roles/projects do, from the same templates, variables and projects.yml,
-# into out_dir (conf/Caddyfile, conf/sites/*.caddy). Used by ci.sh.
+# into out_dir (conf/Caddyfile, conf/sites/*.caddy), for the one server in
+# the inventory (ci.sh: check.py's SERVER). Used by ci.sh.
 - name: Render Caddy's configuration
-  hosts: localhost
+  hosts: all
   connection: local
   gather_facts: false
   vars_files:
@@ -16,6 +17,15 @@
       ansible.builtin.include_vars:
         file: ../../projects.yml
         name: projects_registry
+    # As validate.yml does: only this server's projects (a project without a
+    # server is the first server's).
+    - name: Keep this server's projects
+      ansible.builtin.set_fact:
+        projects_registry: >-
+          {{ projects_registry | combine({'projects': projects_registry.projects
+             | selectattr('server', 'defined') | selectattr('server', 'equalto', inventory_hostname) | list
+             + (projects_registry.projects | rejectattr('server', 'defined') | list
+                if inventory_hostname == projects_registry.servers[0].name else [])}) }}
     - name: Render the Caddyfile
       ansible.builtin.template:
         src: ../../ansible/roles/caddy/templates/Caddyfile.j2

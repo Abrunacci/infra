@@ -30,8 +30,10 @@ Each run sends about 33 MB and 9 requests: well under fail2ban's limits
 ## In CI
 
 `ci.sh` runs the same check on every pull request (CI, "Test (body limits)"),
-without touching the server: it renders the Caddyfile and the site files from
-`projects.yml` with the roles' own templates (`render.yml`), checks them with
+without touching the server: it renders the production server's Caddyfile and
+site files (`SERVER` in `check.py`; the demo's `epb-stock` has the same name on
+the first server) from `projects.yml` with the roles' own templates
+(`render.yml`), checks them with
 `caddy validate` on the pinned image (`caddy_image`), starts that image with
 Caddy's own CA in front of `stand_in_api.py` (EPB's limits: 1,000,000 bytes
 counted as read, 413 `request.too_large`, 500 for a body that is not JSON),

@@ -51,21 +51,15 @@ def check(out, registry):
             problems.append(f"{name}: database_managed is {facts['database_managed']}, expected {is_managed}")
         buckets[name] = facts["backup_bucket"]
         # Each server sets up only its own projects (a project's server
-        # defaults to the first one) and their backends. render.yml's stand-in
-        # (subdomain stand-in) is not in projects.yml.
+        # defaults to the first one) and their backends.
         registered = json.loads((directory / "projects.json").read_text())["projects"]
-        stand_ins = {p["name"] for p in registered if p["subdomain"] == "stand-in"}
         own = [p for p in registry["projects"] if p.get("server", first) == name]
         expected = sorted(p["name"] for p in own)
-        found = sorted(p["name"] for p in registered if p["name"] not in stand_ins)
+        found = sorted(p["name"] for p in registered)
         if found != expected:
             problems.append(f"{name}: projects.json lists {found}, expected {expected}")
         expected = sorted(p["name"] for p in own if "backend" in p)
-        found = sorted(
-            c.name.removesuffix(".compose.yml")
-            for c in (directory / "projects").glob("*.compose.yml")
-            if c.name.removesuffix(".compose.yml") not in stand_ins
-        )
+        found = sorted(c.name.removesuffix(".compose.yml") for c in (directory / "projects").glob("*.compose.yml"))
         if found != expected:
             problems.append(f"{name}: backends rendered {found}, expected {expected}")
         conf = (directory / "database.conf").read_text()
