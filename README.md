@@ -11,7 +11,7 @@ Each server is an entry in `projects.yml` (`servers`) and a Droplet in Terraform
 | `server.abrunacci.dev` (the first server) | The landing `abrunacci.dev` and its contact form, cuanto-cuesta, data-pipeline, EPB Stock's demo (`stage.epbstock.com.ar`) and the status page (`status.abrunacci.dev`) | PostgreSQL in a container on the server | Port 22, keys only | `s-1vcpu-2gb` |
 | `server.epbstock.com.ar` (`epb-prod-01`) | EPB Stock's production (`app.epbstock.com.ar`, and `epb.abrunacci.dev` redirecting there) and its landing (`epbstock.com.ar`) with its form | DigitalOcean's managed PostgreSQL 17 (`epb-production-db`), in a VPC of its own, through a PgBouncer pool | Only through Tailscale: no port 22 on the internet | `s-2vcpu-4gb` |
 
-Each server's memory limits add up to 90% of its RAM at most, and on the first server each one is a share of it: see `ansible/README.md`, "Memory limits".
+Every container's memory limit is a share of its server's RAM, and each server's add up to 90% of it at most: see `ansible/README.md`, "Memory limits".
 
 | Directory | What it holds |
 |---|---|
