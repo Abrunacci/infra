@@ -377,10 +377,21 @@ projects:
         # with Caddy's address. Caddy's access log is the one: the visitor's
         # address, query strings cut, kept 14 days (roles/caddy).
         UVICORN_ACCESS_LOG: "false"
+        # ARCA (electronic invoices), in homologación only: its test web
+        # services, wsaahomo.afip.gov.ar (login) and wswhomo.afip.gov.ar
+        # (invoices), both on 443. The API and the worker both read these.
+        # Production has no ARCA yet.
+        ARCA_CUIT: "20330367653"
+        ARCA_ENVIRONMENT: "testing"
       secrets:
         SECRET_KEY: generated
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
+        # ARCA's homologación certificate and its private key, each one line
+        # of base64; the API and the worker both get them. Without them, EPB
+        # runs without ARCA. Its expiry: terraform/README.md, "Credentials".
+        ARCA_CERTIFICATE: optional
+        ARCA_PRIVATE_KEY: optional
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
         # own Anthropic workspace, which has a spending limit. Without it, EPB
         # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
@@ -426,9 +437,9 @@ projects:
         # role, like the API).
         secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
         # Secrets it gets as well as the API: it sends the subscription's
-        # notices by email, and brings a new price to each subscription when
-        # Mercado Pago did not take it at once (EPB #106).
-        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY]
+        # notices by email, brings a new price to each subscription when
+        # Mercado Pago did not take it at once (EPB #106), and talks to ARCA.
+        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY]
 
   # EPB Stock's production (D22c): app., and the redirect from its first
   # address. Its database is in the managed cluster, through its PgBouncer
