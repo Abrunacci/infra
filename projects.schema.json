@@ -160,6 +160,10 @@
             }
           }
         },
+        "noindex": {
+          "description": "Search engines must not list the site under the project's own name (X-Robots-Tag: noindex, nofollow), such as a demo. Its also_serves names say so each on their own. Only with a subdomain.",
+          "type": "boolean"
+        },
         "title": {
           "description": "Shown on the placeholder page, and the project's group on the status page, so unique among the projects with a subdomain (checked by the playbook). Defaults to name.",
           "type": "string",
@@ -231,7 +235,8 @@
                 { "required": ["referrer_policy"] },
                 { "required": ["content_security_policy"] },
                 { "required": ["redirect_from"] },
-                { "required": ["also_serves"] }
+                { "required": ["also_serves"] },
+                { "required": ["noindex"] }
               ]
             }
           }

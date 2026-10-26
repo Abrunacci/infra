@@ -9,7 +9,8 @@ the repo, so a new project needs no change here:
 
 - open ports: the tcp and udp inbound rules of terraform/firewall.tf;
 - sites: every project hostname in projects.yml, and each of its
-  also_serves (with X-Robots-Tag: noindex only where it says noindex), plus
+  also_serves (with X-Robots-Tag: noindex only where projects.yml says
+  noindex, on the project or on that name), plus
   status (roles/caddy) www for each project with a site on a domain itself,
   and each project's redirect_from;
 - private paths: each backend's private_paths in projects.yml;
@@ -110,6 +111,7 @@ def expected():
         host = project_domain if subdomain == "@" else f"{subdomain}.{project_domain}"
         others = project.get("also_serves", [])
         sites += [host] + [other["name"] for other in others]
+        noindex += [host] if project.get("noindex") else []
         noindex += [other["name"] for other in others if other.get("noindex")]
         if subdomain == "@" and project.get("site"):
             redirects[f"www.{project_domain}"] = host
