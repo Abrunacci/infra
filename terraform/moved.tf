@@ -117,3 +117,21 @@ moved {
   from = cloudflare_dns_record.dmarc
   to   = cloudflare_dns_record.dmarc["abrunacci.dev"]
 }
+
+# Resend's records became one set per domain (email.tf, resend_domains) when
+# epbstock.com.ar got its own: abrunacci.dev's keep their records.
+
+moved {
+  from = cloudflare_dns_record.resend["send"]
+  to   = cloudflare_dns_record.resend["abrunacci.dev/send"]
+}
+
+moved {
+  from = cloudflare_dns_record.resend["rsend"]
+  to   = cloudflare_dns_record.resend["abrunacci.dev/rsend"]
+}
+
+moved {
+  from = cloudflare_dns_record.resend["dkim"]
+  to   = cloudflare_dns_record.resend["abrunacci.dev/dkim"]
+}
