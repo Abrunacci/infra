@@ -12,7 +12,8 @@ gatus_data_dir: /var/lib/infra/gatus
 # The alert settings: alerts.env (written here) and the channel's credentials
 # (written on the server by gatus-credentials). Root only.
 gatus_secrets_dir: "{{ infra_secrets_dir }}/gatus"
-gatus_memory_limit: 128m
+# gatus_memory (group_vars) of the server's RAM.
+gatus_memory_limit: "{{ gatus_memory | memory_limit(ansible_memtotal_mb) }}"
 # Fixed, like caddy (10001) through backends (10005).
 gatus_uid: 10006
 
