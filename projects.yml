@@ -34,8 +34,6 @@
 #              cluster (another VPC, outside the cluster's firewall)
 #   ssh        public: port 22 (the default); tailscale: SSH only on the
 #              Tailscale interface (DigitalOcean's firewall has no 22 either)
-#   max_memory the most memory one backend or worker may have, 64m to 2048m
-#              (optional, defaults to 512m)
 #   max_cpus   the most CPUs one backend may have, 0.1 to 2 (optional,
 #              defaults to 1)
 #
@@ -118,8 +116,12 @@
 #                         copied by the server, plus a private network to that
 #                         project's backend (link-PROJECT), reached as
 #                         http://PROJECT-backend:PORT
-#                memory   64m to its server's max_memory (optional, defaults
-#                         to 256m)
+#                memory   its limit, a whole percentage of its server's RAM
+#                         from 1% to 90%, such as "20%": the playbook turns it
+#                         into MiB on each run, so it follows a resized
+#                         Droplet. A server's limits, Caddy's, PostgreSQL's and
+#                         Gatus' included (ansible/group_vars), add up to 90%
+#                         at most
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
@@ -165,12 +167,10 @@ servers:
   # EPB Stock's demo.
   - name: server.abrunacci.dev
   # EPB Stock's production (terraform/production.tf): 2 vCPU and 4 GB, its
-  # database in the managed cluster, SSH only through Tailscale. Its limits
-  # leave room for D13's 768m API and 1536m worker.
+  # database in the managed cluster, SSH only through Tailscale.
   - name: server.epbstock.com.ar
     database: managed
     ssh: tailscale
-    max_memory: 1536m
     max_cpus: 2
 
 projects:
@@ -191,9 +191,9 @@ projects:
       private_paths: ["/api/ingest", "/api/ingest/*"]
       secrets:
         INGEST_TOKEN: generated
-      # 105 MiB peak on 2026-10-16, with jobs from data-pipeline: twice that,
-      # rounded up to 64m, is 256m (issue #79).
-      memory: 256m
+      # 105 MiB peak on 2026-10-16, with jobs from data-pipeline (issue #79):
+      # 10% is 196m on the first server's 1967 MiB.
+      memory: "10%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # Prices and sources only, no personal data. The other jump_* events
@@ -248,7 +248,8 @@ projects:
         FORM_SECRET: generated
         # The inbox the messages go to, set on the server.
         MAIL_TO: manual
-      memory: 128m
+      # 5% is 98m on the first server.
+      memory: "5%"
       # A name, an email and a message: a few KB at most.
       max_body: 64KB
 
@@ -314,8 +315,9 @@ projects:
         # It calls api.resend.com:443.
         RESEND_API_KEY: manual
       # One small Python process: 41 MiB after a burst of submissions, in a
-      # test with the same limits as the server (2026-10-21).
-      memory: 128m
+      # test with the same limits as the server (2026-10-21), 40 MiB in use on
+      # 2026-10-26. 3% is about 116m on the production server.
+      memory: "3%"
       # The backend refuses bodies over 16 KB itself; Caddy stops anything
       # past 20KB first.
       max_body: 20KB
@@ -402,8 +404,8 @@ projects:
         MP_WEBHOOK_SECRET: optional
       # Its peak was 131 MiB on 2026-10-16, with a full real import going
       # through the worker (issue #79); demo's imports are tests, and the first
-      # server needs the room. `migrate` gets it too.
-      memory: 192m
+      # server needs the room. 10% is 196m. `migrate` gets it too.
+      memory: "10%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -417,8 +419,8 @@ projects:
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
         # The largest import is its work: 232 MiB peak on 2026-10-16 with a
-        # full real import (issue #79), under 320m.
-        memory: 320m
+        # full real import (issue #79), under 16% (314m).
+        memory: "16%"
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
         # Secrets only it gets, and the API no longer does. No SECRET_KEY or
@@ -512,8 +514,9 @@ projects:
         # The webhook's secret key, in the same application: the API checks
         # every notification against it, and refuses them all without it.
         MP_WEBHOOK_SECRET: optional
-      # D13: room to grow on the production server. `migrate` gets it too.
-      memory: 768m
+      # D13: room to grow on the production server, about 778m of its RAM
+      # (135 MiB in use on 2026-10-26). `migrate` gets it too.
+      memory: "20%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -527,8 +530,8 @@ projects:
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
         # D13: the largest import is its work (232 MiB peak on 2026-10-16,
-        # issue #79), several at once.
-        memory: 1536m
+        # issue #79), several at once: about 1556m.
+        memory: "40%"
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
         # Secrets only it gets, and the API no longer does. No SECRET_KEY or
@@ -558,6 +561,6 @@ projects:
         # The same value as cuanto-cuesta's INGEST_TOKEN, which stays its only
         # source: rotate it there (sudo project-secret cuanto-cuesta rotate INGEST_TOKEN).
         CUANTO_CUESTA_INGEST_TOKEN: {from: cuanto-cuesta, key: INGEST_TOKEN}
-      # Twice its peak, rounded up to 64m (issue #79): 76 MiB with two days of
-      # jobs, on 2026-10-16.
-      memory: 192m
+      # Twice its peak (issue #79): 76 MiB with two days of jobs, on
+      # 2026-10-16. 8% is 157m.
+      memory: "8%"

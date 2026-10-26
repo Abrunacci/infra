@@ -13,8 +13,9 @@ postgres_password_file: "{{ infra_secrets_dir }}/postgres.password"
 # UID of the postgres user inside the Debian-based image.
 postgres_container_uid: 999
 
-# Sized for the 2 GB Droplet, shared with the project containers.
-postgres_memory_limit: 768m
+# postgres_memory (group_vars) of the server's RAM. The buffers below are
+# sized for the 2 GB Droplet, and fit in that share.
+postgres_memory_limit: "{{ postgres_memory | memory_limit(ansible_memtotal_mb) }}"
 postgres_shared_buffers: 256MB
 postgres_effective_cache_size: 768MB
 postgres_max_connections: 50

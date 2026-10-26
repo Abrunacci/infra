@@ -92,8 +92,8 @@ services:
       # {{ target }}'s backend, as {{ target }}-backend: a secret links to it.
       link-{{ target }}: {}
 {% endfor %}
-    mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
-    memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    mem_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
+    memswap_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
     stop_grace_period: 20s
@@ -160,8 +160,8 @@ services:
 {% if item.database and not managed %}
       db: {}
 {% endif %}
-    mem_limit: {{ worker.memory }}
-    memswap_limit: {{ worker.memory }}
+    mem_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
+    memswap_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
     stop_grace_period: {{ worker.stop_grace_period | default('20s') }}
@@ -218,8 +218,8 @@ services:
     networks:
       - db
 {% endif %}
-    mem_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
-    memswap_limit: {{ item.backend.memory | default(projects_backend_default_memory) }}
+    mem_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
+    memswap_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
 {% endif %}

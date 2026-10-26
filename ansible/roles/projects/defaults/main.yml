@@ -47,12 +47,10 @@ projects_registry_config_dir: "{{ infra_secrets_dir }}/registry"
 # Fixed, like caddy (10001), db-tunnel (10002), sites (10003) and deploy
 # (10004). No login, no home, owns no file on the host.
 projects_backends_uid: 10005
-projects_backend_default_memory: 256m
-# memory, and each server's max_memory in projects.yml: 64m to 2048m. A
-# container's memory goes up to its server's max_memory, 512m by default (the
-# first Droplet's size); max_cpus likewise caps cpus, 1 by default.
-projects_memory_re: '^(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m\Z'
-projects_server_default_max_memory: 512m
+# memory, of a backend and of a worker (projects.yml), and the shares in
+# group_vars (caddy_memory and the others): a whole percentage of the
+# server's RAM, from 1% to 90%. A server's max_cpus caps cpus, 1 by default.
+projects_memory_re: '^([1-9]|[1-8][0-9]|90)%\Z'
 projects_server_default_max_cpus: 1
 # Each server's entry by name (a server named twice is refused in validate.yml).
 projects_server_limits: >-

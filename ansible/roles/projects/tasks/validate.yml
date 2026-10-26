@@ -113,12 +113,12 @@
 
 # Each server is a hostname under one of the domains (Terraform creates its
 # records there), listed once, and optionally says where its databases are,
-# how SSH reaches it and the most memory and CPU one container may have.
+# how SSH reaches it and the most CPU one container may have.
 - name: Check each server
   ansible.builtin.assert:
     that:
       - item is mapping
-      - item.keys() | difference(['name', 'database', 'ssh', 'max_memory', 'max_cpus']) | length == 0
+      - item.keys() | difference(['name', 'database', 'ssh', 'max_cpus']) | length == 0
       - item.name is defined
       - item.name is string and item.name | length <= 253
       - item.name is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z')
@@ -126,14 +126,13 @@
       - projects_server_names | select('equalto', item.name) | list | length == 1
       - item.database | default('local') in ['local', 'managed']
       - item.ssh | default('public') in ['public', 'tailscale']
-      - item.max_memory is not defined or (item.max_memory is string and item.max_memory is match(projects_memory_re))
       - >-
         item.max_cpus is not defined
         or (item.max_cpus is number and item.max_cpus is not boolean and item.max_cpus >= 0.1 and item.max_cpus <= 2)
     fail_msg: >-
       projects.yml: every server must be a mapping with a name, a hostname under one of the domains, listed once,
-      and optionally database (local or managed), ssh (public or tailscale), max_memory (64m to 2048m) and
-      max_cpus (0.1 to 2) ({{ item.name | default(item) }}). See projects.schema.json.
+      and optionally database (local or managed), ssh (public or tailscale) and max_cpus (0.1 to 2)
+      ({{ item.name | default(item) }}). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.servers }}"
   loop_control:
@@ -410,15 +409,14 @@
       - projects_secrets.values() | select('string') | difference(['generated', 'manual', 'optional']) | length == 0
       - projects_secrets.values() | reject('string') | reject('mapping') | list | length == 0
       - projects_memory is string and projects_memory is match(projects_memory_re)
-      - projects_memory[:-1] | int <= projects_server_max_memory[:-1] | int
       - projects_cpus is number and projects_cpus is not boolean and projects_cpus >= 0.1
       - projects_cpus <= projects_server_max_cpus
     fail_msg: >-
       projects.yml: invalid backend env, secrets, memory or cpus for {{ item.name }}. Names are uppercase
       (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
       in secrets but not both; env values are quoted strings on one line; secrets are generated, manual,
-      optional or {from: PROJECT, key: KEY}; memory goes from 64m to its server's max_memory
-      ({{ projects_server_max_memory }}); cpus is a number from 0.1 to its server's max_cpus
+      optional or {from: PROJECT, key: KEY}; memory is a share of its server's RAM, from 1% to 90%
+      (such as "20%"); cpus is a number from 0.1 to its server's max_cpus
       ({{ projects_server_max_cpus }}). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
@@ -427,13 +425,10 @@
   vars:
     projects_env: "{{ item.backend.env | default({}) }}"
     projects_secrets: "{{ item.backend.secrets | default({}) }}"
-    projects_memory: "{{ item.backend.memory | default(projects_backend_default_memory) }}"
+    projects_memory: "{{ item.backend.memory | default(none) }}"
     projects_cpus: "{{ item.backend.cpus | default(projects_backend_default_cpus) }}"
     projects_env_name: '^[A-Z][A-Z0-9_]{0,63}\Z'
-    # The project's server's own limits (projects_server_limits in defaults).
-    projects_server_max_memory: &projects_server_max_memory >-
-      {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_memory
-         | default(projects_server_default_max_memory) }}
+    # The project's server's own limit (projects_server_limits in defaults).
     projects_server_max_cpus: >-
       {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_cpus
          | default(projects_server_default_max_cpus) }}
@@ -458,7 +453,6 @@
       - projects_commands | flatten(levels=1) | reject('match', '^[^$\n\r]{1,256}\Z') | list | length == 0
       - projects_worker.memory is string
       - projects_worker.memory is match(projects_memory_re)
-      - projects_worker.memory[:-1] | int <= projects_server_max_memory[:-1] | int
       - >-
         projects_worker.stop_grace_period is not defined
         or (projects_worker.stop_grace_period is string
@@ -478,7 +472,7 @@
       - projects_shared_secrets | intersect(projects_worker_secrets) | length == 0
     fail_msg: >-
       projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
-      32 arguments), a memory from 64m to its server's max_memory ({{ projects_server_max_memory }}), optionally a
+      32 arguments), a memory from 1% to 90% of its server's RAM (such as "40%"), optionally a
       stop_grace_period from 1s to 120s, and optionally
       secrets (only the worker gets them) and shared_secrets (both get them): names of the backend's own
       generated, manual or optional secrets, not linked ones, each in one list at most.
@@ -498,7 +492,6 @@
     projects_own_secrets: >-
       {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
          | list }}
-    projects_server_max_memory: *projects_server_max_memory
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
 # and a private network to that project's backend (link-PROJECT). The source
@@ -609,6 +602,49 @@
       {%-   set _ = found.append(p) -%}
       {%- endfor -%}
       {{ found | first }}
+
+# Every server's memory limits, as shares of its RAM, add up to
+# memory_max_share percent at most (group_vars), so the containers can never
+# take the host's part between them: each backend and worker on it, Caddy,
+# PostgreSQL where the database is local, and Gatus on the first server. The
+# shares in group_vars are checked here too.
+- name: Check each server's memory
+  ansible.builtin.assert:
+    that:
+      - projects_shared_shares | reject('string') | list | length == 0
+      - projects_shared_shares | reject('match', projects_memory_re) | list | length == 0
+      - memory_max_share is number and memory_max_share is not boolean
+      - projects_server_total <= memory_max_share
+    fail_msg: >-
+      projects.yml: the memory limits of {{ item.name }} add up to {{ projects_server_total }}% of its RAM, over
+      memory_max_share ({{ memory_max_share }}%): {{ projects_server_shares | join(', ') }}. Lower some, keeping
+      each one a share from 1% to 90%.
+    quiet: true
+  loop: "{{ projects_registry.servers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_shared_shares: "{{ [caddy_memory, gatus_memory, postgres_memory] }}"
+    # Each container on the server, as "name share", such as "caddy 5%".
+    projects_server_shares: >-
+      {%- set shares = ['caddy ' ~ caddy_memory] -%}
+      {%- if item.database | default('local') == 'local' -%}
+      {%-   set _ = shares.append('postgres ' ~ postgres_memory) -%}
+      {%- endif -%}
+      {%- if item.name == projects_registry.servers[0].name -%}
+      {%-   set _ = shares.append('gatus ' ~ gatus_memory) -%}
+      {%- endif -%}
+      {%- for p in projects_registry.projects if p.backend is defined
+            and p.server | default(projects_registry.servers[0].name) == item.name -%}
+      {%-   set _ = shares.append(p.name ~ ' ' ~ p.backend.memory) -%}
+      {%-   if p.backend.worker is defined -%}
+      {%-     set _ = shares.append(p.name ~ '-worker ' ~ p.backend.worker.memory) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ shares }}
+    projects_server_total: >-
+      {{ projects_server_shares | map('split', ' ') | map('last') | map('regex_replace', '%$', '') | map('int')
+         | sum }}
 
 # From here on, and in every role, the registry is this server's: its projects
 # only, the ones whose server is this host (or, without one, the first

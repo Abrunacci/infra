@@ -21,6 +21,21 @@ server_entry: >-
 database_managed: "{{ server_entry.database | default('local') == 'managed' }}"
 ssh_via_tailscale: "{{ server_entry.ssh | default('public') == 'tailscale' }}"
 
+# Memory: every container's limit is a whole percentage of its server's RAM
+# (1% to 90%), turned into MiB on each run from the RAM the server reports
+# (filter_plugins/memory.py), so the limits follow a resized Droplet. The
+# backends' and workers' are in projects.yml (memory); these are the
+# containers every server of a kind runs. Each server's limits add up to
+# memory_max_share percent at most (roles/projects, validate.yml): the rest is
+# the host's (dockerd, sshd, fail2ban, do-agent, the nightly backup).
+memory_max_share: 90
+# Every server.
+caddy_memory: 5%
+# The first server only, which serves the status page.
+gatus_memory: 5%
+# Only a server whose database is local.
+postgres_memory: 30%
+
 # The hostname of each public project (one with a subdomain), by name: its
 # subdomain under its domain, or the domain itself for "@".
 project_hosts: >-
