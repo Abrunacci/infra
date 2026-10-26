@@ -411,10 +411,10 @@ projects:
         # every notification against it, and refuses them all without it. The
         # test application's webhook is https://stage.epbstock.com.ar/api/...
         MP_WEBHOOK_SECRET: optional
-      # Its peak was 131 MiB on 2026-10-16, with a full real import going
-      # through the worker (issue #79); demo's imports are tests, and the first
-      # server needs the room. `migrate` gets it too.
-      memory: 192m
+      # 135 MiB at rest on 2026-10-26, and the kernel killed it at about
+      # 195 MB (out of memory, 20:21 UTC) under the old 192m: room above its
+      # base. `migrate` gets it too.
+      memory: 384m
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
