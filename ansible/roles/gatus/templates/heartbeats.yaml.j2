@@ -4,11 +4,12 @@
      key        Gatus' own name for it, from group and name (its
                 config/key/key.go); the server pushes to /api/v1/endpoints/<key>/external
      check      what gatus-heartbeats runs: backup, service, container, drill
-                or credentials; or log-alerts, pushed only by log-alerts
-                itself
+                or credentials; or log-alerts and restore-test, pushed only
+                by log-alerts and backup-restore test themselves
      target     the backup's maximum age in hours, the systemd unit, the
                 project, the drill's maximum age in days, the days of
-                warning before a credential expires (- for log-alerts)
+                warning before a credential expires (- for log-alerts and
+                restore-test)
      server     the server that pushes it: gatus-heartbeats.conf.j2 keeps
                 this server's only, while Gatus waits for every server's
    Every server has its own: the first one's groups are named as they always
@@ -53,6 +54,16 @@
   success_threshold: 1
   description: log-alerts could not read the logs or send its email, so the lines it watches (log_alerts in projects.yml, plus SSH logins, sudo failures, failed deploys and the bans digest) are not being emailed. On the server, see journalctl -u log-alerts.
 - group: {{ ('Server' ~ suffix) | to_json }}
+  name: Restore test
+  key: {{ key('Server' ~ suffix, 'Restore test') }}
+  server: {{ server }}
+  check: restore-test
+  target: "-"
+  interval: {{ gatus_backup_max_age_hours }}h
+  failure_threshold: 1
+  success_threshold: 1
+  description: The daily automatic restore test failed, or has not run for {{ gatus_backup_max_age_hours }} hours, so nothing shows the newest backup can be restored. On the server, see /var/lib/infra/backup/restore-test and journalctl -u restore-test.
+- group: {{ ('Server' ~ suffix) | to_json }}
   name: Restore drill
   key: {{ key('Server' ~ suffix, 'Restore drill') }}
   server: {{ server }}
@@ -61,7 +72,7 @@
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
-  description: A project with a database has had no passing restore drill for {{ gatus_drill_max_days }} days. Have the age private key at hand; it is not on the server. On the server, run sudo backup-restore drill PROJECT (ansible/README.md, The restore drill, once a month).
+  description: A project with a database has had no passing restore drill for {{ gatus_drill_max_days }} days. Have the age private key at hand; it is not on the server. On the server, run sudo backup-restore drill PROJECT (ansible/README.md, The restore drill, with your key).
 {%   if server == first %}
 {#   The credentials are the repo's, not a server's: checked once. #}
 - group: {{ ('Server' ~ suffix) | to_json }}

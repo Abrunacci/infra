@@ -16,10 +16,17 @@
 #                                                          is asked for on this server
 #   sudo backup-restore secrets [SNAPSHOT]                 decrypt the secrets into /root/restored-secrets-<time>/,
 #                                                          for copying back by hand
+#   sudo backup-restore test                               the automatic restore test, run every day by
+#                                                          restore-test.timer: the newest daily backup,
+#                                                          decrypted with this server's test key, every
+#                                                          database restored into a throwaway PostgreSQL
+#                                                          and compared with the live one (see cmd_test)
 #
 # SNAPSHOT is a line of `list`, such as daily/20260926T033000Z; without it, the
 # newest daily backup. Commands that decrypt ask for the age private key
 # (AGE-SECRET-KEY-1...) without showing it; it is never written to a file.
+# Except `test`, which reads this server's own test key (BACKUP_TEST_KEY):
+# backups are also encrypted to it, so they can be restored with nobody there.
 #
 # What a backup holds is never trusted with more than the project's own rights.
 # The backups are encrypted to a PUBLIC key, which proves nothing about who
@@ -42,13 +49,18 @@ umask 077
 export LC_ALL=C
 cd /
 
+# true while `test` runs: a failure is also recorded (test_record).
+testing=false
+test_recorded=false
+
 fail() {
   echo "backup-restore: $*" >&2
+  [[ "$testing" == true ]] && test_record failed "$*"
   exit 1
 }
 
 usage() {
-  echo "usage: sudo backup-restore {list | drill PROJECT [SNAPSHOT] | database PROJECT [SNAPSHOT | --from-dir DIR] | secrets [SNAPSHOT]}" >&2
+  echo "usage: sudo backup-restore {list | drill PROJECT [SNAPSHOT] | database PROJECT [SNAPSHOT | --from-dir DIR] | secrets [SNAPSHOT] | test}" >&2
   exit 2
 }
 
@@ -63,20 +75,33 @@ case "$action" in
   drill) [[ $# -ge 1 && $# -le 2 ]] || usage ;;
   database) [[ $# -ge 1 && $# -le 3 ]] || usage ;;
   secrets) [[ $# -le 1 ]] || usage ;;
+  test) [[ $# -eq 0 ]] || usage ;;
   *) usage ;;
 esac
+if [[ "$action" == test ]]; then
+  testing=true
+  test_started="$(date -u +%s)"
+fi
 backup_load
 
 work=""
 key=""
 scratch=""
+throwaway=""
 readonly SCRATCH_DB=restore_drill
 cleanup() {
   key=""
   if [[ -n "$scratch" ]]; then
     db_psql <<<"DROP DATABASE IF EXISTS \"$scratch\" WITH (FORCE)" >/dev/null 2>&1 || true
   fi
+  # Removed with its anonymous volume (--rm): the restored data goes with it.
+  [[ -n "$throwaway" ]] && { docker stop -t 10 "$throwaway" >/dev/null 2>&1 || true; }
   [[ -n "$work" ]] && rm -rf -- "$work"
+  # A test that stopped without saying why (a command that failed outside
+  # fail) is still a failure, so the status page is not left waiting.
+  if [[ "$testing" == true && "$test_recorded" == false ]]; then
+    test_record failed "it stopped before finishing; see journalctl -u restore-test"
+  fi
 }
 trap cleanup EXIT
 
@@ -157,14 +182,16 @@ restore_dump() {
   db_as_owner "$project" "$work" pg_restore -d "$database" --no-owner --exit-on-error
 }
 
-# Table sizes of DATABASE, "schema.table count" per line.
+# Table sizes of DATABASE, "schema.table count" per line, in one query (on a
+# managed cluster, every db_psql is a container of its own). PSQL is the
+# function that runs psql: db_psql, the live databases, by default.
 row_counts() {
-  local database="$1" table
-  db_psql "$database" <<<"SELECT format('%I.%I', schemaname, tablename) FROM pg_tables
-                          WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1" \
-    | while read -r table; do
-      printf '%s %s\n' "$table" "$(db_psql "$database" <<<"SELECT count(*) FROM $table")"
-    done
+  local database="$1" psql="${2:-db_psql}"
+  "$psql" "$database" <<<"SELECT format('%I.%I', schemaname, tablename) || ' ' ||
+                            (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.%I',
+                                                                        schemaname, tablename),
+                                                                 false, true, '')))[1]::text
+                          FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1"
 }
 
 # Tables, views and sequences outside the catalogs: 0 means empty.
@@ -332,9 +359,183 @@ cmd_secrets() {
   find "$target" -type f | sed "s#^$target/#  #"
 }
 
+# ---------------------------------------------------------------------------
+# The automatic restore test (restore-test.timer)
+
+# test_record ok|failed DETAIL: the test's result, in
+# /var/lib/infra/backup/restore-test (for whoever looks on the server), the
+# journal and the status page, which alerts on a failure. The page only says
+# that it failed: the reason stays on the server. From the script itself only:
+# a failure in a subshell is recorded by the EXIT trap.
+test_record() {
+  [[ "$BASHPID" == "$$" ]] || return 0
+  test_recorded=true
+  local out
+  install -d -m 0755 -o root -g root "$BACKUP_STATE"
+  printf 'result=%s\ntime=%s\ndetail=%s\n' "$1" "$(date -u '+%F %H:%M UTC')" "$2" >"$BACKUP_STATE/.restore-test.$$"
+  chmod 0644 "$BACKUP_STATE/.restore-test.$$"
+  mv -f "$BACKUP_STATE/.restore-test.$$" "$BACKUP_STATE/restore-test"
+  logger -t backup-restore -- "test result=$1 detail=\"${2//\"/\'}\"" 2>/dev/null || true
+  if [[ -x /usr/local/sbin/gatus-heartbeats ]] \
+    && ! out="$(/usr/local/sbin/gatus-heartbeats restore-test "$1" "$(($(date -u +%s) - test_started))" \
+      2>&1 </dev/null 8>&- 9>&-)"; then
+    logger -t backup-restore -- "could not send the test's result to the status page: ${out//$'\n'/; }" \
+      2>/dev/null || true
+  fi
+}
+
+# psql in the throwaway PostgreSQL, as its superuser, over its socket.
+throwaway_psql() {
+  docker exec -i "$throwaway" psql -U postgres -d "${1:-postgres}" -AtqX -v ON_ERROR_STOP=1 9>&-
+}
+
+# Starts the throwaway PostgreSQL the test restores into: the live one's image
+# (on a managed cluster, its client image, of the cluster's major version), no
+# network (a socket only), no capabilities, a read-only root, and its data in
+# an anonymous volume that goes with the container (--rm) when cleanup stops
+# it. Nothing in it is kept, and it never sees the live databases.
+throwaway_start() {
+  local image deadline
+  if [[ "$DATABASE_MODE" == managed ]]; then
+    image="$DATABASE_CLIENT_IMAGE"
+  else
+    image="$(docker inspect -f '{{.Config.Image}}' "$PG_CONTAINER" 9>&-)" || fail "cannot read PostgreSQL's image"
+  fi
+  throwaway="$(docker run -d --rm --pull never --name "restore-test-$$" --network none --read-only \
+    --tmpfs /tmp --tmpfs /var/run/postgresql --user postgres --cap-drop ALL --security-opt no-new-privileges \
+    --memory 512m --cpus 1 --pids-limit 128 \
+    --mount type=volume,target=/var/lib/postgresql/data -e PGDATA=/var/lib/postgresql/data/pgdata \
+    --entrypoint sh "$image" \
+    -c 'initdb -U postgres -A trust >/dev/null && exec postgres -c listen_addresses= -c fsync=off' 9>&-)" \
+    || { throwaway=""; fail "could not start a throwaway PostgreSQL ($image)"; }
+  deadline=$((SECONDS + 120))
+  until docker exec "$throwaway" pg_isready -q 9>&-; do
+    ((SECONDS < deadline)) || fail "the throwaway PostgreSQL did not start in 2 minutes"
+    sleep 2
+  done
+}
+
+# Prints the SQL that creates, in the throwaway PostgreSQL, PROJECT's owner and
+# app roles and the roles of its backed-up list (FILE, see db_roles_tsv), with
+# their memberships. The list is checked as db_restore_roles checks it, and
+# the SQL is written here: nothing read from a backup is run as it is.
+# Usage: throwaway_roles_sql FILE (after db_names PROJECT).
+throwaway_roles_sql() {
+  local file="$1" kind a b c d role_re='^[a-z_][a-z0-9_]{0,62}$'
+  declare -A roles=()
+  printf 'CREATE ROLE "%s" NOLOGIN;\nCREATE ROLE "%s" NOLOGIN;\n' "$DB_OWNER" "$DB_APP"
+  while IFS=$'\t' read -r kind a b c d; do
+    case "$kind" in
+      "" | member) ;;
+      role)
+        [[ "$a" =~ $role_re && "$b" =~ ^[tf]$ && "$c" =~ ^[tf]$ && -z "$d" ]] \
+          || fail "invalid role line in the backup: $kind $a"
+        [[ "$a" != "$DB_OWNER" && "$a" != "$DB_APP" && "$a" != postgres && "$a" != pg_* ]] \
+          || fail "the backup lists a role it cannot own: $a"
+        roles["$a"]=1
+        printf 'CREATE ROLE "%s" %s %s;\n' "$a" "$([[ $b == t ]] && echo LOGIN || echo NOLOGIN)" \
+          "$([[ $c == t ]] && echo INHERIT || echo NOINHERIT)"
+        ;;
+      *) fail "invalid line in the backup's list of roles: $kind" ;;
+    esac
+  done <"$file"
+  while IFS=$'\t' read -r kind a b c d; do
+    [[ "$kind" == member ]] || continue
+    [[ -n "${roles[$a]:-}" && (-n "${roles[$b]:-}" || "$b" == "$DB_APP") && "$c" =~ ^[tf]$ && "$d" =~ ^[tf]$ ]] \
+      || fail "invalid membership line in the backup: $a $b"
+    printf 'GRANT "%s" TO "%s" WITH INHERIT %s, SET %s;\n' "$a" "$b" \
+      "$([[ $c == t ]] && echo TRUE || echo FALSE)" "$([[ $d == t ]] && echo TRUE || echo FALSE)"
+  done <"$file"
+}
+
+# What the test checks, with this server's test key and nobody there:
+#   1. the newest trustworthy daily backup downloads, and has every file of
+#      its manifest with the manifest's size and SHA-256;
+#   2. the secrets decrypt, and their tar lists;
+#   3. for every project with a database on this server: its list of roles
+#      decrypts and passes the restore's checks, and its dump restores, as the
+#      project's owner role and stopping at the first error, into a throwaway
+#      PostgreSQL of the live one's version;
+#   4. the restored database is not empty where the live one is not (tables,
+#      and rows). Each table's rows, restored and live, go to the journal.
+# Nothing live changes: the live databases are only read, for their counts.
+cmd_test() {
+  local snapshot project pub name n list secrets="none" rt rr lt lr passed=()
+  local -a projects
+  [[ -r "$BACKUP_TEST_KEY" ]] || fail "no test key ($BACKUP_TEST_KEY): run the playbook (roles/backup)"
+  key="$(grep -m 1 '^AGE-SECRET-KEY-1' "$BACKUP_TEST_KEY" || true)"
+  [[ "$key" =~ ^AGE-SECRET-KEY-1[0-9A-Z]{58}$ ]] || fail "$BACKUP_TEST_KEY holds no age private key"
+  pub="$(age-keygen -y "$BACKUP_TEST_KEY")" || fail "cannot read the test key's public key"
+  # Otherwise the backups are not encrypted to it, and the test could only fail.
+  grep -qxF "$pub" "$BACKUP_RECIPIENTS" \
+    || fail "the test key is not among the backups' recipients ($BACKUP_RECIPIENTS): run the playbook"
+  exec 8>"$BACKUP_LOCK"
+  flock -w 3600 8 || fail "a backup or a restore held the lock for an hour"
+  new_work
+  # Not from a process substitution: a registry that cannot be read must fail
+  # the test, not pass it with no database to restore.
+  backup_projects_with_database >"$work/projects" || fail "cannot read the projects from $REGISTRY"
+  mapfile -t projects <"$work/projects"
+  ((${#projects[@]} == 0)) || db_container
+  pick_snapshot >"$work/snapshot"
+  snapshot="$(<"$work/snapshot")"
+  echo "Restore test of $snapshot"
+
+  download "$snapshot" '*'
+  while read -r name _; do
+    [[ -f "$work/$name" ]] || fail "$snapshot has no $name, which its manifest lists"
+  done <"$work/MANIFEST"
+
+  if [[ -f "$work/secrets.tar.age" ]]; then
+    decrypt "$work/secrets.tar.age" | tar -t >"$work/secrets.list" \
+      || fail "the secrets do not decrypt with the test key, or are not a tar"
+    secrets="$(grep -vc '/$' "$work/secrets.list" || true) file(s)"
+    echo "== the secrets decrypt: $secrets"
+  elif [[ -d "$SECRETS_DIR" ]]; then
+    fail "$snapshot has no secrets, and this server has $SECRETS_DIR"
+  fi
+
+  ((${#projects[@]} == 0)) || throwaway_start
+  for project in "${projects[@]}"; do
+    [[ "$project" =~ $NAME_RE ]] || fail "invalid project name in the registry: $project"
+    db_names "$project"
+    [[ -f "$work/$project.dump.age" && -f "$work/$project.roles.tsv.age" ]] \
+      || fail "$snapshot has no backup of $project"
+    echo "== $project: restoring into the throwaway PostgreSQL, as its owner"
+    decrypt "$work/$project.roles.tsv.age" >"$work/$project.roles.tsv" \
+      || fail "$project's list of roles does not decrypt with the test key"
+    throwaway_roles_sql "$work/$project.roles.tsv" >"$work/$project.roles.sql"
+    printf 'CREATE DATABASE "%s" OWNER "%s";\n' "$DB_NAME" "$DB_OWNER" >>"$work/$project.roles.sql"
+    throwaway_psql <"$work/$project.roles.sql" >/dev/null \
+      || fail "could not create $project's roles and database in the throwaway PostgreSQL"
+    decrypt "$work/$project.dump.age" \
+      | docker exec -i "$throwaway" pg_restore -U postgres --role="$DB_OWNER" -d "$DB_NAME" \
+        --no-owner --exit-on-error 9>&- \
+      || fail "$project's dump does not restore (pg_restore's error is above, in journalctl -u restore-test)"
+
+    row_counts "$DB_NAME" throwaway_psql | sort >"$work/$project.restored" \
+      || fail "cannot count the rows restored for $project"
+    row_counts "$DB_NAME" | sort >"$work/$project.live" || fail "cannot count the rows of $project's live database"
+    printf '%-48s %12s %12s\n' TABLE RESTORED LIVE
+    join -a1 -a2 -e '-' -o 0,1.2,2.2 "$work/$project.restored" "$work/$project.live" \
+      | while read -r t b l; do printf '%-48s %12s %12s\n' "$t" "$b" "$l"; done
+    rt="$(grep -c . "$work/$project.restored" || true)" rr="$(awk '{s += $2} END {print s + 0}' "$work/$project.restored")"
+    lt="$(grep -c . "$work/$project.live" || true)" lr="$(awk '{s += $2} END {print s + 0}' "$work/$project.live")"
+    ((lt == 0 || rt > 0)) || fail "$project's backup restored no tables, and its live database has $lt"
+    ((lr == 0 || rr > 0)) || fail "$project's backup restored no rows, and its live database has $lr"
+    passed+=("$project: $rt tables, $rr rows")
+  done
+
+  list=""
+  for n in "${passed[@]}"; do list+="${list:+; }$n"; done
+  test_record ok "$snapshot: ${#passed[@]} database(s) restored${list:+ ($list)}; secrets: $secrets"
+  echo "Restore test passed: $snapshot restores with the test key."
+}
+
 case "$action" in
   list) cmd_list ;;
   drill) cmd_drill "$@" ;;
   database) cmd_database "$@" ;;
   secrets) cmd_secrets "$@" ;;
+  test) cmd_test ;;
 esac

@@ -49,6 +49,51 @@
   loop_control:
     label: "{{ item.path }}"
 
+- name: Look for the restore test key
+  ansible.builtin.stat:
+    path: "{{ backup_test_key }}"
+    get_checksum: false
+  register: backup_test_key_stat
+
+- name: Note whether the restore test key exists
+  ansible.builtin.set_fact:
+    backup_test_key_exists: "{{ backup_test_key_stat.stat.exists }}"
+
+# The restore test's key (backup-restore test, restore-test.timer): made here,
+# once, and never copied anywhere. Its public key joins the recipients, so
+# every backup from now on can be restored with nobody there; the admin's key
+# stays off the server. It decrypts this server's backups only: each server
+# has its own, and its own bucket.
+- name: Create this server's restore test key
+  ansible.builtin.command:
+    argv: [age-keygen, -o, "{{ backup_test_key }}"]
+    creates: "{{ backup_test_key }}"
+
+- name: Keep the restore test key root only
+  ansible.builtin.file:
+    path: "{{ backup_test_key }}"
+    owner: root
+    group: root
+    mode: "0600"
+  # In check mode, before the first run, the key does not exist yet.
+  when: not ansible_check_mode or backup_test_key_exists
+
+- name: Read the restore test key's public key
+  ansible.builtin.command:
+    argv: [age-keygen, -y, "{{ backup_test_key }}"]
+  register: backup_test_public_key
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode or backup_test_key_exists
+
+- name: Check the restore test key's public key
+  ansible.builtin.assert:
+    that:
+      - backup_test_public_key.stdout is match('^age1[0-9a-z]{58}\Z')
+    fail_msg: "{{ backup_test_key }} is not an age key: move it away and run the playbook again, which makes a new one."
+    quiet: true
+  when: backup_test_public_key is not skipped
+
 - name: Write the backup configuration
   ansible.builtin.template:
     src: "{{ item.src }}"
@@ -79,7 +124,7 @@
   loop_control:
     label: "{{ item.dest }}"
 
-- name: Install the backup service and its timer
+- name: Install the backup and restore test services and their timers
   ansible.builtin.template:
     src: "{{ item }}.j2"
     dest: "/etc/systemd/system/{{ item }}"
@@ -89,6 +134,8 @@
   loop:
     - backup.service
     - backup.timer
+    - restore-test.service
+    - restore-test.timer
   notify: Reload systemd
 
 - name: Apply systemd changes now
@@ -100,6 +147,14 @@
 - name: Start the daily backup timer
   ansible.builtin.systemd_service:
     name: backup.timer
+    enabled: true
+    state: started
+
+# Its first runs fail until a backup made after the key exists (the older ones
+# are not encrypted to it): ansible/README.md, "The automatic restore test".
+- name: Start the daily restore test timer
+  ansible.builtin.systemd_service:
+    name: restore-test.timer
     enabled: true
     state: started
 
