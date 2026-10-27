@@ -34,8 +34,8 @@
 #              cluster (another VPC, outside the cluster's firewall)
 #   ssh        public: port 22 (the default); tailscale: SSH only on the
 #              Tailscale interface (DigitalOcean's firewall has no 22 either)
-#   max_memory the most memory one backend or worker may have, 64m to 2048m
-#              (optional, defaults to 512m)
+#   max_memory the most memory one backend or worker may have when its limit
+#              is a fixed size, 64m to 2048m (optional, defaults to 512m)
 #   max_cpus   the most CPUs one backend may have, 0.1 to 2 (optional,
 #              defaults to 1)
 #
@@ -118,8 +118,14 @@
 #                         copied by the server, plus a private network to that
 #                         project's backend (link-PROJECT), reached as
 #                         http://PROJECT-backend:PORT
-#                memory   64m to its server's max_memory (optional, defaults
-#                         to 256m)
+#                memory   its limit: a whole percentage of its server's RAM
+#                         from 1% to 90%, such as "20%", which the playbook
+#                         turns into MiB on each run, so it follows a resized
+#                         Droplet; or a fixed size, 64m to its server's
+#                         max_memory (optional, defaults to 256m). A server's
+#                         limits, Caddy's, PostgreSQL's and Gatus' included
+#                         (ansible/group_vars), add up to 90% of its RAM at
+#                         most
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
@@ -191,9 +197,9 @@ projects:
       private_paths: ["/api/ingest", "/api/ingest/*"]
       secrets:
         INGEST_TOKEN: generated
-      # 105 MiB peak on 2026-10-16, with jobs from data-pipeline: twice that,
-      # rounded up to 64m, is 256m (issue #79).
-      memory: 256m
+      # 105 MiB peak on 2026-10-16, with jobs from data-pipeline (issue #79),
+      # 96 MiB on 2026-10-26: 8% is 157m on the first server's 1967 MiB.
+      memory: "8%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # Prices and sources only, no personal data. The other jump_* events
@@ -248,7 +254,8 @@ projects:
         FORM_SECRET: generated
         # The inbox the messages go to, set on the server.
         MAIL_TO: manual
-      memory: 128m
+      # 61 MiB peak on 2026-10-26: 5% is 98m.
+      memory: "5%"
       # A name, an email and a message: a few KB at most.
       max_body: 64KB
 
@@ -377,10 +384,21 @@ projects:
         # with Caddy's address. Caddy's access log is the one: the visitor's
         # address, query strings cut, kept 14 days (roles/caddy).
         UVICORN_ACCESS_LOG: "false"
+        # ARCA (electronic invoices), in homologación only: its test web
+        # services, wsaahomo.afip.gov.ar (login) and wswhomo.afip.gov.ar
+        # (invoices), both on 443. The API and the worker both read these.
+        # Production has no ARCA yet.
+        ARCA_CUIT: "20330367653"
+        ARCA_ENVIRONMENT: "testing"
       secrets:
         SECRET_KEY: generated
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
+        # ARCA's homologación certificate and its private key, each one line
+        # of base64; the API and the worker both get them. Without them, EPB
+        # runs without ARCA. Its expiry: terraform/README.md, "Credentials".
+        ARCA_CERTIFICATE: optional
+        ARCA_PRIVATE_KEY: optional
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
         # own Anthropic workspace, which has a spending limit. Without it, EPB
         # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
@@ -400,10 +418,9 @@ projects:
         # every notification against it, and refuses them all without it. The
         # test application's webhook is https://stage.epbstock.com.ar/api/...
         MP_WEBHOOK_SECRET: optional
-      # Its peak was 131 MiB on 2026-10-16, with a full real import going
-      # through the worker (issue #79); demo's imports are tests, and the first
-      # server needs the room. `migrate` gets it too.
-      memory: 192m
+      # 135 MiB at rest on 2026-10-26, when the kernel killed it at about
+      # 195 MB under the old 192m: 20% is 393m. `migrate` gets it too.
+      memory: "20%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -417,8 +434,8 @@ projects:
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
         # The largest import is its work: 232 MiB peak on 2026-10-16 with a
-        # full real import (issue #79), under 320m.
-        memory: 320m
+        # full real import (issue #79), 152 MiB on 2026-10-26: 16% is 314m.
+        memory: "16%"
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
         # Secrets only it gets, and the API no longer does. No SECRET_KEY or
@@ -426,9 +443,9 @@ projects:
         # role, like the API).
         secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
         # Secrets it gets as well as the API: it sends the subscription's
-        # notices by email, and brings a new price to each subscription when
-        # Mercado Pago did not take it at once (EPB #106).
-        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY]
+        # notices by email, brings a new price to each subscription when
+        # Mercado Pago did not take it at once (EPB #106), and talks to ARCA.
+        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY]
 
   # EPB Stock's production (D22c): app., and the redirect from its first
   # address. Its database is in the managed cluster, through its PgBouncer
@@ -558,6 +575,6 @@ projects:
         # The same value as cuanto-cuesta's INGEST_TOKEN, which stays its only
         # source: rotate it there (sudo project-secret cuanto-cuesta rotate INGEST_TOKEN).
         CUANTO_CUESTA_INGEST_TOKEN: {from: cuanto-cuesta, key: INGEST_TOKEN}
-      # Twice its peak, rounded up to 64m (issue #79): 76 MiB with two days of
-      # jobs, on 2026-10-16.
-      memory: 192m
+      # 76 MiB peak with two days of jobs on 2026-10-16 (issue #79), 59 MiB on
+      # 2026-10-26: 6% is 118m.
+      memory: "6%"
