@@ -153,7 +153,7 @@ PY
   [[ "$BACKEND_WORKER" =~ ^(true|false)$ ]] || fail "invalid worker in the registry"
   [[ "$BACKEND_URL_SCHEME" =~ ^[a-z][a-z0-9+.-]{0,31}$ ]] || fail "invalid database URL scheme in the registry"
   for s in "${BACKEND_SECRETS[@]}"; do
-    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|manual|optional)$ ]] || fail "invalid secret in the registry"
+    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ (generated|fernet|manual|optional)$ ]] || fail "invalid secret in the registry"
   done
   for s in "${BACKEND_LINKS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}\ [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\ [A-Z][A-Z0-9_]{0,63}$ ]] \
