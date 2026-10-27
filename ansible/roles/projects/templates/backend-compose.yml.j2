@@ -162,7 +162,9 @@ services:
 {% endif %}
     mem_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
     memswap_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
-    cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
+    # Its own, or else the backend's. Its health command runs in this
+    # container too, and shares this limit with the worker.
+    cpus: {{ worker.cpus | default(item.backend.cpus | default(projects_backend_default_cpus)) }}
     pids_limit: 256
     stop_grace_period: {{ worker.stop_grace_period | default('20s') }}
     labels:
