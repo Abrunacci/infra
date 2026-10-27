@@ -103,6 +103,6 @@
   interval: {{ gatus_host_heartbeat }}
   failure_threshold: {{ gatus_host_failure_threshold }}
   success_threshold: 1
-  description: The worker's container is not running or its health command fails, so its jobs are not being done. On the server, see sudo backend-status {{ p.name }} and sudo journalctl -t backend.{{ p.name }}-worker.
+  description: The worker's container is not running or its health command fails, so its jobs are not being done. On the server, sudo backend-status {{ p.name }} shows its last health commands (when, how long, exit status, output), and sudo journalctl -t backend.{{ p.name }}-worker -t backend-health --since -2h what the worker logged next to every check; the worker logs only when it starts, stops, ends a job or hits an error, so an idle one shows only the checks.
 {%   endfor %}
 {% endfor %}

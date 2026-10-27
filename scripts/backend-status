@@ -2,7 +2,8 @@
 # Shows a project's backend: the deployed release, its container and whether
 # its health path answers (from Caddy's container, like requests), or, for an
 # internal backend, whether Docker reports it healthy (the image's HEALTHCHECK).
-# With a worker, also its container, which must be healthy too.
+# With a worker, also its container, which must be healthy too, and its last
+# health commands: when, how long, the exit status and what each printed.
 #
 #   sudo backend-status PROJECT           check once
 #   sudo backend-status PROJECT --wait    keep checking for up to 60 s (the playbook
@@ -14,6 +15,10 @@ set -euo pipefail
 export LC_ALL=C
 # shellcheck source=scripts/backend-lib.sh
 . /usr/local/lib/infra/backend.sh
+
+# One line per health command: start (UTC), duration, exit status (-1 when
+# Docker's timeout stopped it) and the start of its output.
+readonly WORKER_CHECKS_FORMAT=$'{{if .State.Health}}{{range .State.Health.Log}}           {{.Start.UTC.Format "2006-01-02T15:04:05Z"}}  {{(.End.Sub .Start).Round 100000000}}  exit {{.ExitCode}}  output: {{printf "%.200s" (json .Output)}}\n{{end}}{{end}}'
 
 fail() {
   echo "backend-status: $*" >&2
@@ -36,6 +41,12 @@ echo "image:     $(backend_current "$project" BACKEND_IMAGE)"
 echo "container: $(backend_compose "$project" ps -a --format '{{.Name}} {{.State}} {{.Status}}' backend 2>/dev/null || echo unknown)"
 if [[ "$BACKEND_WORKER" == true ]]; then
   echo "worker:    $(backend_compose "$project" ps -a --format '{{.Name}} {{.State}} {{.Status}}' worker 2>/dev/null || echo unknown)"
+  # Docker keeps the last five; gatus-heartbeats copies each one to the
+  # journal (backend-health) every 5 minutes, so the older ones are there.
+  echo "checks:    (Docker's last five; older ones: sudo journalctl -t backend-health)"
+  worker="$(backend_compose "$project" ps -a -q worker 2>/dev/null)" || worker=""
+  [[ -n "$worker" ]] && docker inspect -f "$WORKER_CHECKS_FORMAT" "${worker%%$'\n'*}" 2>/dev/null || true
+  echo "logs:      sudo journalctl -t backend.$project-worker -t backend-health --since -2h"
 fi
 
 seconds=0
@@ -46,5 +57,5 @@ if backend_healthy "$project" "$seconds"; then
 fi
 echo "health:    NOT OK ($(backend_health_target "$project"))"
 echo "log:       sudo journalctl -t backend.$project -n 50"
-[[ "$BACKEND_WORKER" == true ]] && echo "           sudo journalctl -t backend.$project-worker -n 50"
+[[ "$BACKEND_WORKER" == true ]] && echo "           sudo journalctl -t backend.$project-worker -t backend-health --since -2h"
 exit 1
