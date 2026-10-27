@@ -1,7 +1,7 @@
 """memory_limit: a container's memory limit, written as a share of its server's RAM.
 
-    {{ '20%' | memory_limit(ansible_memtotal_mb) }}  ->  '393m' on a server with 1967 MiB
-    {{ '256m' | memory_limit(ansible_memtotal_mb) }} ->  '256m'
+    {{ '20%' | memory_limit(ansible_facts.memtotal_mb) }}  ->  '393m' on a server with 1967 MiB
+    {{ '256m' | memory_limit(ansible_facts.memtotal_mb) }} ->  '256m'
 
 A memory limit in projects.yml or group_vars is a whole percentage of the
 server's RAM (1% to 90%), so it follows the Droplet when it is resized, or a

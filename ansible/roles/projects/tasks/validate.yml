@@ -638,10 +638,10 @@
       - projects_shared_limits | reject('string') | list | length == 0
       - projects_shared_limits | reject('match', projects_memory_re) | list | length == 0
       - memory_max_share is number and memory_max_share is not boolean
-      - projects_server_total <= ansible_memtotal_mb * memory_max_share // 100
+      - projects_server_total <= ansible_facts.memtotal_mb * memory_max_share // 100
     fail_msg: >-
       projects.yml: the memory limits of {{ inventory_hostname }} add up to {{ projects_server_total }} MiB, over
-      memory_max_share ({{ memory_max_share }}%) of its {{ ansible_memtotal_mb }} MiB:
+      memory_max_share ({{ memory_max_share }}%) of its {{ ansible_facts.memtotal_mb }} MiB:
       {{ projects_server_limits | join(', ') }}. Lower some.
     quiet: true
   vars:
@@ -664,7 +664,7 @@
       {%- endfor -%}
       {{ limits }}
     projects_server_total: >-
-      {{ projects_server_limits | map('split', ' ') | map('last') | map('memory_limit', ansible_memtotal_mb)
+      {{ projects_server_limits | map('split', ' ') | map('last') | map('memory_limit', ansible_facts.memtotal_mb)
          | map('regex_replace', 'm$', '') | map('int') | sum }}
 
 # From here on, and in every role, the registry is this server's: its projects
