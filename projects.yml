@@ -495,7 +495,7 @@ projects:
         CORS_ORIGINS: "https://app.epbstock.com.ar"
         TRUST_FORWARDED_FOR: "true"
         MAIL_BACKEND: "resend"
-        MAIL_FROM: "EPB Stock <no-reply@mail.abrunacci.dev>"
+        MAIL_FROM: "EPB Stock <no-reply@mail.epbstock.com.ar>"
         # Explicit, so a new default in an EPB release changes nothing here.
         # No COOKIE_DOMAIN: without one, the cookie is app.epbstock.com.ar's only.
         COOKIE_SECURE: "true"
