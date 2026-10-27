@@ -1,6 +1,17 @@
 # infra
 
-Infrastructure for my portfolio projects: one DigitalOcean Droplet, Docker Compose, Caddy and a shared PostgreSQL.
+Infrastructure for my portfolio projects: two DigitalOcean Droplets, Docker Compose, Caddy and PostgreSQL.
+
+## Servers
+
+Each server is an entry in `projects.yml` (`servers`) and a Droplet in Terraform, configured by the same playbook. Each project runs on one of them (`server` in its entry; the first server by default).
+
+| Server | What runs there | Database | SSH | Size |
+|---|---|---|---|---|
+| `server.abrunacci.dev` (the first server) | The landing `abrunacci.dev` and its contact form, cuanto-cuesta, data-pipeline, EPB Stock's demo (`stage.epbstock.com.ar`) and the status page (`status.abrunacci.dev`) | PostgreSQL in a container on the server | Port 22, keys only | `s-1vcpu-2gb` |
+| `server.epbstock.com.ar` (`epb-prod-01`) | EPB Stock's production (`app.epbstock.com.ar`, and `epb.abrunacci.dev` redirecting there) and its landing (`epbstock.com.ar`) with its form | DigitalOcean's managed PostgreSQL 17 (`epb-production-db`), in a VPC of its own, through a PgBouncer pool | Only through Tailscale: no port 22 on the internet | `s-2vcpu-4gb` |
+
+Each server's memory limits add up to 90% of its RAM at most, and on the first server each one is a share of it: see `ansible/README.md`, "Memory limits".
 
 | Directory | What it holds |
 |---|---|
@@ -25,7 +36,7 @@ The domain is registered with Cloudflare Registrar, which requires Cloudflare's 
 
 ### Firewall: SSH, HTTP(S) and ICMP only
 
-Inbound traffic is limited to TCP 22 (SSH), TCP 80 and 443 (HTTP and HTTPS) and UDP 443 (HTTP/3, which Caddy serves by default). The cloud firewall drops everything else before it reaches the Droplet.
+Inbound traffic is limited to TCP 22 (SSH), TCP 80 and 443 (HTTP and HTTPS) and UDP 443 (HTTP/3, which Caddy serves by default). The cloud firewall drops everything else before it reaches the Droplet. The production server has no TCP 22 in its cloud firewall: SSH answers only on its Tailscale interface, and the firewall opens UDP 41641 for Tailscale instead.
 
 ICMP and ICMPv6 are the one deliberate exception:
 
@@ -39,6 +50,7 @@ DigitalOcean's Droplet backups (whole-disk images, +20% of the Droplet price) ar
 
 - **The server is rebuilt from this repo.** Terraform creates it and Ansible configures it, so a new Droplet is always one `apply` and one playbook run away. Nothing on the disk is configured by hand, except the admin's sudo password, which is typed on the server so it is never in the repo.
 - **The data is backed up on its own.** Every day at 03:30 UTC, each project's database, the roles its migrations created and the projects' secrets go to Cloudflare R2, encrypted with [age](https://age-encryption.org) to a public key whose private half is never on the server. Retention is 7 daily, 4 weekly and 6 monthly copies, and a bucket lock keeps the server itself from deleting them. They are stored with a different provider, so they survive the loss of the DigitalOcean account, and a single database can be restored without rolling back the whole disk. See `ansible/README.md`, "Backups", for the restore procedure and the monthly restore drill.
+- **Each server has its own bucket.** The first server uploads to `infra-backups` and the production server to `epb-production-backups`, each with a token of its own, so neither can read the other's backups. The production cluster also keeps DigitalOcean's own daily backups of the database.
 
 ## Development
 

@@ -126,7 +126,9 @@
       - projects_server_names | select('equalto', item.name) | list | length == 1
       - item.database | default('local') in ['local', 'managed']
       - item.ssh | default('public') in ['public', 'tailscale']
-      - item.max_memory is not defined or (item.max_memory is string and item.max_memory is match(projects_memory_re))
+      - >-
+        item.max_memory is not defined
+        or (item.max_memory is string and item.max_memory is match(projects_memory_mib_re))
       - >-
         item.max_cpus is not defined
         or (item.max_cpus is number and item.max_cpus is not boolean and item.max_cpus >= 0.1 and item.max_cpus <= 2)
@@ -410,15 +412,18 @@
       - projects_secrets.values() | select('string') | difference(['generated', 'manual', 'optional']) | length == 0
       - projects_secrets.values() | reject('string') | reject('mapping') | list | length == 0
       - projects_memory is string and projects_memory is match(projects_memory_re)
-      - projects_memory[:-1] | int <= projects_server_max_memory[:-1] | int
+      - >-
+        projects_memory is not match(projects_memory_mib_re)
+        or projects_memory[:-1] | int <= projects_server_max_memory[:-1] | int
       - projects_cpus is number and projects_cpus is not boolean and projects_cpus >= 0.1
       - projects_cpus <= projects_server_max_cpus
     fail_msg: >-
       projects.yml: invalid backend env, secrets, memory or cpus for {{ item.name }}. Names are uppercase
       (A-Z, 0-9, _) and not reserved ({{ projects_backend_reserved_env | join(', ') }}), each one in env or
       in secrets but not both; env values are quoted strings on one line; secrets are generated, manual,
-      optional or {from: PROJECT, key: KEY}; memory goes from 64m to its server's max_memory
-      ({{ projects_server_max_memory }}); cpus is a number from 0.1 to its server's max_cpus
+      optional or {from: PROJECT, key: KEY}; memory is a share of its server's RAM from 1% to 90%
+      (such as "20%"), or from 64m to its server's max_memory ({{ projects_server_max_memory }}); cpus is a number
+      from 0.1 to its server's max_cpus
       ({{ projects_server_max_cpus }}). See projects.schema.json.
     quiet: true
   loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
@@ -458,7 +463,9 @@
       - projects_commands | flatten(levels=1) | reject('match', '^[^$\n\r]{1,256}\Z') | list | length == 0
       - projects_worker.memory is string
       - projects_worker.memory is match(projects_memory_re)
-      - projects_worker.memory[:-1] | int <= projects_server_max_memory[:-1] | int
+      - >-
+        projects_worker.memory is not match(projects_memory_mib_re)
+        or projects_worker.memory[:-1] | int <= projects_server_max_memory[:-1] | int
       - >-
         projects_worker.stop_grace_period is not defined
         or (projects_worker.stop_grace_period is string
@@ -478,7 +485,8 @@
       - projects_shared_secrets | intersect(projects_worker_secrets) | length == 0
     fail_msg: >-
       projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
-      32 arguments), a memory from 64m to its server's max_memory ({{ projects_server_max_memory }}), optionally a
+      32 arguments), a memory from 1% to 90% of its server's RAM (such as "16%") or from 64m to its server's
+      max_memory ({{ projects_server_max_memory }}), optionally a
       stop_grace_period from 1s to 120s, and optionally
       secrets (only the worker gets them) and shared_secrets (both get them): names of the backend's own
       generated, manual or optional secrets, not linked ones, each in one list at most.
@@ -609,6 +617,47 @@
       {%-   set _ = found.append(p) -%}
       {%- endfor -%}
       {{ found | first }}
+
+# This server's memory limits add up to memory_max_share percent of its RAM
+# at most (group_vars), so the containers can never take the host's part
+# between them: each backend and worker on it, Caddy, PostgreSQL where the
+# database is local, and Gatus on the first server. Each in MiB, as the
+# playbook writes it (filter_plugins/memory.py). The limits in group_vars are
+# checked here too.
+- name: Check this server's memory
+  ansible.builtin.assert:
+    that:
+      - projects_shared_limits | reject('string') | list | length == 0
+      - projects_shared_limits | reject('match', projects_memory_re) | list | length == 0
+      - memory_max_share is number and memory_max_share is not boolean
+      - projects_server_total <= ansible_memtotal_mb * memory_max_share // 100
+    fail_msg: >-
+      projects.yml: the memory limits of {{ inventory_hostname }} add up to {{ projects_server_total }} MiB, over
+      memory_max_share ({{ memory_max_share }}%) of its {{ ansible_memtotal_mb }} MiB:
+      {{ projects_server_limits | join(', ') }}. Lower some.
+    quiet: true
+  vars:
+    projects_shared_limits: "{{ [caddy_memory, gatus_memory, postgres_memory] }}"
+    # Each container on this server, as "name limit", such as "caddy 7%".
+    projects_server_limits: >-
+      {%- set limits = ['caddy ' ~ caddy_memory] -%}
+      {%- if not database_managed -%}
+      {%-   set _ = limits.append('postgres ' ~ postgres_memory) -%}
+      {%- endif -%}
+      {%- if is_first_server -%}
+      {%-   set _ = limits.append('gatus ' ~ gatus_memory) -%}
+      {%- endif -%}
+      {%- for p in projects_registry.projects if p.backend is defined
+            and p.server | default(projects_registry.servers[0].name) == inventory_hostname -%}
+      {%-   set _ = limits.append(p.name ~ ' ' ~ p.backend.memory | default(projects_backend_default_memory)) -%}
+      {%-   if p.backend.worker is defined -%}
+      {%-     set _ = limits.append(p.name ~ '-worker ' ~ p.backend.worker.memory) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ limits }}
+    projects_server_total: >-
+      {{ projects_server_limits | map('split', ' ') | map('last') | map('memory_limit', ansible_memtotal_mb)
+         | map('regex_replace', 'm$', '') | map('int') | sum }}
 
 # From here on, and in every role, the registry is this server's: its projects
 # only, the ones whose server is this host (or, without one, the first
