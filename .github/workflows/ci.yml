@@ -18,7 +18,7 @@ concurrency:
 jobs:
   pre-commit:
     name: Lint (pre-commit)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,7 +48,7 @@ jobs:
 
   gitleaks:
     name: Secret scan (full history)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       GITLEAKS_VERSION: 8.30.1
@@ -69,7 +69,7 @@ jobs:
 
   trivy-config:
     name: Config scan (trivy)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       # The same image as the weekly scan (security-scan.yml).
@@ -88,7 +88,7 @@ jobs:
 
   commit-metadata-action:
     name: Test (check-commit-metadata)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +111,7 @@ jobs:
 
   body-limits:
     name: Test (body limits)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,7 +131,7 @@ jobs:
 
   managed-database:
     name: Test (managed database)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
