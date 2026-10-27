@@ -20,8 +20,14 @@ backup_rclone_provider: Cloudflare
 backup_time: "03:30:00"
 # The login warning shows when the last successful backup is older than this.
 backup_max_age_hours: 26
-# The automatic restore test (backup-restore test): systemd calendar time,
-# UTC. After the backup (backup_time) and before the reboot window (07:30).
+# The automatic restore test (backup-restore test) runs on these servers: the
+# playbook makes their test key and timer, and Gatus waits for their Restore
+# test heartbeat. Production joins in a pull request of its own.
+backup_restore_test_servers:
+  - server.abrunacci.dev
+backup_restore_test: "{{ inventory_hostname in backup_restore_test_servers }}"
+# Its systemd calendar time, UTC: after the backup (backup_time) and before
+# the reboot window (07:30).
 backup_test_time: "05:00:00"
 # Its key: the same path as BACKUP_TEST_KEY in scripts/backup-lib.sh.
 backup_test_key: /etc/infra/secrets/backup/restore-test.key

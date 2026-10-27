@@ -586,7 +586,7 @@ A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without on
 
 ### The automatic restore test, every day
 
-A backup that has never been restored is only a hope, so every day at 05:00 UTC, after the backup and before the reboot window, `restore-test.timer` runs `sudo backup-restore test` on each server, with nobody there. It:
+A backup that has never been restored is only a hope, so every day at 05:00 UTC, after the backup and before the reboot window, `restore-test.timer` runs `sudo backup-restore test` on each server listed in `backup_restore_test_servers` (`roles/backup/defaults/main.yml`; today `server.abrunacci.dev`), with nobody there. It:
 1. downloads the newest trustworthy daily backup from R2 and checks every file of its manifest, size and SHA-256;
 2. decrypts the secrets and lists their tar;
 3. for each project with a database on the server, decrypts its roles' list, checks it as a restore would, and restores its dump, as the project's owner role and stopping at the first error, into a **throwaway PostgreSQL**: a container of the live one's image (on the managed cluster's server, the client image, of the cluster's version), with no network, no capabilities and a read-only root, removed with its data when the test ends;
@@ -594,7 +594,7 @@ A backup that has never been restored is only a hope, so every day at 05:00 UTC,
 
 Nothing live changes: the live databases are only read for their counts, and the scratch database of the drill is not used. The result goes to `/var/lib/infra/backup/restore-test`, to the journal, and to the status page (`Server / Restore test`), which emails you when a test fails, or when none has reported for 26 hours.
 
-**Its key.** Decrypting needs a private key, and yours never goes on a server. So the playbook makes one per server, once: `/etc/infra/secrets/backup/restore-test.key` (`age-keygen`, root only, never copied anywhere, not part of the backups), and adds its public key to that server's `/etc/infra/backup-recipients.txt`. You never type or keep it. What it means:
+**Its key.** Decrypting needs a private key, and yours never goes on a server. So the playbook makes one per server that runs the test, once: `/etc/infra/secrets/backup/restore-test.key` (`age-keygen`, root only, never copied anywhere, not part of the backups), and adds its public key to that server's `/etc/infra/backup-recipients.txt`. You never type or keep it. What it means:
 - Root on a server can decrypt that server's backups, which hold the same data and secrets root already sees live, plus the older days. Not the other server's: each has its own key and its own bucket.
 - Only backups made after the key exists are encrypted to it: the first test after it is created fails until a new backup runs (the PR that added it runs one by hand).
 - If the server is rebuilt, the new one makes a new key; the old one goes with the old server. If the file is damaged, move it away and run the playbook: it makes a new one, and the test passes again after the next backup.
@@ -690,7 +690,7 @@ Every check uses the public address, from the server itself: DNS, the certificat
 | Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
 | Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
 | Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or the fail2ban log, or send its email (see "Log alerts") | after 2 in a row |
-| Server / Restore test | `backup-restore test`, as it ends (every day at 05:00 UTC) | a test fails; no test reported for 26 hours | on the first failure |
+| Server / Restore test, for each server in `backup_restore_test_servers` | `backup-restore test`, as it ends (every day at 05:00 UTC) | a test fails; no test reported for 26 hours | on the first failure |
 | Server / Restore drill | `gatus-heartbeats`, every 5 minutes | a project with a database has had no passing `backup-restore drill` for 180 days (recorded in `/var/lib/infra/backup/drills/`, or else found in the journal) | after 2 in a row |
 | Server / Credentials | `gatus-heartbeats`, every 5 minutes | a credential in `terraform/README.md` ("Credentials") expires within 14 days, or has expired. The dates are that table's "Expires" column, copied to `/etc/infra/credentials-expiry.conf` by the playbook | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
