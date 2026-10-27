@@ -283,7 +283,9 @@ A backend may have a `worker` in `projects.yml`: a second process of the same im
 - **Secrets.** They are still set on the project (`sudo project-secret <project> set KEY`), in its one `secrets.env`. The ones the worker lists in `worker.secrets` go only to the worker, the ones in `worker.shared_secrets` go to both, and the backend gets all the others. Before each start, `secrets.env` is split into `secrets-worker.env` and `secrets-backend.env` (root only, never edited by hand). The worker also gets the backend's `env` and, with a database, its `DATABASE_URL`, but no linked secrets.
 - **Network.** Its own network, only for its route out to the internet, plus the project's database. Neither Caddy nor any backend reaches it.
 - **Memory.** Its own `memory`, apart from the backend's; CPU is the backend's `cpus`. `stop_grace_period` (20s by default) is the time it gets to finish after SIGTERM.
-- **Monitoring.** The status page has a `<project> / Worker` heartbeat (`gatus-heartbeats`, every 5 minutes) that emails when its container is not running or Docker reports it unhealthy (two failed health commands in a row, 5 minutes apart): about 20 minutes after the worker stops. `sudo backend-status <project>` shows it too, and its log is `sudo journalctl -t backend.<project>-worker`.
+- **Monitoring.** The status page has a `<project> / Worker` heartbeat (`gatus-heartbeats`, every 5 minutes) that emails when its container is not running or Docker reports it unhealthy (two failed health commands in a row, 5 minutes apart): about 20 minutes after the worker stops. `sudo backend-status <project>` shows it too, with Docker's last five health commands: when each started, how long it took (out of its 60 s), its exit status (-1 when the 60 s ran out) and what it printed.
+- **Health history.** Docker keeps only those five, 25 minutes' worth. Every run of `gatus-heartbeats` copies the new ones to the journal, one line each, tagged `backend-health` (the same for an internal backend's HEALTHCHECK), so a failure and the times before and after it stay there as long as the journal does.
+- **Logs.** `sudo journalctl -t backend.<project>-worker -t backend-health --since -2h` shows what the worker printed and every check, in order. EPB Stock's worker logs only when it starts or stops, ends a job, or hits an error: an idle worker that works shows only the checks, and an empty `docker logs` for the last hour is normal.
 
 ### Pulling private images
 
@@ -331,6 +333,8 @@ sudo backend-rollback <project> --apply     # apply configuration changes, if an
 sudo journalctl -t backend.<project> -f            # follow it, across deploys
 sudo journalctl -t backend.<project> --since -1h   # the last hour, whichever containers ran
 sudo docker logs -f backend-<project>-backend-1     # the current container only
+sudo journalctl -t backend-health --since -1d     # every health command Docker ran (workers, internal backends)
+sudo journalctl -t backend-health -p warning --since -7d   # only the ones that failed
 sudo journalctl --disk-usage                       # the whole journal, against its 1 GB cap
 ```
 
