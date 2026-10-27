@@ -572,6 +572,11 @@ projects:
         # D13: the largest import is its work (232 MiB peak on 2026-10-16,
         # issue #79), several at once.
         memory: 1536m
+        # One full CPU of the Droplet's two, apart from the API's 0.5: a Python
+        # process uses at most one (one job at a time), and its health
+        # command, which runs in this container, took 4.9 s just to import
+        # with 0.5 on 2026-10-27 while the database answered in 1.1 s.
+        cpus: 1
         # Room to finish a job; one still running then goes back to the queue.
         stop_grace_period: 30s
         # Secrets only it gets, and the API no longer does. No SECRET_KEY or

@@ -441,7 +441,7 @@
     projects_server_max_memory: &projects_server_max_memory >-
       {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_memory
          | default(projects_server_default_max_memory) }}
-    projects_server_max_cpus: >-
+    projects_server_max_cpus: &projects_server_max_cpus >-
       {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_cpus
          | default(projects_server_default_max_cpus) }}
 
@@ -454,7 +454,8 @@
       - projects_worker is mapping
       - >-
         projects_worker.keys()
-        | difference(['command', 'health', 'memory', 'stop_grace_period', 'secrets', 'shared_secrets']) | length == 0
+        | difference(['command', 'health', 'memory', 'cpus', 'stop_grace_period', 'secrets', 'shared_secrets'])
+        | length == 0
       - projects_commands | length == 2
       - projects_commands | reject('sequence') | list | length == 0
       - projects_commands | select('string') | list | length == 0
@@ -468,6 +469,10 @@
       - >-
         projects_worker.memory is not match(projects_memory_mib_re)
         or projects_worker.memory[:-1] | int <= projects_server_max_memory[:-1] | int
+      - >-
+        projects_worker.cpus is not defined
+        or (projects_worker.cpus is number and projects_worker.cpus is not boolean
+            and projects_worker.cpus >= 0.1 and projects_worker.cpus <= projects_server_max_cpus | float)
       - >-
         projects_worker.stop_grace_period is not defined
         or (projects_worker.stop_grace_period is string
@@ -488,8 +493,8 @@
     fail_msg: >-
       projects.yml: invalid worker for {{ item.name }}. It needs a command and a health command (lists of one to
       32 arguments), a memory from 1% to 90% of its server's RAM (such as "16%") or from 64m to its server's
-      max_memory ({{ projects_server_max_memory }}), optionally a
-      stop_grace_period from 1s to 120s, and optionally
+      max_memory ({{ projects_server_max_memory }}), optionally cpus from 0.1 to its server's max_cpus
+      ({{ projects_server_max_cpus }}), optionally a stop_grace_period from 1s to 120s, and optionally
       secrets (only the worker gets them) and shared_secrets (both get them): names of the backend's own
       generated, fernet, manual or optional secrets, not linked ones, each in one list at most.
       See projects.schema.json.
@@ -509,6 +514,7 @@
       {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
          | list }}
     projects_server_max_memory: *projects_server_max_memory
+    projects_server_max_cpus: *projects_server_max_cpus
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
 # and a private network to that project's backend (link-PROJECT). The source

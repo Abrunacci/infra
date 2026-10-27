@@ -380,6 +380,12 @@
               "type": "string",
               "pattern": "^(([1-9]|[1-8][0-9]|90)%|(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m)$"
             },
+            "cpus": {
+              "description": "CPU limit of the worker's container, apart from the backend's, from 0.1 to its server's max_cpus (checked by the playbook). Defaults to the backend's cpus.",
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2
+            },
             "stop_grace_period": {
               "description": "How long it gets to stop after SIGTERM before it is killed, from 1s to 120s. Defaults to 20s, the backend's.",
               "type": "string",
