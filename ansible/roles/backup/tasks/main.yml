@@ -94,7 +94,9 @@
       ansible.builtin.assert:
         that:
           - backup_test_public_key.stdout is match('^age1[0-9a-z]{58}\Z')
-        fail_msg: "{{ backup_test_key }} is not an age key: move it away and run the playbook again, which makes a new one."
+        fail_msg: >-
+          {{ backup_test_key }} is not an age key: move it away and run the playbook again, which makes a
+          new one.
         quiet: true
       when: backup_test_public_key is not skipped
 
@@ -135,8 +137,9 @@
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ ['backup.service', 'backup.timer']
-            + (['restore-test.service', 'restore-test.timer'] if backup_restore_test else []) }}"
+  loop: >-
+    {{ ['backup.service', 'backup.timer']
+       + (['restore-test.service', 'restore-test.timer'] if backup_restore_test else []) }}
   notify: Reload systemd
 
 - name: Apply systemd changes now
