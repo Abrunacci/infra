@@ -89,7 +89,7 @@ projects_database_ca_in_container: /run/infra/database-ca.crt
 # psql, pg_dump and pg_restore for a managed database, in one-off containers:
 # the same image as roles/postgres (postgres_image), the cluster's major
 # version. Renovate updates both lines.
-projects_db_client_image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+projects_db_client_image: postgres:17.11-trixie@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
 
 # Linked secrets ({from: PROJECT, key: KEY}), one item per secret:
 # {project, server, key, link}. Checked in validate.yml.
