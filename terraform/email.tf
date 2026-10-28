@@ -4,8 +4,8 @@
 #   proton        Proton Mail hosts the domain's mail: it receives, and sends
 #                 from, the domain's addresses
 #   neither       the domain receives no mail and sends none
-# Resend also sends the projects' mail from mail.<first domain> (records at
-# the end).
+# Resend also sends the projects' mail from mail.<domain> (records at the
+# end).
 
 locals {
   # The domains that receive mail, with the local parts each one forwards.
@@ -94,8 +94,8 @@ resource "cloudflare_email_routing_catch_all" "this" {
   actions  = [{ type = "drop" }]
 }
 
-# Only Resend (from mail.<first domain>, through its DKIM signature, records
-# below) and Proton (from its domains, through SPF and its DKIM signature)
+# Only Resend (from mail.<domain> on the domains in local.resend_domains,
+# through its DKIM signature, records below) and Proton (from its domains, through SPF and its DKIM signature)
 # send mail. Any other message that claims to come from one of the domains or
 # a subdomain is forged: receivers must reject it. The policy covers
 # subdomains too, since there is no sp= tag. SPF on each domain that forwards
@@ -217,45 +217,62 @@ resource "cloudflare_dns_record" "no_mail_spf" {
   comment = "Managed by Terraform (infra repo)"
 }
 
-# Resend sends the projects' mail (EPB Stock's, for now) from
-# mail.<first domain>.
-# These records were created on 2026-09-28 by Resend's Domain Connect flow and
-# adopted into Terraform with the import blocks below, so they are declared
-# exactly as Resend wrote them: no comment, TTL 1 h, DNS only. Changing any of
-# them breaks sending until Resend verifies the domain again.
-#   send.mail, rsend.mail  -> Resend's sending subdomains (bounces, SPF)
+# Resend sends the projects' mail from mail.<domain>, on each domain below,
+# from the region where the domain was added in Resend. Three records each:
+#   send.mail, rsend.mail  -> Resend's sending subdomains (bounces, SPF);
+#                             rsend.mail points at the domain's region
 #   resend._domainkey.mail -> DKIM public key; mail is signed for mail.<domain>,
 #                             which aligns with the domain's DMARC policy
+# Changing any of them breaks sending from that domain until Resend verifies it
+# again.
+#   abrunacci.dev    created on 2026-09-28 by Resend's Domain Connect flow
+#                    (North Virginia) and adopted into Terraform with the
+#                    import blocks below, so declared exactly as Resend wrote
+#                    them: no comment, TTL 1 h, DNS only
+#   epbstock.com.ar  EPB Stock's, added in Resend by hand (São Paulo) and
+#                    created here, with the values Resend shows for the domain
 locals {
-  resend_records = {
-    send  = { name = "send.mail", type = "CNAME", content = "send.forge.rmta.net" }
-    rsend = { name = "rsend.mail", type = "CNAME", content = "rsend.forge.rmta.net" }
-    # Quoted, as Cloudflare stores TXT content (see the DMARC record above).
-    dkim = {
-      name    = "resend._domainkey.mail"
-      type    = "TXT"
-      content = "\"p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDL9T/C/Q5cYd/AlUpzKN75GuSHDXkdvosuw598BFIndbYII9nIZ8VBSLT/I8lsaLmyHkm8yd3bhvhj9R1J1Tae7qssXsRlughwdFxWU9ZsG3dV5IhVNqrb7uLYO/Vgw8+q5B7USU8Wo+huKPKJXmGXSar2C9irkNcwPkhne6lqRQIDAQAB\""
+  resend_domains = {
+    "abrunacci.dev" = {
+      rsend   = "rsend.forge.rmta.net"
+      dkim    = "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDL9T/C/Q5cYd/AlUpzKN75GuSHDXkdvosuw598BFIndbYII9nIZ8VBSLT/I8lsaLmyHkm8yd3bhvhj9R1J1Tae7qssXsRlughwdFxWU9ZsG3dV5IhVNqrb7uLYO/Vgw8+q5B7USU8Wo+huKPKJXmGXSar2C9irkNcwPkhne6lqRQIDAQAB"
+      comment = null
+    }
+    "epbstock.com.ar" = {
+      rsend   = "rsend-sae1.forge.rmta.net"
+      dkim    = "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC4plpT3/uny9DJ5wSag30ilBJfaAU0UXbPE3J7Vha1Fruu7SysjNYoTmW1KuGPzj9nyVUZ6ZTN1IQqYe1EOA+LxoAiJxJg6adVKrf1FSSUmsPdXMJTBUUdEuFJ0dhSyJTkL0j2TFe36DxAmvIFQ4sseGr6jp5BsuvFxMSKYVPLIQIDAQAB"
+      comment = "Managed by Terraform (infra repo)"
     }
   }
+  # Keyed <domain>/<record>, such as epbstock.com.ar/dkim.
+  resend_records = merge([
+    for d, r in local.resend_domains : {
+      "${d}/send"  = { domain = d, name = "send.mail", type = "CNAME", content = "send.forge.rmta.net", comment = r.comment }
+      "${d}/rsend" = { domain = d, name = "rsend.mail", type = "CNAME", content = r.rsend, comment = r.comment }
+      # Quoted, as Cloudflare stores TXT content (see the DMARC record above).
+      "${d}/dkim" = { domain = d, name = "resend._domainkey.mail", type = "TXT", content = "\"${r.dkim}\"", comment = r.comment }
+    }
+  ]...)
 }
 
 resource "cloudflare_dns_record" "resend" {
   for_each = local.resend_records
 
-  zone_id = local.zone_ids[local.primary_domain]
-  name    = "${each.value.name}.${local.primary_domain}"
+  zone_id = local.zone_ids[each.value.domain]
+  name    = "${each.value.name}.${each.value.domain}"
   type    = each.value.type
   content = each.value.content
   ttl     = 3600
   proxied = false
+  comment = each.value.comment
 }
 
-# Adopts the existing records instead of creating duplicates. Inert unless
-# resend_record_ids is passed, which happens once, in the import run (see
+# Adopted abrunacci.dev's records instead of creating duplicates. Inert unless
+# resend_record_ids is passed, which happened once, in the import run (see
 # "Mail" in the README); afterwards the records are in the state.
 import {
   for_each = var.resend_record_ids
 
-  to = cloudflare_dns_record.resend[each.key]
+  to = cloudflare_dns_record.resend["${local.primary_domain}/${each.key}"]
   id = "${local.zone_ids[local.primary_domain]}/${each.value}"
 }
