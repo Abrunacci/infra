@@ -607,9 +607,10 @@ projects:
         WIX_APP_ID: optional
         WIX_APP_SECRET: optional
         WIX_WEBHOOK_PUBLIC_KEY: optional
-        # The id of the same app's install link (shareUrlId), so a site can
-        # install it while it is not in Wix's app market. API only: only
-        # connecting a store builds the link.
+        # The id of the same app's install link (shareUrlId): shops install it
+        # as an unlisted app, not from Wix's app market. A link allows 80
+        # installs; when it gets close, a new link is created and its id set
+        # here. API only: only connecting a store builds the link.
         WIX_SHARE_URL_ID: optional
       # D13: room to grow on the production server, about 778m (135 MiB in
       # use on 2026-10-26). `migrate` gets it too.
