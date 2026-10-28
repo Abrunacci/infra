@@ -136,6 +136,8 @@ db_egress_subnet: 172.30.1.0/24
 # are not secret; their private keys never go on the server: they live in the
 # password manager and on paper (ansible/README.md, "Backups"). Every backup
 # can be decrypted with any one of them. Empty until the first key is created:
-# the backups role refuses to run without one.
+# the backups role refuses to run without one. Each server also encrypts its
+# backups to its own restore test key, which the role makes on it and which is
+# not listed here (ansible/README.md, "The automatic restore test, every day").
 backup_age_recipients:
   - age1vvaxtrh24zkr49ny7zd42snggm748f9axwpza7xyhgq33vmr69lqc56j6p

@@ -1,5 +1,10 @@
-# Managed by Ansible (roles/backup), from backup_age_recipients: the public
-# keys every backup is encrypted to. Their private keys are never on the server.
+# Managed by Ansible (roles/backup): the public keys every backup is encrypted
+# to. From backup_age_recipients, whose private keys are never on the server:
 {% for r in backup_age_recipients %}
 {{ r }}
 {% endfor %}
+{% if backup_test_public_key.stdout is defined %}
+# This server's restore test key (backup-restore test): its private key is on
+# this server, root only, and decrypts this server's backups only.
+{{ backup_test_public_key.stdout }}
+{% endif %}

@@ -1,0 +1,11 @@
+# Managed by Ansible (roles/backup).
+[Unit]
+Description=Daily automatic restore test of the newest backup
+
+[Timer]
+OnCalendar=*-*-* {{ backup_test_time }} UTC
+# A run missed while the server was off happens as soon as it is back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

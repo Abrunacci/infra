@@ -11,9 +11,10 @@
 #   daily/<UTC time>/<project>.roles.tsv.age   the roles its migrations created, as data
 #   daily/<UTC time>/secrets.tar.age           /etc/infra/secrets/projects
 # weekly/ (Sundays) and monthly/ (the 1st) get a copy made inside R2. Every
-# .age file is encrypted to the public keys in /etc/infra/backup-recipients.txt;
-# the matching private key never touches the server except, pasted and in
-# memory only, during a restore.
+# .age file is encrypted to the public keys in /etc/infra/backup-recipients.txt:
+# the admin's, whose private key never touches the server except, pasted and
+# in memory only, during a restore; and this server's restore test key
+# (BACKUP_TEST_KEY), which decrypts this server's backups only.
 
 # shellcheck source=scripts/backend-lib.sh
 . /usr/local/lib/infra/backend.sh
@@ -21,6 +22,10 @@
 readonly BACKUP_CONF=/etc/infra/backup.conf
 readonly BACKUP_RECIPIENTS=/etc/infra/backup-recipients.txt
 readonly BACKUP_CREDENTIALS=/etc/infra/secrets/backup/r2.env
+# This server's restore test key (roles/backup creates it): an age private key,
+# root only, whose public key is one of the recipients. The one private key on
+# the server: it lets backup-restore test decrypt this server's backups alone.
+readonly BACKUP_TEST_KEY=/etc/infra/secrets/backup/restore-test.key
 # Public status for the login warning (no secrets in it).
 readonly BACKUP_STATE=/var/lib/infra/backup
 readonly BACKUP_LOCK=/run/infra-backup.lock

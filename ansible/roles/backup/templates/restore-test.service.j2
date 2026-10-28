@@ -1,0 +1,14 @@
+# Managed by Ansible (roles/backup).
+[Unit]
+Description=Automatic restore test of the newest backup (backup-restore test)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/backup-restore test
+TimeoutStartSec=2h
+# Gives way to everything else on the server.
+Nice=10
+IOSchedulingClass=idle

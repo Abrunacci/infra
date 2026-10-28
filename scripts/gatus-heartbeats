@@ -28,6 +28,8 @@
 #       backup-run's result, as it finishes. No ping.
 #   gatus-heartbeats log-alerts ok|failed
 #       log-alerts' result, at the end of each run. No ping.
+#   gatus-heartbeats restore-test ok|failed [SECONDS]
+#       backup-restore test's result, as it finishes. No ping.
 #
 # What a failure says is shown on the public status page, so it stays
 # generic: a backup's own reason is only on the server (last-run, journal).
@@ -260,14 +262,16 @@ check_credentials() {
 
 # Results pushed by the program that produces them, as it ends.
 if [[ $# -gt 0 ]]; then
-  [[ ( "$1" == backup || "$1" == log-alerts ) && ( "${2:-}" == ok || "${2:-}" == failed ) && $# -le 3 ]] \
-    || { echo "usage: gatus-heartbeats [backup|log-alerts ok|failed [SECONDS]]" >&2; exit 2; }
+  [[ ( "$1" == backup || "$1" == log-alerts || "$1" == restore-test ) && ( "${2:-}" == ok || "${2:-}" == failed ) \
+    && $# -le 3 ]] \
+    || { echo "usage: gatus-heartbeats [backup|log-alerts|restore-test ok|failed [SECONDS]]" >&2; exit 2; }
   [[ -z "${3:-}" || "$3" =~ ^[0-9]+$ ]] || fail "SECONDS must be a number"
   key="$(awk -v check="$1" '$2 == check { print $1; exit }' "$LIST")"
   [[ -n "$key" ]] || fail "$LIST has no $1 heartbeat"
   case "$1 $2" in
     "backup failed") detail="the backup failed" ;;
     "log-alerts failed") detail="the log alerts could not be checked or sent" ;;
+    "restore-test failed") detail="the restore test failed" ;;
     *) detail="" ;;
   esac
   push "$key" "$2" "$detail" "${3:-}"
@@ -285,8 +289,9 @@ while read -r key check target; do
     backup) result="$(check_backup_age "$target")" ;;
     drill) result="$(check_drill "$target")" ;;
     credentials) result="$(check_credentials "$target")" ;;
-    # Pushed by log-alerts itself; no push for its interval fails it.
-    log-alerts) continue ;;
+    # Pushed by log-alerts and backup-restore test themselves; no push for
+    # its interval fails it.
+    log-alerts | restore-test) continue ;;
     *) echo "$key: unknown check $check" >&2; status=1; continue ;;
   esac
   [[ -n "$result" ]] || continue

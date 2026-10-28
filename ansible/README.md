@@ -13,8 +13,8 @@ Configures the Droplet after Terraform creates it. cloud-init only creates the a
 | `db_tunnel` | The `db-tunnel` command, which opens a temporary, self-expiring bridge to PostgreSQL on the server's loopback, and a warning on every login while it is open |
 | `projects` | Checks `projects.yml` before any other change, writes the server's registry of projects (`/etc/infra/projects.json`), prepares each static site and backend, and gives each project its Caddy site (see below). Creates each project's database and roles (`project-db`). Installs the backend commands (`deploy-backend`, `backend-rollback`, `backend-status`, `project-secret`, `project-db`). Refuses to run while a database on the server has no project declaring it, or a declared one that existed is missing (see "Retiring a project with a database" and "Restoring a project's database") |
 | `deploy` | The `deploy` user for CI, one SSH key per project (each fixed to deploying that project), `deploy.sh` (which hands backend deploys to `deploy-backend`) and `site-rollback`. See "Deploying a project" and "Deploying a backend" |
-| `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
-| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container, on the first server only (the others push to it): the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, `do-agent`, the internal backends, the restore drill's age and the credentials' expiration dates. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. `server-posture` (every hour) checks the server's security settings and reports to healthchecks.io only. See "Status page and alerts" |
+| `backup` | The daily encrypted backup to R2 (`backup-run`, a systemd timer at 03:30 UTC), the daily automatic restore test (`backup-restore test`, a timer at 05:00 UTC), `backup-restore`, `backup-credentials`, and a warning on every login when backups need attention. See "Backups" |
+| `gatus` | [Gatus](https://github.com/TwiN/gatus) in a container, on the first server only (the others push to it): the status page at `status.abrunacci.dev`, which checks every public project from `projects.yml`, and the alerts by email when a check keeps failing. `gatus-credentials` stores the key the alerts are sent with; `gatus-heartbeats` (every 5 minutes) and `backup-run` push the checks that have no URL: the backup, the restore test, `do-agent`, the internal backends, the restore drill's age and the credentials' expiration dates. `gatus-heartbeats` also pings healthchecks.io, which alerts from outside if the whole server goes down. `server-posture` (every hour) checks the server's security settings and reports to healthchecks.io only. See "Status page and alerts" |
 
 **One run per server.** `projects.yml` lists the servers (`servers`) and, for each project, the one it runs on (`server`, the first by default). The inventory's host is that name, and a run on it checks the whole file but sets up only that server's projects: their sites, backends, databases, deploy keys, backups and checks. A host that is not in `servers` stops the play before any change. A secret link (`link-<name>`) joins two backends on one server, so both must be on the same one.
 
@@ -538,7 +538,7 @@ Every day at 03:30 UTC, `backup-run` (a systemd timer; `Persistent=true`, so a r
 Left out on purpose: the PostgreSQL superuser password, which a new server generates for itself, and the R2 and GHCR credentials, which are typed in again.
 
 **How it is kept safe.**
-- **Encryption:** everything is encrypted with [age](https://age-encryption.org) to the public keys in `backup_age_recipients` (`group_vars/all/main.yml`) as it is written, so nothing lands unencrypted, not even in the temporary directory. The private key is never stored on the server: it lives in the password manager and on paper.
+- **Encryption:** everything is encrypted with [age](https://age-encryption.org) to the public keys in `backup_age_recipients` (`group_vars/all/main.yml`) as it is written, so nothing lands unencrypted, not even in the temporary directory. Your private key is never stored on the server: it lives in the password manager and on paper. Each server also has a key of its own for the automatic restore test (below), which decrypts only that server's backups.
 - **Unique names:** a run's directory name is its own UTC time, so no two runs write the same file.
 - **Retention:** on Sundays the directory is also copied, inside R2, to `weekly/`, and on the 1st to `monthly/`. The bucket keeps 7 daily, 4 weekly and 6 monthly copies, and its lock keeps the server from deleting or overwriting them.
 
@@ -550,7 +550,7 @@ Left out on purpose: the PostgreSQL superuser password, which a new server gener
 - the last run failed;
 - or the status cannot be read (a permissions problem on `/var/lib/infra`).
 
-The status page also gets each result, and emails on the first failed run, or once no run has succeeded for 26 hours (see "Status page and alerts").
+The status page also gets each result, and emails on the first failed run, or once no run has succeeded for 26 hours (see "Status page and alerts"). Whether the backup can be **restored** is checked every day too, by "The automatic restore test".
 
 This warning matters: a server that stops uploading, for whatever reason, sees its daily copies expire after about a week.
 
@@ -590,20 +590,41 @@ sudo backup-restore drill <project> [<snapshot>]       # the restore drill (belo
 sudo backup-restore database <project> [<snapshot>]    # restore a missing or empty database
 sudo backup-restore database <project> --from-dir DIR  # the same, from files decrypted elsewhere
 sudo backup-restore secrets [<snapshot>]
+sudo backup-restore test                               # the automatic restore test, now (below)
 sudo journalctl -t backup -t backup-restore            # what happened
-systemctl list-timers backup.timer                     # when the next run is
+sudo journalctl -u restore-test                        # the restore test's runs, with each table's rows
+cat /var/lib/infra/backup/restore-test                 # the restore test's last result
+systemctl list-timers backup.timer restore-test.timer  # when the next runs are
 ```
 
-A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without one, the newest trustworthy daily backup is used. The commands that decrypt (`drill`, `database` and `secrets`, but not `database --from-dir`) need the age private key, which is not on the server: have it at hand before running them. They ask for the private key without showing it: typed from paper, or pasted from the password manager. The key is never written to a file. It stays in the command's memory while it runs, which the kernel could move to swap, like anything else in memory.
+A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without one, the newest trustworthy daily backup is used. The commands that decrypt (`drill`, `database` and `secrets`, but not `database --from-dir`) need your age private key, which is not on the server (`test` uses the server's own test key instead): have it at hand before running them. They ask for the private key without showing it: typed from paper, or pasted from the password manager. The key is never written to a file. It stays in the command's memory while it runs, which the kernel could move to swap, like anything else in memory.
 
-### The restore drill, once a month
+### The automatic restore test, every day
+
+A backup that has never been restored is only a hope, so every day at 05:00 UTC, after the backup and before the reboot window, `restore-test.timer` runs `sudo backup-restore test` on each server listed in `backup_restore_test_servers` (`roles/backup/defaults/main.yml`; today `server.abrunacci.dev`), with nobody there. It:
+1. downloads the newest trustworthy daily backup from R2 and checks every file of its manifest, size and SHA-256;
+2. decrypts the secrets and lists their tar;
+3. for each project with a database on the server, decrypts its roles' list, checks it as a restore would, and restores its dump, as the project's owner role and stopping at the first error, into a **throwaway PostgreSQL**: a container of the live one's image (on the managed cluster's server, the client image, of the cluster's version), with no network, no capabilities and a read-only root, removed with its data when the test ends;
+4. compares each table's rows, restored and live, and fails if the restored database has no tables, or no rows, where the live one has some. The counts go to `journalctl -u restore-test`.
+
+Nothing live changes: the live databases are only read for their counts, and the scratch database of the drill is not used. The result goes to `/var/lib/infra/backup/restore-test`, to the journal, and to the status page (`Server / Restore test`), which emails you when a test fails, or when none has reported for 26 hours.
+
+**Its key.** Decrypting needs a private key, and yours never goes on a server. So the playbook makes one per server that runs the test, once: `/etc/infra/secrets/backup/restore-test.key` (`age-keygen`, root only, never copied anywhere, not part of the backups), and adds its public key to that server's `/etc/infra/backup-recipients.txt`. You never type or keep it. What it means:
+- Root on a server can decrypt that server's backups, which hold the same data and secrets root already sees live, plus the older days. Not the other server's: each has its own key and its own bucket.
+- Only backups made after the key exists are encrypted to it: the first test after it is created fails until a new backup runs (the PR that added it runs one by hand).
+- If the server is rebuilt, the new one makes a new key; the old one goes with the old server. If the file is damaged, move it away and run the playbook: it makes a new one, and the test passes again after the next backup.
+- It proves the backup restores, not that **your** key does: that is what the drill below is for.
+
+If it fails, the reason is in `/var/lib/infra/backup/restore-test` and `sudo journalctl -u restore-test` (with `pg_restore`'s own error). Run it again by hand with `sudo backup-restore test`.
+
+### The restore drill, with your key
 
 **Before you start: the private key.** The server holds only the **public** keys (`backup_age_recipients`, written to `/etc/infra/backup-recipients.txt`), which can encrypt but never decrypt. The private key (`AGE-SECRET-KEY-1...`) is kept by you, off the server, where "Setting it up" says: it is not in this repo, nor anywhere on the server. The drill cannot run without it, so have it at hand before you type the command.
 - **When it is asked for:** right after the backup is downloaded and checked, before anything is restored. It is read without being shown and is never written to a file.
 - **A wrong key** stops the drill with `that key does not decrypt this backup`. Nothing has been restored or recorded yet; run it again with the right key.
 - **If every copy is lost,** no existing backup can be decrypted any more. Make a new key pair and put its public key in place of the lost one ("Setting it up", steps 1 to 3), then take a backup right away with `sudo backup-run`.
 
-A backup that has never been restored is only a hope. `sudo backup-restore drill <project>`:
+The automatic test above uses the server's key. The drill uses **yours**, so you know it still decrypts the backups. `sudo backup-restore drill <project>`:
 1. downloads the newest backup and checks it against its manifest;
 2. asks for the private key, and checks that it decrypts this backup;
 3. restores it, as the owner, into a scratch database (`restore_drill`; the project name `restore-drill` is reserved for that);
@@ -611,7 +632,7 @@ A backup that has never been restored is only a hope. `sudo backup-restore drill
 5. checks that the roles' list and the secrets decrypt;
 6. drops the scratch database, even if the drill stops halfway.
 
-It changes nothing else, except recording when it passed, for the status page. Do it once a month: the `Server / Restore drill` heartbeat fails, and emails you, once a project with a database has gone 35 days without one. Every few months, type the key from the **paper** copy, so you know the paper works.
+It changes nothing else, except recording when it passed, for the status page. The `Server / Restore drill` heartbeat fails, and emails you, once a project with a database has gone 180 days without one (`gatus_drill_max_days`). Every few months, type the key from the **paper** copy, so you know the paper works.
 
 ### Restoring
 
@@ -684,7 +705,8 @@ Every check uses the public address, from the server itself: DNS, the certificat
 | Server / Nightly backup | `backup-run`, as it ends; and `gatus-heartbeats` once the last success is older than 26 hours | a run fails; no run succeeded for 26 hours | on the first failure |
 | Server / Monitoring agent | `gatus-heartbeats`, every 5 minutes | `do-agent` is not active, so DigitalOcean's memory and disk alerts are blind | after 2 in a row (10 minutes) |
 | Server / Log alerts | `log-alerts`, at the end of each run (every 5 minutes) | it could not read the journal or the fail2ban log, or send its email (see "Log alerts") | after 2 in a row |
-| Server / Restore drill | `gatus-heartbeats`, every 5 minutes | a project with a database has had no passing `backup-restore drill` for 35 days (recorded in `/var/lib/infra/backup/drills/`, or else found in the journal) | after 2 in a row |
+| Server / Restore test, for each server in `backup_restore_test_servers` | `backup-restore test`, as it ends (every day at 05:00 UTC) | a test fails; no test reported for 26 hours | on the first failure |
+| Server / Restore drill | `gatus-heartbeats`, every 5 minutes | a project with a database has had no passing `backup-restore drill` for 180 days (recorded in `/var/lib/infra/backup/drills/`, or else found in the journal) | after 2 in a row |
 | Server / Credentials | `gatus-heartbeats`, every 5 minutes | a credential in `terraform/README.md` ("Credentials") expires within 14 days, or has expired. The dates are that table's "Expires" column, copied to `/etc/infra/credentials-expiry.conf` by the playbook | after 2 in a row |
 | `<project>` / Health, for each internal project (a `backend`, no `subdomain`) | `gatus-heartbeats`, every 5 minutes | its container is not running, or its image's `HEALTHCHECK` is not healthy | after 2 in a row |
 | `<project>` / Worker, for each backend with a `worker` | `gatus-heartbeats`, every 5 minutes | the worker's container is not running, or its health command is not healthy | after 2 in a row |
@@ -692,8 +714,8 @@ Every check uses the public address, from the server itself: DNS, the certificat
 - **One set per server.** Gatus runs on the first server only, and its page shows every server's projects and heartbeats, from the whole `projects.yml`. The first server's groups are named as in the table; another server's add its name, such as `Server - server.example.com / Nightly backup` or `<project> - server.example.com / Worker`, so the same project on two servers has two groups. Credentials are the repo's, not a server's: only the first server has that heartbeat. Each server's `/etc/infra/gatus-heartbeats.conf` lists only its own heartbeats.
 
 - **Pushes from the other servers.** They have no Gatus of their own, and push to the status page itself (`https://status.abrunacci.dev`, `GATUS_PUSH_URL` in `/etc/infra/gatus.conf`). Caddy lets a `POST` through only on another server's own heartbeats' paths; everything else still gets 405. Each server's token is derived from `GATUS_REMOTE_PUSH_SECRET` (64 hex characters in `terraform/.env`, see `terraform/README.md`) and its name, so the playbook writes the same token on that server (`push.env`) and in Gatus' `servers-push.env` on the first one, and a server's token is good for its own heartbeats only. Rotating the secret means running the playbook on every server, the first one included. Until a server has had its run, Gatus waits for its pushes in vain, and its heartbeats fail after 15 minutes: run the playbook on the other servers soon after the first.
-- **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
-- **Generic on the page.** A failure shows only a short, generic reason (the page is public); the backup's own reason stays on the server, in `/var/lib/infra/backup/last-run` and `journalctl -t backup`. The emails carry each heartbeat's description, which says where to look.
+- **A missed push** fails the heartbeat on its own: no push for 15 minutes (the 5-minute checks) or 26 hours (the backup, the restore test). Gatus looks once per interval, so it notices between one and two intervals after the last push; the backup's 26 hours are enforced by `gatus-heartbeats` instead, every 5 minutes.
+- **Generic on the page.** A failure shows only a short, generic reason (the page is public); the backup's own reason stays on the server, in `/var/lib/infra/backup/last-run` and `journalctl -t backup`, and the restore test's in `/var/lib/infra/backup/restore-test`. The emails carry each heartbeat's description, which says where to look.
 - **How a push gets in.** Gatus publishes its port on `127.0.0.1:18080` only, so nothing outside the server reaches it, and every push must carry a token: `/etc/infra/secrets/gatus/push.env`, generated on the server by the playbook (root only, not backed up: a rebuilt server makes a new one). `gatus-heartbeats` passes it to curl on stdin, never as an argument.
 - **The backup never depends on it.** If the push fails, `backup-run` only notes it in the journal.
 - **Limit of the agent check.** `systemctl is-active` says the agent runs, not that DigitalOcean receives its data.
