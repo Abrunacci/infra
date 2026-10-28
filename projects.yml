@@ -382,7 +382,7 @@ projects:
         # ARCA (electronic invoices), in homologación only: its test web
         # services, wsaahomo.afip.gov.ar (login) and wswhomo.afip.gov.ar
         # (invoices), both on 443. The API and the worker both read these.
-        # Production has no ARCA yet.
+        # Production has its own, with ARCA's production services.
         ARCA_CUIT: "20330367653"
         ARCA_ENVIRONMENT: "testing"
         # Charging a sale with Mercado Pago's QR into the shop's own account
@@ -551,12 +551,36 @@ projects:
         # nothing until MP_CLIENT_ID, MP_CLIENT_SECRET and MP_TOKEN_KEY all
         # have a value.
         POS_QR_ENABLED: "true"
+        # ARCA (electronic invoices), in production: real vouchers, through
+        # wsaa.afip.gov.ar (login) and servicios1.afip.gov.ar (invoices), both
+        # on 443. The API and the worker both read these. Invoicing stays off
+        # until ARCA_CERTIFICATE and ARCA_PRIVATE_KEY have a value.
+        ARCA_CUIT: "20330367653"
+        ARCA_ENVIRONMENT: "production"
+        # EPB as the issuer of its own invoices, one per credited subscription
+        # charge (EPB_Stock #233), printed on each of them. Its point of sale,
+        # created in ARCA for «Factura electrónica - Web Services», is only for
+        # these. Its address is a secret, below.
+        ARCA_EPB_POINT_OF_SALE: "5"
+        ARCA_EPB_LEGAL_NAME: "Alejandro Brunacci"
+        ARCA_EPB_VAT_CONDITION: "monotax"
+        ARCA_EPB_GROSS_INCOME: "20330367653"
+        ARCA_EPB_ACTIVITY_START: "2015-11-01"
       secrets:
         SECRET_KEY: generated
         # The demo's Resend key, copied from the first server without being
         # shown (terraform/README.md, "Credentials").
         RESEND_API_KEY: manual
         SETUP_TOKEN: generated
+        # ARCA's production certificate and its private key, each one line of
+        # base64; the API and the worker both get them. The key was generated on
+        # this server and never leaves it. Without them, EPB runs without ARCA.
+        # Their expiry: terraform/README.md, "Credentials".
+        ARCA_CERTIFICATE: optional
+        ARCA_PRIVATE_KEY: optional
+        # EPB's business address, printed on its invoices: a person's address,
+        # so not in this public repository.
+        ARCA_EPB_ADDRESS: optional
         # The import's suggestions: a Claude API key (epb-produccion) from EPB's
         # own Anthropic workspace, which has a spending limit. Without it, EPB
         # runs without suggestions. Its expiry: terraform/README.md, "Credentials".
@@ -626,10 +650,12 @@ projects:
         secrets: [ANTHROPIC_API_KEY, IMPORT_AI_MODEL]
         # Secrets it gets as well as the API: it sends the subscription's
         # notices by email, brings a new price to each subscription when
-        # Mercado Pago did not take it at once (EPB #106), and reads the online
-        # stores' permissions. Not the QR's (MP_CLIENT_ID, MP_CLIENT_SECRET,
-        # MP_TOKEN_KEY): only the API uses them.
-        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, STORE_TOKEN_KEY]
+        # Mercado Pago did not take it at once (EPB #106), reads the online
+        # stores' permissions, and issues EPB's own invoices through ARCA. Not
+        # the QR's (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_TOKEN_KEY): only the API
+        # uses them.
+        shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, STORE_TOKEN_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY,
+                         ARCA_EPB_ADDRESS]
 
   # Internal: a scheduler that runs data jobs, with no public route. Its
   # image's HEALTHCHECK says whether it is alive.
