@@ -240,7 +240,7 @@
     projects_generated_secrets: >-
       {%- set out = [] -%}
       {%- for p in projects_backends -%}
-      {%-   for key, kind in (p.backend.secrets | default({})).items() if kind == 'generated' -%}
+      {%-   for key, kind in (p.backend.secrets | default({})).items() if kind in ['generated', 'fernet'] -%}
       {%-     set _ = out.append({'name': p.name, 'key': key}) -%}
       {%-   endfor -%}
       {%- endfor -%}

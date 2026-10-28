@@ -92,8 +92,8 @@ services:
       # {{ target }}'s backend, as {{ target }}-backend: a secret links to it.
       link-{{ target }}: {}
 {% endfor %}
-    mem_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
-    memswap_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
+    mem_limit: {{ item.backend.memory | memory_limit(ansible_facts.memtotal_mb) }}
+    memswap_limit: {{ item.backend.memory | memory_limit(ansible_facts.memtotal_mb) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
     stop_grace_period: 20s
@@ -160,9 +160,11 @@ services:
 {% if item.database and not managed %}
       db: {}
 {% endif %}
-    mem_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
-    memswap_limit: {{ worker.memory | memory_limit(ansible_memtotal_mb) }}
-    cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
+    mem_limit: {{ worker.memory | memory_limit(ansible_facts.memtotal_mb) }}
+    memswap_limit: {{ worker.memory | memory_limit(ansible_facts.memtotal_mb) }}
+    # Its own, or else the backend's. Its health command runs in this
+    # container too, and shares this limit with the worker.
+    cpus: {{ worker.cpus | default(item.backend.cpus | default(projects_backend_default_cpus)) }}
     pids_limit: 256
     stop_grace_period: {{ worker.stop_grace_period | default('20s') }}
     labels:
@@ -218,8 +220,8 @@ services:
     networks:
       - db
 {% endif %}
-    mem_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
-    memswap_limit: {{ item.backend.memory | memory_limit(ansible_memtotal_mb) }}
+    mem_limit: {{ item.backend.memory | memory_limit(ansible_facts.memtotal_mb) }}
+    memswap_limit: {{ item.backend.memory | memory_limit(ansible_facts.memtotal_mb) }}
     cpus: {{ item.backend.cpus | default(projects_backend_default_cpus) }}
     pids_limit: 256
 {% endif %}
