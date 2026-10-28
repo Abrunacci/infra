@@ -619,6 +619,23 @@ projects:
         # no longer be read (ansible/README.md, "Backend secrets"). Its date:
         # terraform/README.md, "Credentials".
         STORE_TOKEN_KEY: fernet
+        # Online stores with Wix (EPB_Stock #289): production's own Wix app,
+        # «EPB Stock», not the demo's, since a Wix app has one webhook URL per
+        # event and production's must be
+        # https://app.epbstock.com.ar/api/stores/wix/events. Its App ID, App
+        # Secret and webhook public key (one line of base64, without the
+        # BEGIN/END lines); the API and the worker both get them. Without
+        # them, «Tiendas online» says stores are not set up, and nothing else
+        # changes. Both call www.wixapis.com:443. Its date: terraform/README.md,
+        # "Credentials".
+        WIX_APP_ID: optional
+        WIX_APP_SECRET: optional
+        WIX_WEBHOOK_PUBLIC_KEY: optional
+        # The id of the same app's install link (shareUrlId): shops install it
+        # as an unlisted app, not from Wix's app market. A link allows 80
+        # installs; when it gets close, a new link is created and its id set
+        # here. API only: only connecting a store builds the link.
+        WIX_SHARE_URL_ID: optional
       # D13: room to grow on the production server, about 778m (135 MiB in
       # use on 2026-10-26). `migrate` gets it too.
       memory: "20%"
@@ -651,11 +668,13 @@ projects:
         # Secrets it gets as well as the API: it sends the subscription's
         # notices by email, brings a new price to each subscription when
         # Mercado Pago did not take it at once (EPB #106), reads the online
-        # stores' permissions, and issues EPB's own invoices through ARCA. Not
-        # the QR's (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_TOKEN_KEY): only the API
-        # uses them.
+        # stores' permissions and sends them their stock and prices (Wix's app
+        # ID, secret and public key: EPB turns the stores on only with all
+        # three), and issues EPB's own invoices through ARCA. Not the QR's
+        # (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_TOKEN_KEY) nor WIX_SHARE_URL_ID:
+        # only the API uses them.
         shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, STORE_TOKEN_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY,
-                         ARCA_EPB_ADDRESS]
+                         ARCA_EPB_ADDRESS, WIX_APP_ID, WIX_APP_SECRET, WIX_WEBHOOK_PUBLIC_KEY]
 
   # Internal: a scheduler that runs data jobs, with no public route. Its
   # image's HEALTHCHECK says whether it is alive.
