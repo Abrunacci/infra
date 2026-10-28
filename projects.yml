@@ -304,7 +304,7 @@ projects:
       env:
         # Explicit, so a new default in an EPB release changes nothing here.
         CONTACT_TO: "contacto@epbstock.com.ar"
-        CONTACT_FROM: "EPB Stock <landing@mail.abrunacci.dev>"
+        CONTACT_FROM: "EPB Stock <landing@mail.epbstock.com.ar>"
         # The hostname Turnstile must report for a token to count: the
         # widget's only domain (terraform/turnstile.tf).
         ALLOWED_HOSTNAME: "epbstock.com.ar"
@@ -314,7 +314,7 @@ projects:
         # checks each form against challenges.cloudflare.com:443, so a future
         # filter on the containers' outbound traffic must allow it.
         TURNSTILE_SECRET_KEY: manual
-        # A Resend key with sending access only, on mail.abrunacci.dev
+        # A Resend key with sending access only, on mail.epbstock.com.ar
         # (epb-landing-contact): not the app's, so either can be revoked alone.
         # The same key as on the first server, copied from there.
         # It calls api.resend.com:443.
