@@ -22,9 +22,10 @@ backup_time: "03:30:00"
 backup_max_age_hours: 26
 # The automatic restore test (backup-restore test) runs on these servers: the
 # playbook makes their test key and timer, and Gatus waits for their Restore
-# test heartbeat. Production joins in a pull request of its own.
+# test heartbeat.
 backup_restore_test_servers:
   - server.abrunacci.dev
+  - server.epbstock.com.ar
 backup_restore_test: "{{ inventory_hostname in backup_restore_test_servers }}"
 # Its systemd calendar time, UTC: after the backup (backup_time) and before
 # the reboot window (07:30).
