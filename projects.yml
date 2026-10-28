@@ -531,10 +531,11 @@ projects:
         # with Caddy's address. Caddy's access log is the one: the visitor's
         # address, query strings cut, kept 14 days (roles/caddy).
         UVICORN_ACCESS_LOG: "false"
-        # The QR at the counter (EPB_Stock #246): off here until it was tried in
-        # the demo, as EPB documents (docs/production-environment.md). Turning
-        # it on is a change to this line.
-        POS_QR_ENABLED: "false"
+        # The QR at the counter (EPB_Stock #246): on, as in the demo, where it
+        # was tried first (EPB's docs/production-environment.md). It does
+        # nothing until MP_CLIENT_ID, MP_CLIENT_SECRET and MP_TOKEN_KEY all
+        # have a value, and until the EPB release running here has the QR code.
+        POS_QR_ENABLED: "true"
       secrets:
         SECRET_KEY: generated
         # The demo's Resend key, copied from the first server without being
