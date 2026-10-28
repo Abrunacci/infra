@@ -601,7 +601,7 @@ A `<snapshot>` is a line of `list`, such as `daily/20260926T033000Z`. Without on
 
 ### The automatic restore test, every day
 
-A backup that has never been restored is only a hope, so every day at 05:00 UTC, after the backup and before the reboot window, `restore-test.timer` runs `sudo backup-restore test` on each server listed in `backup_restore_test_servers` (`roles/backup/defaults/main.yml`; today `server.abrunacci.dev`), with nobody there. It:
+A backup that has never been restored is only a hope, so every day at 05:00 UTC, after the backup and before the reboot window, `restore-test.timer` runs `sudo backup-restore test` on each server listed in `backup_restore_test_servers` (`roles/backup/defaults/main.yml`: both servers), with nobody there. It:
 1. downloads the newest trustworthy daily backup from R2 and checks every file of its manifest, size and SHA-256;
 2. decrypts the secrets and lists their tar;
 3. for each project with a database on the server, decrypts its roles' list, checks it as a restore would, and restores its dump, as the project's owner role and stopping at the first error, into a **throwaway PostgreSQL**: a container of the live one's image (on the managed cluster's server, the client image, of the cluster's version), with no network, no capabilities and a read-only root, removed with its data when the test ends;
