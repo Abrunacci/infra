@@ -20,6 +20,7 @@
     owner: root
     group: root
     mode: "0644"
+  register: monitoring_do_agent_repository
 
 # Where DigitalOcean's installer put the key. Nothing refers to it any more.
 - name: Remove the key the installer left
@@ -32,6 +33,8 @@
     name: do-agent
     state: present
     update_cache: true
+    # A new repository needs its lists right away, however fresh the cache.
+    cache_valid_time: "{{ 0 if monitoring_do_agent_repository.changed else 3600 }}"
 
 - name: Start the DigitalOcean agent at boot
   ansible.builtin.systemd_service:

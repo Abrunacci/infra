@@ -28,7 +28,8 @@
       ca: "-----BEGIN CERTIFICATE-----\nstand-in\n-----END CERTIFICATE-----\n"
     # A stand-in for the RAM the server reports (gather_facts), which the
     # memory limits are shares of (filter_plugins/memory.py, which ci.sh loads).
-    ansible_memtotal_mb: 1967
+    ansible_facts:
+      memtotal_mb: 1967
     gatus_remote_push_secret: "{{ '0' * 64 }}"
     gatus_alert_email: alerts@example.com
     backup_cloudflare_account_id: "{{ '0' * 32 }}"

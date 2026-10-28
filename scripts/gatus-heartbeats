@@ -9,7 +9,9 @@
 #       container  the backend of the project <target> is running and its
 #                  image's HEALTHCHECK says healthy (internal backends); with
 #                  <target> PROJECT/worker, that project's worker and its
-#                  health command
+#                  health command. Each health command Docker ran since the
+#                  last run also goes to the journal (backend-health): when,
+#                  how long, its exit status and what it printed
 #       backup     only when the last successful backup is older than
 #                  <target> hours: a failure, so a backup that stopped
 #                  running alerts on time. backup-run pushes its own results.
@@ -51,6 +53,12 @@ readonly LIST=/etc/infra/gatus-heartbeats.conf
 readonly BACKUP_STATE=/var/lib/infra/backup
 readonly REGISTRY=/etc/infra/projects.json
 readonly CREDENTIALS=/etc/infra/credentials-expiry.conf
+# The newest health command each container's results were logged up to.
+readonly HEALTH_STATE=/var/lib/infra/health-checks
+# Docker's record of a container's last health commands, one per line: start
+# (UTC, fixed width, so they sort as text), duration, exit status (-1 when
+# Docker's timeout stopped it) and output, quoted.
+readonly HEALTH_LOG_FORMAT=$'{{if .State.Health}}{{range .State.Health.Log}}{{.Start.UTC.Format "2006-01-02T15:04:05.000000000Z"}}\t{{(.End.Sub .Start).Round 100000000}}\t{{.ExitCode}}\t{{json .Output}}\n{{end}}{{end}}'
 
 fail() {
   echo "gatus-heartbeats: $*" >&2
@@ -134,6 +142,28 @@ check_service() {
   fi
 }
 
+# log_health_results NAME ID
+# Writes the health commands Docker ran on container ID since the last run to
+# the journal (sudo journalctl -t backend-health), one line each. Docker keeps
+# only the last five: without this, a worker's failure (one every 5 minutes)
+# is gone from docker inspect 25 minutes later, with how long each one took.
+log_health_results() {
+  local name="$1" id="$2" state last="" newest="" start took code output priority
+  install -d -m 0700 "$HEALTH_STATE" || return 0
+  state="$HEALTH_STATE/${name//\//.}"
+  [[ -r "$state" ]] && last="$(<"$state")"
+  while IFS=$'\t' read -r start took code output; do
+    [[ -n "$start" && "$start" > "$last" ]] || continue
+    newest="$start"
+    priority=user.info
+    [[ "$code" == 0 ]] || priority=user.warning
+    [[ "$output" == '""' ]] && output="none"
+    logger -t backend-health -p "$priority" -- \
+      "$name: check at ${start%.*}Z took $took, exit $code, output: ${output:0:500}"
+  done < <(docker inspect -f "$HEALTH_LOG_FORMAT" "$id" 2>/dev/null)
+  [[ -z "$newest" ]] || printf '%s\n' "$newest" >"$state"
+}
+
 check_container() {
   local project="${1%/*}" service=backend name="$1" ids status health
   [[ "$1" == */worker ]] && service=worker
@@ -147,6 +177,8 @@ check_container() {
   read -r status health < <(docker inspect \
     -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
     "${ids%%$'\n'*}" 2>/dev/null) || { echo failed "cannot inspect $name's container"; return; }
+  # Never holds the push back.
+  [[ "$health" == none ]] || log_health_results "$project/$service" "${ids%%$'\n'*}" || true
   if [[ "$status" == running && "$health" == healthy ]]; then
     echo ok "$name is healthy"
   else
