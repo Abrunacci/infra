@@ -85,11 +85,6 @@
           "description": "How SSH reaches it: public (port 22, the default), or tailscale, only on the Tailscale interface.",
           "enum": ["public", "tailscale"]
         },
-        "max_memory": {
-          "description": "The most memory one backend or worker container on it may have when its limit is a fixed size, from 64m to 2048m. Defaults to 512m.",
-          "type": "string",
-          "pattern": "^(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m$"
-        },
         "max_cpus": {
           "description": "The most CPUs one backend container on it may have, from 0.1 to 2. Defaults to 1.",
           "type": "number",
@@ -281,7 +276,7 @@
     },
     "backend": {
       "type": "object",
-      "required": ["image"],
+      "required": ["image", "memory"],
       "additionalProperties": false,
       "properties": {
         "image": {
@@ -341,9 +336,9 @@
           "pattern": "^[a-z][a-z0-9+.-]{0,31}$"
         },
         "memory": {
-          "description": "Memory limit of the container: a whole percentage of its server's RAM from 1% to 90%, such as \"20%\", which the playbook turns into MiB on each run (never below 64 MiB), so it follows a resized Droplet; or a fixed size from 64m to its server's max_memory (512m unless the server says otherwise). A server's limits add up to memory_max_share of its RAM at most (ansible/group_vars, 90%). Checked by the playbook. Defaults to 256m.",
+          "description": "Memory limit of the container, as a whole percentage of its server's RAM from 1% to 90%, such as \"20%\": the playbook turns it into MiB on each run (never below 64 MiB), so it follows a resized Droplet. A server's limits add up to memory_max_share at most (ansible/group_vars, 90%; checked by the playbook).",
           "type": "string",
-          "pattern": "^(([1-9]|[1-8][0-9]|90)%|(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m)$"
+          "pattern": "^([1-9]|[1-8][0-9]|90)%$"
         },
         "max_body": {
           "description": "Largest request body Caddy passes to the backend, in KB or MB, such as 64KB for a form. Larger ones get 413 without reaching it. Defaults to 10MB. Only with a subdomain.",
@@ -376,9 +371,9 @@
               "$ref": "#/$defs/command"
             },
             "memory": {
-              "description": "Memory limit of the worker's container, apart from the backend's: a share of its server's RAM or a fixed size, like the backend's memory.",
+              "description": "Memory limit of the worker's container, a share of its server's RAM like the backend's memory, apart from it.",
               "type": "string",
-              "pattern": "^(([1-9]|[1-8][0-9]|90)%|(6[4-9]|[7-9][0-9]|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-8])m)$"
+              "pattern": "^([1-9]|[1-8][0-9]|90)%$"
             },
             "cpus": {
               "description": "CPU limit of the worker's container, apart from the backend's, from 0.1 to its server's max_cpus (checked by the playbook). Defaults to the backend's cpus.",

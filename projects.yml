@@ -34,8 +34,6 @@
 #              cluster (another VPC, outside the cluster's firewall)
 #   ssh        public: port 22 (the default); tailscale: SSH only on the
 #              Tailscale interface (DigitalOcean's firewall has no 22 either)
-#   max_memory the most memory one backend or worker may have when its limit
-#              is a fixed size, 64m to 2048m (optional, defaults to 512m)
 #   max_cpus   the most CPUs one backend may have, 0.1 to 2 (optional,
 #              defaults to 1)
 #
@@ -121,11 +119,9 @@
 #                memory   its limit: a whole percentage of its server's RAM
 #                         from 1% to 90%, such as "20%", which the playbook
 #                         turns into MiB on each run, so it follows a resized
-#                         Droplet; or a fixed size, 64m to its server's
-#                         max_memory (optional, defaults to 256m). A server's
-#                         limits, Caddy's, PostgreSQL's and Gatus' included
-#                         (ansible/group_vars), add up to 90% of its RAM at
-#                         most
+#                         Droplet. A server's limits, Caddy's, PostgreSQL's
+#                         and Gatus' included (ansible/group_vars), add up to
+#                         90% of its RAM at most
 #                max_body largest request body Caddy passes to it, such as
 #                         64KB (optional, only with a subdomain, defaults to
 #                         10MB); larger ones get 413
@@ -176,7 +172,6 @@ servers:
   - name: server.epbstock.com.ar
     database: managed
     ssh: tailscale
-    max_memory: 1536m
     max_cpus: 2
 
 projects:
@@ -320,8 +315,9 @@ projects:
         # It calls api.resend.com:443.
         RESEND_API_KEY: manual
       # One small Python process: 41 MiB after a burst of submissions, in a
-      # test with the same limits as the server (2026-10-21).
-      memory: 128m
+      # test with the same limits as the server (2026-10-21), 40 MiB in use on
+      # 2026-10-26. 3% is about 116m on the production server's 3.8 GiB.
+      memory: "3%"
       # The backend refuses bodies over 16 KB itself; Caddy stops anything
       # past 20KB first.
       max_body: 20KB
@@ -579,8 +575,9 @@ projects:
         # no longer be read (ansible/README.md, "Backend secrets"). Its date:
         # terraform/README.md, "Credentials".
         STORE_TOKEN_KEY: fernet
-      # D13: room to grow on the production server. `migrate` gets it too.
-      memory: 768m
+      # D13: room to grow on the production server, about 778m (135 MiB in
+      # use on 2026-10-26). `migrate` gets it too.
+      memory: "20%"
       migrate: [alembic, upgrade, head]
       database_url_scheme: postgresql+psycopg
       # The jobs process (EPB issue #209): the import's AI analysis and its
@@ -594,8 +591,8 @@ projects:
         # page's "epb-stock / Worker" heartbeat alerts when it fails.
         health: [python, -m, epb_stock.jobs, check]
         # D13: the largest import is its work (232 MiB peak on 2026-10-16,
-        # issue #79), several at once.
-        memory: 1536m
+        # issue #79), several at once: about 1556m.
+        memory: "40%"
         # One full CPU of the Droplet's two, apart from the API's 0.5: a Python
         # process uses at most one (one job at a time), and its health
         # command, which runs in this container, took 4.9 s just to import
