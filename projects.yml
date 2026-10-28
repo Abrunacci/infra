@@ -562,7 +562,10 @@ projects:
         # created in ARCA for «Factura electrónica - Web Services», is only for
         # these. Its address is a secret, below.
         ARCA_EPB_POINT_OF_SALE: "5"
+        ARCA_EPB_LEGAL_NAME: "Alejandro Brunacci"
         ARCA_EPB_VAT_CONDITION: "monotax"
+        ARCA_EPB_GROSS_INCOME: "20330367653"
+        ARCA_EPB_ACTIVITY_START: "2015-11-01"
       secrets:
         SECRET_KEY: generated
         # The demo's Resend key, copied from the first server without being
