@@ -454,6 +454,24 @@ projects:
         # install it while it is not in Wix's app market. API only: only
         # connecting a store builds the link.
         WIX_SHARE_URL_ID: optional
+        # The other online store platforms (EPB's request of 2026-10-29),
+        # each enabled on its own with its two values and STORE_TOKEN_KEY:
+        # Mercado Libre, Tiendanube and Shopify. One app per platform and
+        # environment, the demo's own, with stage.epbstock.com.ar URLs
+        # (<PUBLIC_APP_URL>/api/stores/<platform>/...), so the values are
+        # not the production's. The app's id
+        # is not secret, but it is loaded with its secret. The API and the
+        # worker both get them. Without a platform's two, EPB does not offer
+        # it, and its notification URLs answer 503. They call
+        # api.mercadolibre.com, www.tiendanube.com / api.tiendanube.com and
+        # <shop>.myshopify.com on 443. Their dates: terraform/README.md,
+        # "Credentials".
+        MERCADOLIBRE_APP_ID: optional
+        MERCADOLIBRE_CLIENT_SECRET: optional
+        TIENDANUBE_APP_ID: optional
+        TIENDANUBE_CLIENT_SECRET: optional
+        SHOPIFY_CLIENT_ID: optional
+        SHOPIFY_CLIENT_SECRET: optional
       # 135 MiB at rest on 2026-10-26, when the kernel killed it at about
       # 195 MB under the old 192m: 20% is 393m. `migrate` gets it too.
       memory: "20%"
@@ -483,10 +501,13 @@ projects:
         # Mercado Pago did not take it at once (EPB #106), talks to ARCA, and
         # reads the online stores' permissions and sends them their stock and
         # prices (Wix's app ID, secret and public key: EPB turns the stores on
-        # only with all three). Not the QR's (MP_CLIENT_ID, MP_CLIENT_SECRET,
+        # only with all three; each other platform's id and secret, which
+        # renew its tokens). Not the QR's (MP_CLIENT_ID, MP_CLIENT_SECRET,
         # MP_TOKEN_KEY) nor WIX_SHARE_URL_ID: only the API uses them.
         shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY, STORE_TOKEN_KEY,
-                         WIX_APP_ID, WIX_APP_SECRET, WIX_WEBHOOK_PUBLIC_KEY]
+                         WIX_APP_ID, WIX_APP_SECRET, WIX_WEBHOOK_PUBLIC_KEY,
+                         MERCADOLIBRE_APP_ID, MERCADOLIBRE_CLIENT_SECRET, TIENDANUBE_APP_ID, TIENDANUBE_CLIENT_SECRET,
+                         SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET]
 
   # EPB Stock's production (D22c): app., and the redirect from its first
   # address. Its database is in the managed cluster, through its PgBouncer
@@ -636,6 +657,24 @@ projects:
         # installs; when it gets close, a new link is created and its id set
         # here. API only: only connecting a store builds the link.
         WIX_SHARE_URL_ID: optional
+        # The other online store platforms (EPB's request of 2026-10-29),
+        # each enabled on its own with its two values and STORE_TOKEN_KEY:
+        # Mercado Libre, Tiendanube and Shopify. One app per platform and
+        # environment, the production's own, with app.epbstock.com.ar URLs
+        # (<PUBLIC_APP_URL>/api/stores/<platform>/...), so the values are
+        # not the demo's. The app's id
+        # is not secret, but it is loaded with its secret. The API and the
+        # worker both get them. Without a platform's two, EPB does not offer
+        # it, and its notification URLs answer 503. They call
+        # api.mercadolibre.com, www.tiendanube.com / api.tiendanube.com and
+        # <shop>.myshopify.com on 443. Their dates: terraform/README.md,
+        # "Credentials".
+        MERCADOLIBRE_APP_ID: optional
+        MERCADOLIBRE_CLIENT_SECRET: optional
+        TIENDANUBE_APP_ID: optional
+        TIENDANUBE_CLIENT_SECRET: optional
+        SHOPIFY_CLIENT_ID: optional
+        SHOPIFY_CLIENT_SECRET: optional
       # D13: room to grow on the production server, about 778m (135 MiB in
       # use on 2026-10-26). `migrate` gets it too.
       memory: "20%"
@@ -670,11 +709,14 @@ projects:
         # Mercado Pago did not take it at once (EPB #106), reads the online
         # stores' permissions and sends them their stock and prices (Wix's app
         # ID, secret and public key: EPB turns the stores on only with all
-        # three), and issues EPB's own invoices through ARCA. Not the QR's
+        # three; each other platform's id and secret, which renew its
+        # tokens), and issues EPB's own invoices through ARCA. Not the QR's
         # (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_TOKEN_KEY) nor WIX_SHARE_URL_ID:
         # only the API uses them.
         shared_secrets: [MP_ACCESS_TOKEN, RESEND_API_KEY, STORE_TOKEN_KEY, ARCA_CERTIFICATE, ARCA_PRIVATE_KEY,
-                         ARCA_EPB_ADDRESS, WIX_APP_ID, WIX_APP_SECRET, WIX_WEBHOOK_PUBLIC_KEY]
+                         ARCA_EPB_ADDRESS, WIX_APP_ID, WIX_APP_SECRET, WIX_WEBHOOK_PUBLIC_KEY,
+                         MERCADOLIBRE_APP_ID, MERCADOLIBRE_CLIENT_SECRET, TIENDANUBE_APP_ID, TIENDANUBE_CLIENT_SECRET,
+                         SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET]
 
   # Internal: a scheduler that runs data jobs, with no public route. Its
   # image's HEALTHCHECK says whether it is alive.
