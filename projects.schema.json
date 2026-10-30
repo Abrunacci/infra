@@ -277,6 +277,7 @@
     "backend": {
       "type": "object",
       "required": ["image", "memory"],
+      "dependentRequired": { "migrate_secrets": ["migrate"] },
       "additionalProperties": false,
       "properties": {
         "image": {
@@ -327,8 +328,15 @@
           }
         },
         "migrate": {
-          "description": "Command that applies the migrations, run in a one-off container of the new image before each deploy switches to it, such as [alembic, upgrade, head]. It gets MIGRATION_DATABASE_URL and APP_DB_USER.",
+          "description": "Command that applies the migrations, run in a one-off container of the new image before each deploy switches to it, such as [alembic, upgrade, head]. It gets the backend's env, MIGRATION_DATABASE_URL, APP_DB_USER and the secrets in migrate_secrets.",
           "$ref": "#/$defs/command"
+        },
+        "migrate_secrets": {
+          "description": "Names of the backend's own secrets (not linked ones) the migrations get as well, with the same value, such as a key they decrypt data with. The backend and the worker keep them. Only with migrate.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/env_name" }
         },
         "database_url_scheme": {
           "description": "Scheme of DATABASE_URL and MIGRATION_DATABASE_URL, such as postgresql+psycopg for SQLAlchemy with psycopg 3. Defaults to postgresql.",

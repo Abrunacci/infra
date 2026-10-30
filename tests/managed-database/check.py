@@ -107,6 +107,20 @@ def check(out, registry):
         expected_ssh = ["22/tcp on tailscale0"] if server.get("ssh", "public") == "tailscale" else ["22/tcp"]
         if ssh != expected_ssh:
             problems.append(f"{name}: SSH's ufw rules are {ssh}, expected {expected_ssh}")
+        # The migrations get the secrets their project lists in
+        # migrate_secrets (secrets-migrate.env), and none of the others.
+        by_name = {p["name"]: p for p in own}
+        for path in composes:
+            migrate = yaml.safe_load(path.read_text())["services"].get("migrate")
+            if not migrate:
+                continue
+            env_files = sorted(pathlib.PurePath(e["path"]).name for e in migrate.get("env_file", []))
+            backend = by_name[path.name.removesuffix(".compose.yml")]["backend"]
+            expected = ["app.env", "database-migrate.env"]
+            if backend.get("migrate_secrets"):
+                expected.append("secrets-migrate.env")
+            if env_files != sorted(expected):
+                problems.append(f"{name}: {path.name}'s migrations read {env_files}, expected {sorted(expected)}")
         caddyfile = (directory / "Caddyfile").read_text()
         has_status = re.search(r"^status\.\S+ \{", caddyfile, re.MULTILINE) is not None
         if has_status != (name == first):
