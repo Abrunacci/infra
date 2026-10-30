@@ -179,7 +179,8 @@ services:
 
   # Run once per deploy by deploy-backend (docker compose run --rm migrate),
   # with the new image, before the backend switches to it. Only the public
-  # env and the owner's connection: none of the app's secrets, and no route
+  # env, the owner's connection and the secrets migrate_secrets lists (none
+  # of the app's other secrets), and no route
 {% if managed %}
   # out of {{ db_egress_network }}, which reaches only the managed cluster.
 {% else %}
@@ -206,6 +207,12 @@ services:
       # MIGRATION_DATABASE_URL (the owner) and APP_DB_USER (project-db).
       - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/database-migrate.env
         format: raw
+{% if item.backend.migrate_secrets is defined %}
+      # Only the secrets it lists, written from secrets.env before each run
+      # (backend_migrate in backend-lib.sh).
+      - path: {{ projects_backends_secrets_dir }}/{{ item.name }}/secrets-migrate.env
+        format: raw
+{% endif %}
 {% if managed %}
     volumes:
       - {{ projects_database_ca }}:{{ projects_database_ca_in_container }}:ro

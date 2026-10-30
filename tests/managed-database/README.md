@@ -16,7 +16,8 @@ follow where its databases are (`database` in `projects.yml`, servers):
   Each one has its own backups bucket, SSH's ufw rules match its `ssh`
   (`on tailscale0` for `ssh: tailscale`), only the first one serves the
   status page, and Gatus waits for, and Caddy lets through, every other
-  server's pushes.
+  server's pushes. Each backend's migrations read only the public env, their
+  database connection and, with `migrate_secrets`, `secrets-migrate.env`.
 
 `render.yml` renders those files from the roles' own templates and variables,
 with a made-up cluster in place of Terraform's `production_database` output.

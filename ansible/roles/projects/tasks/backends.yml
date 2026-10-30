@@ -188,6 +188,21 @@
   vars:
     projects_split_files: [secrets-backend.env, secrets-worker.env]
 
+# The migrations' secrets (migrate_secrets), written from secrets.env before
+# each run (backend_migrate in backend-lib.sh). Created empty here only so the
+# compose file is valid before the first run.
+- name: Create the migrations' secrets file of each backend with migrate_secrets
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ projects_backends_secrets_dir }}/{{ item.name }}/secrets-migrate.env"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ projects_backends | selectattr('backend.migrate_secrets', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 # Creates the database and roles of each project that has one, or checks
 # them; writes database-app.env and database-migrate.env, which the compose
 # file below needs. Never creates an empty database where one existed (see

@@ -15,6 +15,10 @@
 #                                                         and the shared ones
 #   /etc/infra/secrets/projects/NAME/secrets-backend.env  all the others, the
 #                                                         shared ones included
+# With migrate_secrets, written from secrets.env before each migration run
+# (backend_migrate):
+#   /etc/infra/secrets/projects/NAME/secrets-migrate.env  the secrets the
+#                                                         migrations list
 #   /var/lib/infra/backends/NAME/release.env      what is deployed:
 #                                                 BACKEND_IMAGE, BACKEND_RELEASE
 #   /var/lib/infra/backends/NAME/releases         history, oldest first:
@@ -77,8 +81,9 @@ BACKEND_SHOW_LOGS=0
 # BACKEND_WORKER (true or false), BACKEND_URL_SCHEME, BACKEND_SECRETS (an array
 # of "KEY kind"), BACKEND_LINKS (an array of "KEY SOURCE SOURCE_KEY": its
 # secret KEY is a copy of project SOURCE's SOURCE_KEY) and
-# BACKEND_WORKER_SECRETS (an array of the keys only the worker gets) and
-# BACKEND_SHARED_SECRETS (the keys both the backend and the worker get).
+# BACKEND_WORKER_SECRETS (an array of the keys only the worker gets),
+# BACKEND_SHARED_SECRETS (the keys both the backend and the worker get) and
+# BACKEND_MIGRATE_SECRETS (the keys the migrations get as well).
 # An internal backend (a project without a subdomain) has no port or health
 # path: both are empty, and the image's own HEALTHCHECK is its health.
 # The registry is written by Ansible from a checked projects.yml; every value
@@ -114,6 +119,9 @@ for p in json.load(open(registry))["projects"]:
         print("--")
         for key in sorted((b.get("worker") or {}).get("shared_secrets") or []):
             print(key)
+        print("--")
+        for key in sorted(b.get("migrate_secrets") or []):
+            print(key)
         break
 PY
 )" || fail "cannot read the project registry"
@@ -124,6 +132,7 @@ PY
   BACKEND_DATABASE="${lines[4]}" BACKEND_MIGRATE="${lines[5]}" BACKEND_URL_SCHEME="${lines[6]}"
   BACKEND_WORKER="${lines[7]}"
   BACKEND_SECRETS=() BACKEND_LINKS=() BACKEND_WORKER_SECRETS=() BACKEND_SHARED_SECRETS=()
+  BACKEND_MIGRATE_SECRETS=()
   local i=8
   while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
     BACKEND_SECRETS+=("${lines[i]}")
@@ -142,7 +151,13 @@ PY
     ((i += 1))
   done
   [[ "${lines[i]:-}" == -- ]] || fail "invalid worker secrets in the registry"
-  BACKEND_SHARED_SECRETS=("${lines[@]:i+1}")
+  ((i += 1))
+  while ((i < ${#lines[@]})) && [[ "${lines[i]}" != -- ]]; do
+    BACKEND_SHARED_SECRETS+=("${lines[i]}")
+    ((i += 1))
+  done
+  [[ "${lines[i]:-}" == -- ]] || fail "invalid shared secrets in the registry"
+  BACKEND_MIGRATE_SECRETS=("${lines[@]:i+1}")
   [[ "$BACKEND_REPO" =~ $REPO_RE ]] || fail "invalid image in the registry"
   if [[ -n "$BACKEND_PORT$BACKEND_HEALTH" ]]; then
     [[ "$BACKEND_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port in the registry"
@@ -161,6 +176,9 @@ PY
   done
   for s in "${BACKEND_WORKER_SECRETS[@]}" "${BACKEND_SHARED_SECRETS[@]}"; do
     [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || fail "invalid worker secret in the registry"
+  done
+  for s in "${BACKEND_MIGRATE_SECRETS[@]}"; do
+    [[ "$s" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || fail "invalid migration secret in the registry"
   done
 }
 
@@ -300,6 +318,25 @@ backend_split_secrets() {
   done <"$dir/secrets.env"
   mv -f "$tmp_w" "$dir/secrets-worker.env"
   mv -f "$tmp_b" "$dir/secrets-backend.env"
+}
+
+# Writes secrets-migrate.env from secrets.env with only the keys the
+# migrations list (migrate_secrets), replaced in one rename, root only. Nothing
+# to do without them: the migrations then get no secrets file.
+backend_migrate_secrets() {
+  local project="$1" dir="$SECRETS_DIR/$1" line key tmp
+  ((${#BACKEND_MIGRATE_SECRETS[@]} > 0)) || return 0
+  [[ -f "$dir/secrets.env" ]] || fail "$dir/secrets.env is missing (run the playbook)"
+  declare -A migrate_key=()
+  for key in "${BACKEND_MIGRATE_SECRETS[@]}"; do migrate_key["$key"]=1; done
+  tmp="$(mktemp "$dir/.secrets-migrate.env.XXXXXX")" || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if [[ -n "${migrate_key[${line%%=*}]:-}" ]]; then
+      printf '%s\n' "$line" >>"$tmp"
+    fi
+  done <"$dir/secrets.env"
+  mv -f "$tmp" "$dir/secrets-migrate.env"
 }
 
 # Starts PROJECT's containers with `docker compose up -d` and the given
@@ -541,7 +578,8 @@ backend_secret_problems() {
 # Runs PROJECT's migrations with IMAGE in a one-off container of its migrate
 # service (its db-<name> network only, or on a managed database the db-egress
 # network, which reaches only the cluster: db_egress; the owner's connection,
-# no app secrets), for up to MIGRATE_SECONDS. Named, so it can be removed if it
+# and of the app's secrets only those in migrate_secrets), for up to
+# MIGRATE_SECONDS. Named, so it can be removed if it
 # outlives its time: timeout stops the Compose client, not the container. Its
 # output goes to the journal only (tag backend-migrate): it can hold
 # connection details. LABEL names the run in the journal. Returns 1 on
@@ -552,6 +590,7 @@ backend_migrate() {
   [[ -n "${DATABASE_MODE:-}" ]] || db_container
   DB_HOST_IP="${DB_HOST_IP:-}"
   if [[ "$DATABASE_MODE" == managed ]]; then db_egress; fi
+  backend_migrate_secrets "$project" || { MIGRATE_RESULT="could not get their secrets"; return 1; }
   docker rm -f "$container" >/dev/null 2>&1 </dev/null 9>&- || true
   # DATABASE_HOST_IP: the cluster's address, for the container's /etc/hosts
   # (the compose file's extra_hosts); unused with a local database.

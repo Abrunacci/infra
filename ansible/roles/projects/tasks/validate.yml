@@ -276,8 +276,8 @@
         or (item.backend is mapping
             and item.backend.keys()
                 | difference(['image', 'port', 'health', 'paths', 'private_paths', 'env', 'secrets', 'memory',
-                              'cpus', 'max_body', 'client_ip_header', 'migrate', 'database_url_scheme',
-                              'log_alerts', 'worker']) | length == 0
+                              'cpus', 'max_body', 'client_ip_header', 'migrate', 'migrate_secrets',
+                              'database_url_scheme', 'log_alerts', 'worker']) | length == 0
             and item.backend.image is string
             and item.backend.image is match('^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+\Z')
             and (item.backend.port is not defined
@@ -500,6 +500,35 @@
       {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
          | list }}
     projects_server_max_cpus: *projects_server_max_cpus
+
+# The secrets the migrations get as well (migrate_secrets): the backend's own
+# (not linked ones), and only with migrate. The backend and the worker keep
+# theirs.
+- name: Check each backend's migration secrets
+  ansible.builtin.assert:
+    that:
+      - item.backend.migrate is defined
+      - projects_migrate_secrets is sequence and projects_migrate_secrets is not string
+      - projects_migrate_secrets is not mapping
+      - projects_migrate_secrets | length > 0
+      - projects_migrate_secrets | unique | length == projects_migrate_secrets | length
+      - projects_migrate_secrets | reject('string') | list | length == 0
+      - projects_migrate_secrets | difference(projects_own_secrets) | length == 0
+    fail_msg: >-
+      projects.yml: invalid migrate_secrets for {{ item.name }}. It needs migrate, and is a list of names of the
+      backend's own generated, fernet, manual or optional secrets, not linked ones, each once.
+      See projects.schema.json.
+    quiet: true
+  loop: >-
+    {{ projects_registry.projects | selectattr('backend', 'defined') | selectattr('backend', 'mapping')
+       | selectattr('backend.migrate_secrets', 'defined') | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_migrate_secrets: "{{ item.backend.migrate_secrets }}"
+    projects_own_secrets: >-
+      {{ item.backend.secrets | default({}) | dict2items | rejectattr('value', 'mapping') | map(attribute='key')
+         | list }}
 
 # A secret {from: PROJECT, key: KEY} is a copy of another project's secret,
 # and a private network to that project's backend (link-PROJECT). The source

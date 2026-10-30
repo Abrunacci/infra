@@ -21,6 +21,7 @@
           'links': p.backend.secrets | default({}) | dict2items | selectattr('value', 'mapping')
                    | items2dict,
           'migrate': p.backend.migrate is defined,
+          'migrate_secrets': p.backend.migrate_secrets | default([]),
           'database_url_scheme': p.backend.database_url_scheme | default('postgresql'),
           'worker': {
             'secrets': p.backend.worker.secrets | default([]),
