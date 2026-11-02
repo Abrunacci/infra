@@ -20,7 +20,7 @@ repos:
       - id: gitleaks
 
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: 443ffdff1cc1663b701ae73e7459029fe883455a  # frozen: v1.109.3
+    rev: 4c4437d784e93cacb1f05f1d7bc28e4354fafd20  # frozen: v1.109.4
     hooks:
       - id: terraform_fmt
       # Runs `terraform init -backend=false`: never touches the remote state.
@@ -40,7 +40,7 @@ repos:
 
   # projects.yml against projects.schema.json, and the schema against its metaschema.
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0494aa7fa1314e98913a41227d8f0a515b2c1049  # frozen: 0.38.2
+    rev: a76b92851fc9eede9f9bc4073eb55202f34eb0df  # frozen: 0.39.0
     hooks:
       - id: check-jsonschema
         name: Validate projects.yml
@@ -51,7 +51,7 @@ repos:
 
   # Python scripts installed on the server (scripts/extract-release).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: f368fb366ff7f2f808dd324b83a6d32267799e19  # frozen: v0.17.2
+    rev: 25bcf95026b96e2dd3c0aec3090c3d6ef6ca2e6c  # frozen: v0.17.3
     hooks:
       - id: ruff-check
       - id: ruff-format
