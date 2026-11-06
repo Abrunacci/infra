@@ -26,6 +26,7 @@ vulnerabilities:
     paths: [usr/local/bin/gosu]
     statement: >-
       In the postgres image, gosu's Go standard library (crypto/tls session resumption). gosu only drops to
-      the postgres user when the container starts and makes no TLS connection. The latest postgres:17 image
-      still carries it.
-    expired_at: 2026-11-06
+      the postgres user when the container starts and makes no TLS connection. Checked again on 2026-11-05:
+      the pinned postgres:17.11-trixie digest and the one published that day both still ship gosu built
+      with Go 1.24.6, so there is no image to move to yet. Extended one month.
+    expired_at: 2026-12-06
