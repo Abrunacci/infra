@@ -1,0 +1,13 @@
+---
+# actionlint checks `runs-on:` against a list of GitHub-hosted runner labels
+# that is written into its own code. GitHub already offers ubuntu-26.04, but
+# actionlint v1.7.12 (and its main branch on 2026-11-11) does not know it yet
+# and rejects it as unknown (Renovate PR #129).
+#
+# Declaring the label here only tells actionlint to accept it; it does not
+# change where any job runs. Remove this file once a Renovate update brings an
+# actionlint release that lists ubuntu-26.04 (check: delete the file and run
+# `pre-commit run actionlint --all-files` on a branch that uses ubuntu-26.04).
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
