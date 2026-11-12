@@ -1,8 +1,9 @@
 # Findings Trivy reports that are accepted, each with why (README.md,
 # "Security scan"). Read by both scans: `trivy config` in CI and the weekly
-# image scan (.github/workflows/security-scan.yml). A vulnerability is only
-# accepted until expired_at: after that date it fails the scan again, and is
-# either fixed by then or looked at once more.
+# image scan (.github/workflows/security-scan.yml). A vulnerability with
+# expired_at is only accepted until that date: after it, it fails the scan
+# again. One without it is accepted until the image no longer has it: the
+# weekly scan then fails, saying it can be removed from here.
 
 ---
 misconfigurations:
@@ -26,7 +27,7 @@ vulnerabilities:
     paths: [usr/local/bin/gosu]
     statement: >-
       In the postgres image, gosu's Go standard library (crypto/tls session resumption). gosu only drops to
-      the postgres user when the container starts and makes no TLS connection. Checked again on 2026-11-05:
-      the pinned postgres:17.11-trixie digest and the one published that day both still ship gosu built
-      with Go 1.24.6, so there is no image to move to yet. Extended one month.
-    expired_at: 2026-12-06
+      the postgres user when the container starts and makes no TLS connection, so the flaw cannot be reached
+      there. On 2026-11-12 every postgres 17.11 image (trixie, bookworm, alpine) still shipped gosu 1.19 built
+      with Go 1.24.6. Accepted with no date until an image ships a rebuilt gosu: the weekly scan fails once
+      the finding is gone, and then this entry goes.
