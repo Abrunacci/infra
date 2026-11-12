@@ -396,7 +396,8 @@ projects:
         POS_QR_ENABLED: "true"
         # Demo only, never in production: offers Mercado Pago's virtual Point
         # and a «Simular pago en el Point de prueba» button (EPB_Stock #307),
-        # since a test account cannot charge on a real Point.
+        # since a test account cannot charge on a real Point. The playbook
+        # refuses it in an entry without APP_ENVIRONMENT: "demo".
         POS_POINT_TEST_DEVICE: "true"
       secrets:
         SECRET_KEY: generated

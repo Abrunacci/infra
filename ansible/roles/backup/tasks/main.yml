@@ -25,7 +25,9 @@
 # (docker run --pull never).
 - name: Pull the rclone image
   community.docker.docker_image_pull:
-    name: "{{ backup_rclone_image }}"
+    # By digest only (name@sha256:...): with name:tag@sha256:... the module
+    # does not find the image it already has, and --check reports a pull.
+    name: "{{ backup_rclone_image | regex_replace(':[^:/@]+@sha256:', '@sha256:') }}"
     pull: not_present
 
 - name: Create the backup directories

@@ -231,7 +231,9 @@
     # Pulled before the config is validated with it.
     - name: Pull the Gatus image
       community.docker.docker_image_pull:
-        name: "{{ gatus_image }}"
+        # By digest only (name@sha256:...): with name:tag@sha256:... the module
+        # does not find the image it already has, and --check reports a pull.
+        name: "{{ gatus_image | regex_replace(':[^:/@]+@sha256:', '@sha256:') }}"
         pull: not_present
 
     # Checked in a throwaway container, with the same env files, before it
