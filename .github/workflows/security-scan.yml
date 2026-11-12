@@ -6,7 +6,8 @@ name: Security scan
 # after Renovate's update pull requests (renovate.json), by hand (Actions →
 # Security scan → Run workflow), and on pull requests that change an image.
 # It fails on a CRITICAL one, so GitHub emails its result; the job summary
-# lists every HIGH and CRITICAL. Accepted findings: .trivyignore.yaml.
+# lists every HIGH and CRITICAL. Accepted findings: .trivyignore.yaml; the
+# scan also fails when one of them is no longer found, so it is removed.
 #
 # Every scheduled or manual run also pings the "infra security scan" check in
 # healthchecks.io, whatever the scan found: that check says whether the scan
@@ -55,7 +56,8 @@ jobs:
                 -v "$RUNNER_TEMP/reports:/reports" -v trivy-cache:/root/.cache \
                 -v "$PWD/.trivyignore.yaml:/trivyignore.yaml:ro" \
                 "$TRIVY_IMAGE" image --image-src remote --severity HIGH,CRITICAL --ignore-unfixed \
-                --ignorefile /trivyignore.yaml --format json --output "/reports/$name.json" "$image" || true
+                --ignorefile /trivyignore.yaml --show-suppressed \
+                --format json --output "/reports/$name.json" "$image" || true
               echo "::endgroup::"
             done
       - name: Summarize
@@ -63,7 +65,9 @@ jobs:
         # Explicit, so the step runs with pipefail and fails with the script,
         # not with tee: without it, a CRITICAL finding left the run green.
         shell: bash
-        run: python3 .github/scripts/trivy-summary.py "$RUNNER_TEMP/reports" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 .github/scripts/trivy-summary.py "$RUNNER_TEMP/reports" .trivyignore.yaml |
+            tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report the run to healthchecks.io
         if: always() && github.event_name != 'pull_request'
         env:
