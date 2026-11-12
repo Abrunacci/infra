@@ -435,6 +435,27 @@
       {{ projects_server_limits[item.server | default(projects_registry.servers[0].name)].max_cpus
          | default(projects_server_default_max_cpus) }}
 
+# Mercado Pago's virtual Point and its «Simular pago» button (EPB_Stock
+# #307) belong in the demo only: an entry that sets POS_POINT_TEST_DEVICE
+# must say it is the demo (APP_ENVIRONMENT: "demo"), so a copy of the demo's
+# env into production stops here.
+- name: Keep the test Point out of production
+  ansible.builtin.assert:
+    that:
+      - >-
+        'POS_POINT_TEST_DEVICE' not in projects_env
+        or (projects_env.APP_ENVIRONMENT | default('')) == 'demo'
+    fail_msg: >-
+      projects.yml: {{ item.name }} on {{ item.server | default(projects_registry.servers[0].name) }} sets
+      POS_POINT_TEST_DEVICE without APP_ENVIRONMENT: "demo". Mercado Pago's test Point is for the demo
+      only, never production.
+    quiet: true
+  loop: "{{ projects_registry.projects | selectattr('backend', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    projects_env: "{{ item.backend.env | default({}) }}"
+
 # A backend's worker: a second container of the same image and release,
 # with its own command, health command and memory. The secrets it lists are
 # the backend's own (not linked ones), and only it gets them.

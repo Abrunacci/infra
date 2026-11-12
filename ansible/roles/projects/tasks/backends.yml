@@ -104,7 +104,9 @@
 
 - name: Pull the managed database's client image
   community.docker.docker_image_pull:
-    name: "{{ projects_db_client_image }}"
+    # By digest only (name@sha256:...): with name:tag@sha256:... the module
+    # does not find the image it already has, and --check reports a pull.
+    name: "{{ projects_db_client_image | regex_replace(':[^:/@]+@sha256:', '@sha256:') }}"
     pull: not_present
   when: database_managed
 
