@@ -1,7 +1,7 @@
 ---
 # Pinned by digest: a tag can be moved, a digest cannot. Upgrading is a PR
 # that bumps both.
-caddy_image: caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9
+caddy_image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
 caddy_dir: "{{ infra_opt_dir }}/caddy"
 # caddy_memory (group_vars) of the server's RAM.
 caddy_memory_limit: "{{ caddy_memory | memory_limit(ansible_facts.memtotal_mb) }}"
